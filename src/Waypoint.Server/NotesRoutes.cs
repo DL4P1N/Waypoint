@@ -1,0 +1,433 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using Microsoft.AspNetCore.Http.Features;
+using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
+using Waypoint.Core.Files;
+using Waypoint.Core.Notes;
+using Waypoint.Core.Remote;
+
+namespace Waypoint.Server;
+
+/// <summary>
+/// The notes on the server, with notes and practice questions written here by Haiku through <c>claude -p</c>, where
+/// sorting runs too. Writing takes minutes, so each one runs as a job the PC checks on. Jobs live in memory: after
+/// a restart the PC hears the job is gone, and whatever was saved by then stays saved.
+/// </summary>
+public sealed class ServerNotes
+{
+    private static readonly TimeSpan KeepFinished = TimeSpan.FromHours(1);
+
+    private readonly ConcurrentDictionary<string, Job> _jobs = new();
+
+    public ServerNotes(WaypointServer server, IServiceProvider services)
+    {
+        var runner = services.GetService<IClaudeRunner>() ?? new ClaudeCliRunner(server.DataDirectory);
+        Database = server.Database;
+        Data = new LocalNotesData(server.Database, new NoteMaker(server.Database, new NoteWriter(runner), server.Worker.Schedule), runner);
+
+        // Files sent in Discord's notes channel make notes the same way as files sent from the PC's Notes page.
+        server.Worker.NoteFiles = Data;
+        Attachments = Path.Combine(server.DataDirectory, "attachments");
+    }
+
+    public LocalNotesData Data { get; }
+
+    public WaypointDatabase Database { get; }
+
+    /// <summary>Where files kept with notes are stored, one per source.</summary>
+    public string Attachments { get; }
+
+    /// <summary>How many notes or practice questions are written at once. Each is a claude -p, which is slow and heavy.</summary>
+    public const int MaxRunning = 2;
+
+    private readonly SemaphoreSlim _running = new(MaxRunning, MaxRunning);
+
+    /// <summary>Starts a job, or returns null when <see cref="MaxRunning"/> are already running, so the PC can try later.</summary>
+    public NoteJobStarted? Start(Func<CancellationToken, Task<NoteJobState>> work)
+    {
+        Sweep();
+        if (!_running.Wait(0))
+        {
+            return null;
+        }
+
+        var stop = new CancellationTokenSource();
+        var id = Guid.NewGuid().ToString("N");
+        var job = new Job(stop);
+        _jobs[id] = job;
+        job.Task = Task.Run(async () =>
+        {
+            try
+            {
+                return await work(stop.Token);
+            }
+            finally
+            {
+                job.FinishedAt = DateTime.UtcNow;
+                _running.Release();
+            }
+        });
+        return new NoteJobStarted(id);
+    }
+
+    /// <summary>Forgets finished jobs nobody came back for within the hour.</summary>
+    private void Sweep()
+    {
+        foreach (var old in _jobs.Where(entry => entry.Value.FinishedAt is { } at && DateTime.UtcNow - at > KeepFinished).ToList())
+        {
+            _jobs.TryRemove(old.Key, out _);
+        }
+    }
+
+    public NoteJobState State(string id)
+    {
+        Sweep();
+        if (!_jobs.TryGetValue(id, out var job) || job.Task is not { } task)
+        {
+            return new NoteJobState(Done: false, Gone: true);
+        }
+
+        if (!task.IsCompleted)
+        {
+            return new NoteJobState(Done: false);
+        }
+
+        _jobs.TryRemove(id, out _);
+        return task.IsCompletedSuccessfully ? task.Result : new NoteJobState(Done: false, Gone: true);
+    }
+
+    public void Stop(string id)
+    {
+        if (_jobs.TryGetValue(id, out var job))
+        {
+            job.Stop.Cancel();
+        }
+    }
+
+    private sealed class Job(CancellationTokenSource stop)
+    {
+        public CancellationTokenSource Stop { get; } = stop;
+
+        public Task<NoteJobState>? Task { get; set; }
+
+        public DateTime? FinishedAt { get; set; }
+    }
+}
+
+/// <summary>
+/// The Notes page's routes, under /api/notes, so they need the pairing token like every other route. "Now" is the
+/// server's clock, except where a recording started, which the PC knows.
+/// </summary>
+public static class NotesRoutes
+{
+    /// <summary>The largest file kept with a note unless the server's settings say otherwise: a few hours of lecture audio.</summary>
+    public const long DefaultMaxAttachmentBytes = 300L * 1024 * 1024;
+
+    public const string MaxAttachmentSetting = "Waypoint:MaxAttachmentBytes";
+
+    public static void Map(RouteGroupBuilder api)
+    {
+        var notes = new Lazy<ServerNotes>(() => ActivatorUtilities.CreateInstance<ServerNotes>(((IEndpointRouteBuilder)api).ServiceProvider));
+        // Made now, not on the first request: building it hands the worker its note files, which Discord uploads need.
+        _ = notes.Value;
+        var group = api.MapGroup("/notes");
+        MapNotes(group, notes);
+        MapFolders(group, notes);
+        MapSources(group, notes);
+        MapMaking(group, notes);
+        MapStudy(group, notes);
+        MapFileSync(group, notes);
+        MapAttachments(group, notes);
+    }
+
+    private static void MapNotes(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapGet("/{id:long}", (long id) => new Found<NoteDetail>(notes.Value.Data.GetNote(id)));
+        group.MapPost("/", (NewNoteRequest request) => new Found<long>(request.ClientId is { Length: > 0 } client
+            ? notes.Value.Database.CreateNoteOnce(client, request.Title, request.Body, DateTime.Now, request.FolderId)
+            : notes.Value.Data.CreateNote(request.Title, request.Body, DateTime.Now, request.FolderId)));
+        group.MapPut("/{id:long}", (long id, SaveNoteRequest request) => new FlagValue(notes.Value.Data.SaveNote(id, request.Title, request.Body, DateTime.Now)));
+        group.MapDelete("/{id:long}", (long id) =>
+        {
+            notes.Value.Data.DeleteNote(id, DateTime.Now);
+            return Results.NoContent();
+        });
+        group.MapPost("/{id:long}/restore", (long id) =>
+        {
+            notes.Value.Data.RestoreNote(id, DateTime.Now);
+            return Results.NoContent();
+        });
+        group.MapPut("/{id:long}/folder", (long id, MoveNoteRequest request) => new FlagValue(notes.Value.Data.MoveNoteToFolder(id, request.FolderId)));
+        group.MapGet("/search", (string? words) => notes.Value.Data.SearchNotes(words));
+        group.MapGet("/search/in", (string? words, long? folder, bool? subfolders) => notes.Value.Data.SearchNotesInFolder(words, folder, subfolders ?? true));
+        group.MapGet("/in", (long? folder, bool? subfolders) => notes.Value.Data.GetNotesInFolder(folder, subfolders ?? false));
+        group.MapGet("/spots", (string? words) => notes.Value.Data.GetSavedSpots(string.IsNullOrEmpty(words) ? null : words));
+        group.MapGet("/spots/waiting", () => new SpotValue(notes.Value.Data.GetWaitingSpot(DateTime.Now)));
+        group.MapPost("/spots/next", (TextValue request) => notes.Value.Data.SetSpotNext(request.Value ?? "", DateTime.Now));
+        group.MapGet("/classes", () => notes.Value.Data.GetClassNames());
+    }
+
+    private static void MapFolders(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapGet("/folders", () => notes.Value.Data.GetNoteFolders());
+        group.MapGet("/folders/{id:long}", (long id) => new Found<NoteFolder>(notes.Value.Data.GetNoteFolder(id)));
+        group.MapGet("/folders/count", (long? folder) => new Found<int>(notes.Value.Data.CountNotesInFolder(folder)));
+        group.MapPost("/folders", (NewFolderRequest request) => notes.Value.Data.CreateNoteFolder(request.Name, request.ParentId, DateTime.Now));
+        group.MapPut("/folders/{id:long}/name", (long id, NameRequest request) => notes.Value.Data.RenameNoteFolder(id, request.Name));
+        group.MapPut("/folders/{id:long}/place", (long id, MoveFolderRequest request) => new FlagValue(notes.Value.Data.MoveNoteFolder(id, request.ParentId, request.Position)));
+        group.MapDelete("/folders/{id:long}", (long id, [Microsoft.AspNetCore.Mvc.FromQuery(Name = "notes")] string? inside) =>
+            Enum.TryParse<NotesInFolder>(inside ?? nameof(NotesInFolder.Refuse), out var keep)
+                ? Results.Ok(new Found<FolderDeleteResult>(notes.Value.Data.DeleteNoteFolder(id, keep)))
+                : Results.BadRequest());
+        group.MapGet("/class-folders", (string course) => new Found<long?>(notes.Value.Data.FindClassFolder(course)));
+        group.MapPost("/class-folders", (CourseRequest request) => notes.Value.Data.CreateClassFolder(request.Course, DateTime.Now));
+    }
+
+    private static void MapSources(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapGet("/{id:long}/sources", (long id) => notes.Value.Data.GetNoteSources(id));
+        group.MapGet("/sources/{id:long}/timestamps", (long id) => new TextValue(notes.Value.Data.GetSourceTimestamps(id)));
+        group.MapGet("/{id:long}/generation", (long id) => new Found<NoteGeneration>(notes.Value.Data.GetNoteGeneration(id)));
+        group.MapPost("/{id:long}/restore-body", (long id, NoteBodyState state) =>
+        {
+            notes.Value.Data.RestoreNoteBody(id, state, DateTime.Now);
+            return Results.NoContent();
+        });
+        group.MapGet("/{id:long}/course", (long id) => new TextValue(notes.Value.Data.GetNoteCourse(id)));
+        group.MapGet("/{id:long}/suggestions", (long id) => notes.Value.Data.GetNoteSuggestions(id));
+        group.MapPost("/suggestions/{id:long}/accept", (long id) => notes.Value.Data.AcceptNoteSuggestion(id, DateTime.Now));
+        group.MapPost("/suggestions/{id:long}/skip", (long id) => new FlagValue(notes.Value.Data.SkipNoteSuggestion(id)));
+    }
+
+    private static void MapMaking(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapPost("/place", (PlaceRequest request) => notes.Value.Data.PlaceNewNote(request.PickedFolderId, request.FolderPicked, DateTime.Now));
+        group.MapPost("/folder-for", (NotePlacement placement) => new Found<long?>(notes.Value.Data.FolderFor(placement, DateTime.Now)));
+        group.MapPost("/from-file", (FromFileRequest request) => notes.Value.Data.StartFromFile(request.File, request.PickedFolderId, request.FolderPicked, DateTime.Now));
+        group.MapPost("/{id:long}/files", (long id, FileText file) => notes.Value.Data.AttachFile(id, file, DateTime.Now));
+        group.MapPost("/for-recording", (RecordingNoteRequest request) =>
+            notes.Value.Data.StartForRecording(request.FileName, request.PickedFolderId, request.FolderPicked, request.At, request.Title));
+        group.MapPost("/{id:long}/transcript", (long id, TranscriptRequest request) =>
+            notes.Value.Data.AttachTranscriptOnce(id, request.RecordingName, request.Transcript, request.TimestampsJson, DateTime.Now, request.ClientId));
+        group.MapPost("/{id:long}/write", (long id, WriteNotesRequest request) =>
+        {
+            var data = notes.Value.Data;
+            return Started(notes.Value.Start(async stop =>
+                new NoteJobState(Done: true, Notes: await data.WriteNotesAsync(id, request.Request, request.ReplaceEdits, DateTime.Now, request.Marks, stop))));
+        });
+        group.MapPost("/{id:long}/written", (long id, WrittenNotes written) => notes.Value.Data.SaveWrittenAnyway(id, written, DateTime.Now));
+        group.MapGet("/jobs/{job}", (string job) => notes.Value.State(job));
+        group.MapDelete("/jobs/{job}", (string job) =>
+        {
+            notes.Value.Stop(job);
+            return Results.NoContent();
+        });
+    }
+
+    /// <summary>The new job, or 429 when the server is already writing as many as it will at once.</summary>
+    private static IResult Started(NoteJobStarted? job) =>
+        job is null ? Results.StatusCode(StatusCodes.Status429TooManyRequests) : Results.Ok(job);
+
+    private static void MapStudy(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapGet("/study/folder", (string? course, string? title, string? item) =>
+            new Found<long?>(notes.Value.Data.StudyFolderFor(new StudyExam(title ?? "", course, ItemRef: string.IsNullOrEmpty(item) ? null : item))));
+        group.MapPost("/study/link", (StudyRequest request) =>
+        {
+            notes.Value.Data.LinkStudyFolder(request.Exam, request.FolderId);
+            return Results.NoContent();
+        });
+        group.MapGet("/study/find", (long folder, string exam) => new Found<long?>(notes.Value.Data.FindStudyNote(folder, exam)));
+        group.MapGet("/study/exams", (string course, string today) =>
+            ParseDay(today) is { } day ? Results.Ok(notes.Value.Data.ExamsFor(course, day)) : Results.BadRequest());
+        group.MapGet("/{id:long}/study-exam", (long id, string today) =>
+            ParseDay(today) is { } day ? Results.Ok(new Found<StudyExam>(notes.Value.Data.ExamForNote(id, day))) : Results.BadRequest());
+        group.MapPost("/study", (StudyRequest request) =>
+        {
+            var data = notes.Value.Data;
+            return Started(notes.Value.Start(async stop =>
+                new NoteJobState(Done: true, Study: await data.MakeStudyAsync(request.Exam, request.FolderId, request.ReplaceEdits, DateTime.Now, stop))));
+        });
+        group.MapPost("/{id:long}/study-anyway", (long id, MarkdownRequest request) => notes.Value.Data.SaveStudyAnyway(id, request.Markdown, DateTime.Now));
+    }
+
+    /// <summary>
+    /// The PC keeps its notes folder in step with these, using what the files and notes were when they last matched.
+    /// Each PC's notes folder is its own, so the records are kept for the PC named in the request. A PC from before
+    /// that names none uses the records kept for all.
+    /// </summary>
+    private static void MapFileSync(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        static string? Pc(HttpContext context) =>
+            context.Request.Headers[ServerClient.ClientHeader].ToString() is { Length: > 0 } id ? id : null;
+
+        group.MapGet("/file-states", () => notes.Value.Data.GetNoteFileStates());
+        group.MapGet("/files", (HttpContext context) =>
+            Pc(context) is { } pc ? notes.Value.Database.GetNoteFileRecords(pc) : notes.Value.Data.GetNoteFileRecords());
+        group.MapPut("/files", (NoteFileRecord record, HttpContext context) =>
+        {
+            if (Pc(context) is { } pc)
+            {
+                notes.Value.Database.SetNoteFileRecord(pc, record);
+            }
+            else
+            {
+                notes.Value.Data.SetNoteFileRecord(record);
+            }
+
+            return Results.NoContent();
+        });
+        group.MapDelete("/files/{id:long}", (long id, HttpContext context) =>
+        {
+            if (Pc(context) is { } pc)
+            {
+                notes.Value.Database.RemoveNoteFileRecord(pc, id);
+            }
+            else
+            {
+                notes.Value.Data.RemoveNoteFileRecord(id);
+            }
+
+            return Results.NoContent();
+        });
+        group.MapGet("/files/restored", (HttpContext context) => new PreferenceValue(
+            Pc(context) is { } pc ? notes.Value.Database.PendingNotesRestore(pc) : notes.Value.Database.PendingNotesRestore()));
+        group.MapPut("/files/restored", (PreferenceValue handled, HttpContext context) =>
+        {
+            if (handled.Value is { } stamp)
+            {
+                if (Pc(context) is { } pc)
+                {
+                    notes.Value.Database.NotesRestoreHandled(pc, stamp);
+                }
+                else
+                {
+                    notes.Value.Database.NotesRestoreHandled(stamp);
+                }
+            }
+
+            return Results.NoContent();
+        });
+        group.MapDelete("/files", (HttpContext context) =>
+        {
+            if (Pc(context) is { } pc)
+            {
+                notes.Value.Database.ClearNoteFileRecords(pc);
+            }
+            else
+            {
+                notes.Value.Data.ClearNoteFileRecords();
+            }
+
+            return Results.NoContent();
+        });
+    }
+
+    /// <summary>
+    /// A file kept with one of a note's sources, such as the audio of a lecture. It's stored whole in the attachments
+    /// folder, up to a size limit, and a file over it is refused before any of it is kept.
+    /// </summary>
+    private static void MapAttachments(RouteGroupBuilder group, Lazy<ServerNotes> notes)
+    {
+        group.MapPut("/{id:long}/sources/{source:long}/file", async (long id, long source, HttpContext context, IConfiguration configuration) =>
+        {
+            var limit = configuration.GetValue(MaxAttachmentSetting, DefaultMaxAttachmentBytes);
+            if (context.Request.ContentLength is > 0 and var length && length > limit)
+            {
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+            }
+
+            if (Source(notes.Value, id, source) is not { } found)
+            {
+                return Results.NotFound();
+            }
+
+            if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } size)
+            {
+                size.MaxRequestBodySize = limit + 1;
+            }
+
+            Directory.CreateDirectory(notes.Value.Attachments);
+            var target = Path.Combine(notes.Value.Attachments, $"source-{found.Id}{Extension(found)}");
+            var part = target + ".part";
+            try
+            {
+                await using (var file = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+                {
+                    var buffer = new byte[1 << 16];
+                    long total = 0;
+                    int read;
+                    while ((read = await context.Request.Body.ReadAsync(buffer, context.RequestAborted)) > 0)
+                    {
+                        total += read;
+                        if (total > limit)
+                        {
+                            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                        }
+
+                        await file.WriteAsync(buffer.AsMemory(0, read), context.RequestAborted);
+                    }
+                }
+
+                // Replaces an earlier copy only once the new one is all here.
+                File.Move(part, target, overwrite: true);
+                notes.Value.Database.SetNoteSourceFile(found.Id, target);
+                return Results.NoContent();
+            }
+            catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+            {
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+            }
+            finally
+            {
+                if (File.Exists(part))
+                {
+                    File.Delete(part);
+                }
+            }
+        }).WithMetadata(Api.LargeBody.Instance);
+
+        group.MapGet("/{id:long}/sources/{source:long}/file", (long id, long source) =>
+            Source(notes.Value, id, source) is { FilePath: { } path } found && IsAttachment(notes.Value, path) && File.Exists(path)
+                ? Results.File(path, "application/octet-stream", $"{Path.GetFileNameWithoutExtension(found.Name)}{Extension(found)}")
+                : Results.NotFound());
+
+        group.MapDelete("/{id:long}/sources/{source:long}/file", (long id, long source) =>
+        {
+            if (Source(notes.Value, id, source) is not { } found)
+            {
+                return Results.NotFound();
+            }
+
+            // Only the server's own copy is ever deleted, and the transcript and notes stay.
+            if (found.FilePath is { } path && IsAttachment(notes.Value, path) && File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            notes.Value.Database.SetNoteSourceFile(found.Id, null);
+            return Results.NoContent();
+        });
+    }
+
+    private static NoteSource? Source(ServerNotes notes, long noteId, long sourceId) =>
+        notes.Data.GetNoteSources(noteId).FirstOrDefault(source => source.Id == sourceId);
+
+    private static bool IsAttachment(ServerNotes notes, string path)
+    {
+        var folder = Path.GetFullPath(notes.Attachments).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(folder, StringComparison.Ordinal);
+    }
+
+    /// <summary>The kind of file, from the name it had, kept short and plain since it becomes part of a path.</summary>
+    private static string Extension(NoteSource source)
+    {
+        var name = source.FilePath ?? source.Name.Replace("Transcript of ", "", StringComparison.Ordinal);
+        var extension = Path.GetExtension(name).ToLowerInvariant();
+        return extension.Length is > 1 and <= 10 && extension[1..].All(char.IsAsciiLetterOrDigit) ? extension : ".bin";
+    }
+
+    private static DateOnly? ParseDay(string text) =>
+        DateOnly.TryParseExact(text, "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day) ? day : null;
+}

@@ -1,0 +1,68 @@
+[Unit]
+Description=Waypoint server: reminders, Discord, email, and the database
+# Tailscale has to be up before the server can listen on its address. If it isn't yet, the start fails and
+# systemd tries again after RestartSec.
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+User=waypoint
+Group=waypoint
+WorkingDirectory=/opt/waypoint
+ExecStart=/usr/bin/dotnet /opt/waypoint/waypoint-server.dll
+EnvironmentFile=/etc/waypoint/waypoint.env
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=WAYPOINT_DATA_DIR=/var/lib/waypoint
+# Reminders use local time, from the system zone in /etc/localtime, which the backup timer and the journal follow too.
+# If Waypoint__TimeZone names another zone, the server warns in the log and on the PC.
+# The claude CLI is installed for this user, which is where the installer puts it.
+Environment=PATH=/home/waypoint/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# Limits for the server and everything it starts, such as claude, tesseract, and pdftoppm, so a file that's hard
+# to read can't take the whole machine. Going over MemoryMax ends the service, and systemd starts it again.
+MemoryHigh=2G
+MemoryMax=3G
+TasksMax=512
+
+# Owner-only files, and the data folder made at /var/lib/waypoint with mode 700.
+UMask=0077
+StateDirectory=waypoint
+StateDirectoryMode=0700
+
+# Hardening. Every home folder is hidden behind an empty one, and only the service user's own is put back, writable,
+# because the claude CLI lives in ~/.local and keeps its sign-in in ~/.claude and ~/.claude.json.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/waypoint
+ReadWritePaths=/var/lib/waypoint /home/waypoint
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+# Netlink is how .NET reads the network interfaces.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+# A call outside the usual set fails rather than ending the process, so a program that tries something newer, such as
+# io_uring, falls back instead of crashing. MemoryDenyWriteExecute is left off, since .NET compiles code as it runs.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

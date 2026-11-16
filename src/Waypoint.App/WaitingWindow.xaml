@@ -1,0 +1,63 @@
+<Window x:Class="Waypoint.App.WaitingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Waiting on"
+        SizeToContent="Height"
+        Width="420"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Rule}"
+        BorderThickness="1"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,12,0,6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+        </Style>
+        <DataTemplate x:Key="ChoiceTemplate">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+    </Window.Resources>
+    <StackPanel Margin="18">
+        <TextBlock FontSize="16" FontWeight="Light" Text="Waiting on" Foreground="{DynamicResource PrimaryText}" />
+        <TextBlock x:Name="ItemTitle"
+                   Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Visibility="Collapsed" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Who" />
+        <TextBox x:Name="WhoBox" Style="{StaticResource FieldBox}" Tag="Such as Prof. Quill or HR" AutomationProperties.Name="Who" />
+
+        <StackPanel x:Name="TopicPanel">
+            <TextBlock Style="{StaticResource FieldLabel}" Text="About, optional" />
+            <TextBox x:Name="TopicBox" Style="{StaticResource FieldBox}" Tag="Such as the extension" AutomationProperties.Name="About, optional" />
+        </StackPanel>
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Check back" />
+        <ListBox x:Name="FollowUps"
+                 Style="{StaticResource ChoiceList}"
+                 ItemTemplate="{StaticResource ChoiceTemplate}"
+                 AutomationProperties.Name="Check back" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Their email, optional, to notice when they write back" />
+        <TextBox x:Name="EmailBox" Style="{StaticResource FieldBox}" Tag="name@school.edu" AutomationProperties.Name="Their email, optional" />
+
+        <TextBlock x:Name="Problem"
+                   AutomationProperties.LiveSetting="Polite"
+                   Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Visibility="Collapsed" />
+        <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
+            <Button Padding="14,6" Content="Save" IsDefault="True" Click="OnSaveClicked" />
+        </StackPanel>
+    </StackPanel>
+</Window>

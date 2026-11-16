@@ -1,0 +1,34 @@
+<Window x:Class="Waypoint.App.BudgetFormWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Budget"
+        SizeToContent="Height"
+        Width="420"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Rule}"
+        BorderThickness="1"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <StackPanel Margin="18">
+        <TextBlock x:Name="Heading"
+                   Margin="0,0,0,4"
+                   FontSize="16"
+                   FontWeight="Light"
+                   Foreground="{DynamicResource PrimaryText}" />
+        <StackPanel x:Name="Fields" />
+        <TextBlock x:Name="Answer"
+                   Margin="0,12,0,0"
+                   FontSize="13"
+                   LineHeight="19"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource PrimaryText}"
+                   Visibility="Collapsed" />
+        <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CancelButton" Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
+            <Button x:Name="DoneButton" Padding="14,6" Content="Save" IsDefault="True" Click="OnDoneClicked" />
+        </StackPanel>
+    </StackPanel>
+</Window>

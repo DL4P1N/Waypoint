@@ -1,0 +1,407 @@
+<UserControl x:Class="Waypoint.App.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Waypoint.App">
+    <UserControl.Resources>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,26,0,10" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,10,0,6" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+            <Setter Property="Effect" Value="{StaticResource TextHalo}" />
+        </Style>
+        <Style x:Key="Note" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+            <Setter Property="Effect" Value="{StaticResource TextHalo}" />
+        </Style>
+        <Style x:Key="Line" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+        </Style>
+        <DataTemplate x:Key="ChoiceTemplate">
+            <TextBlock Text="{Binding}" />
+        </DataTemplate>
+        <DataTemplate x:Key="WorkRowTemplate">
+            <DockPanel Margin="0,0,0,4">
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource SmallButton}"
+                        Content="×"
+                        ToolTip="{Binding RemoveLabel}"
+                        AutomationProperties.Name="{Binding RemoveLabel}"
+                        Click="OnWorkRowRemoved" />
+                <TextBlock Style="{StaticResource Line}" Text="{Binding Label}" />
+            </DockPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="ClassRowTemplate">
+            <DockPanel Margin="0,0,0,4">
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource SmallButton}"
+                        Content="×"
+                        ToolTip="{Binding RemoveLabel}"
+                        AutomationProperties.Name="{Binding RemoveLabel}"
+                        Click="OnClassRemoved" />
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource SmallButton}"
+                        Content="Edit"
+                        ToolTip="{Binding EditLabel}"
+                        AutomationProperties.Name="{Binding EditLabel}"
+                        Click="OnClassEdited" />
+                <TextBlock Style="{StaticResource Line}" TextWrapping="Wrap" Text="{Binding Label}" />
+            </DockPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <local:NestedColumn x:Name="Column" SearchHint="Search settings" AddMode="None" />
+
+        <DockPanel Grid.Column="1">
+            <TextBlock DockPanel.Dock="Top"
+                       Margin="28,22,24,4"
+                       Style="{StaticResource ColumnTitle}"
+                       Text="Settings" />
+            <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="28,0,24,28" MaxWidth="560" HorizontalAlignment="Left">
+                    <StackPanel x:Name="LookSection" Visibility="Collapsed">
+                        <!-- Look -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Look" />
+                        <TextBlock Style="{StaticResource Note}" Margin="0,0,0,10" Text="Changes here are saved as soon as you make them." />
+                        <ListBox x:Name="Swatches"
+                                 Style="{StaticResource ChoiceList}"
+                                 AutomationProperties.Name="Theme"
+                                 SelectionChanged="OnThemePicked">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="2,2">
+                                        <Border Width="18" Height="18" Margin="0,0,8,0" Background="{Binding Fill}" BorderBrush="{DynamicResource Rule}" BorderThickness="1" />
+                                        <TextBlock VerticalAlignment="Center" Text="{Binding Name}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <CheckBox x:Name="LessSeeThroughOn" Margin="0,12,0,0" Checked="OnLessSeeThroughChanged" Unchecked="OnLessSeeThroughChanged">
+                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Less see-through" Foreground="{DynamicResource PrimaryText}" />
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="Makes the window background nearly solid, so what's behind it doesn't show through." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="WorkSection" Visibility="Collapsed">
+                        <!-- Work hours -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Work hours" />
+                        <TextBlock x:Name="NoWeekly" Style="{StaticResource Note}" Margin="0,0,0,6" Text="No regular hours yet." />
+                        <ItemsControl x:Name="WeeklyRows" ItemTemplate="{StaticResource WorkRowTemplate}" />
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Regular hours: pick the days, then the times" />
+                        <ListBox x:Name="Days"
+                                 Style="{StaticResource ChoiceList}"
+                                 SelectionMode="Multiple"
+                                 ItemTemplate="{StaticResource ChoiceTemplate}"
+                                 AutomationProperties.Name="Days" />
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="WeeklyStart" Style="{StaticResource FieldBox}" Tag="Starts, or 9-5" AutomationProperties.Name="Regular hours start" />
+                            <TextBox x:Name="WeeklyEnd" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Ends" AutomationProperties.Name="Regular hours end" />
+                            <Button Grid.Column="2" Margin="8,0,0,0" Padding="14,6" Content="Save" AutomationProperties.Name="Save regular hours" Click="OnWeeklySaved" />
+                        </Grid>
+                        <TextBlock x:Name="WeeklyStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="One-off shifts and days off" />
+                        <TextBlock x:Name="NoDates" Style="{StaticResource Note}" Margin="0,0,0,6" Text="Nothing coming up." />
+                        <ItemsControl x:Name="DateRows" ItemTemplate="{StaticResource WorkRowTemplate}" />
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="ShiftDate" Padding="12,6" BorderBrush="{DynamicResource Rule}" Click="OnShiftDateClicked" />
+                            <TextBox x:Name="ShiftStart" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Starts, or 9-5" AutomationProperties.Name="Shift start" />
+                            <TextBox x:Name="ShiftEnd" Grid.Column="2" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Ends" AutomationProperties.Name="Shift end" />
+                        </Grid>
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button Style="{StaticResource PageAction}" Content="Add shift" Click="OnShiftAdded" />
+                            <Button Style="{StaticResource PageAction}" Content="Day off" Click="OnDayOffAdded" />
+                        </WrapPanel>
+                        <TextBlock x:Name="ShiftStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
+
+                        <CheckBox x:Name="WorkRemote" Margin="0,14,0,0" Content="I work from home" AutomationProperties.Name="I work from home" Click="OnWorkRemoteClicked" />
+                        <TextBlock Style="{StaticResource Note}" Text="With no commute, nothing says to leave for work. It says when work starts." />
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Commute, in minutes" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBox x:Name="Commute" Width="120" Style="{StaticResource FieldBox}" AutomationProperties.Name="Commute in minutes" />
+                            <Button Margin="8,0,0,0" Padding="14,6" Content="Save" AutomationProperties.Name="Save commute" Click="OnCommuteSaved" />
+                        </StackPanel>
+                        <TextBlock x:Name="CommuteHint" Style="{StaticResource Note}" Visibility="Collapsed" />
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Hourly pay, for estimating paychecks from your shifts" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBox x:Name="HourlyRate" Width="120" Style="{StaticResource FieldBox}" Tag="20.00" AutomationProperties.Name="Hourly pay in dollars" />
+                            <Button Margin="8,0,0,0" Padding="14,6" Content="Save" AutomationProperties.Name="Save hourly pay" Click="OnHourlyRateSaved" />
+                        </StackPanel>
+                        <TextBlock x:Name="HourlyRateHint" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock x:Name="WorkStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="ClassesSection" Visibility="Collapsed">
+                        <!-- Classes -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Classes" />
+                        <TextBlock x:Name="NoClasses" Style="{StaticResource Note}" Margin="0,0,0,6" Text="No classes yet." />
+                        <ItemsControl x:Name="ClassRows" ItemTemplate="{StaticResource ClassRowTemplate}" />
+
+                        <TextBlock x:Name="ClassFormTitle" Style="{StaticResource FieldLabel}" Text="Add a class" />
+                        <TextBox x:Name="ClassName" Style="{StaticResource FieldBox}" Tag="Name, like CS 101" AutomationProperties.Name="Class name" />
+                        <ListBox x:Name="ClassDays"
+                                 Margin="0,8,0,0"
+                                 Style="{StaticResource ChoiceList}"
+                                 SelectionMode="Multiple"
+                                 ItemTemplate="{StaticResource ChoiceTemplate}"
+                                 AutomationProperties.Name="Class days" />
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ClassStart" Style="{StaticResource FieldBox}" Tag="Starts, or 9-10:15" AutomationProperties.Name="Class start" />
+                            <TextBox x:Name="ClassEnd" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Ends" AutomationProperties.Name="Class end" />
+                        </Grid>
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ClassPlace" Style="{StaticResource FieldBox}" Tag="Place (optional)" AutomationProperties.Name="Class place" />
+                            <TextBox x:Name="ClassTravel" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Minutes to get there" AutomationProperties.Name="Minutes to get to class" />
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="The term's first and last day" />
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="TermStartButton" Padding="12,6" BorderBrush="{DynamicResource Rule}" AutomationProperties.Name="Term's first day" Click="OnTermStartClicked" />
+                            <Button x:Name="TermEndButton" Margin="8,0,0,0" Padding="12,6" BorderBrush="{DynamicResource Rule}" AutomationProperties.Name="Term's last day" Click="OnTermEndClicked" />
+                        </StackPanel>
+
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button Padding="14,6" Content="Save" AutomationProperties.Name="Save classes" Click="OnClassesSaved" />
+                            <Button x:Name="ClassEditCancel" Margin="8,0,0,0" Padding="14,6" Content="Cancel" AutomationProperties.Name="Stop editing this class" Visibility="Collapsed" Click="OnClassEditCancelled" />
+                        </StackPanel>
+                        <TextBlock x:Name="ClassesStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="Save keeps the class typed above, if there is one, and the term's days. Time to leave comes before each class, earlier by the minutes to get there, and changes are used straight away." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="BedtimeSection" Visibility="Collapsed">
+                        <!-- Bedtime -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Bedtime" />
+                        <TextBlock x:Name="Tonight" Style="{StaticResource Note}" Margin="0,0,0,4" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Hours of sleep" />
+                                <TextBox x:Name="SleepHours" Style="{StaticResource FieldBox}" AutomationProperties.Name="Hours of sleep" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Minutes to get ready" />
+                                <TextBox x:Name="ReadyMinutes" Style="{StaticResource FieldBox}" AutomationProperties.Name="Minutes to get ready" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Margin="8,0,0,0">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Latest bedtime" />
+                                <TextBox x:Name="LatestBedtime" Style="{StaticResource FieldBox}" Tag="1:00 AM" AutomationProperties.Name="Latest bedtime" />
+                            </StackPanel>
+                        </Grid>
+                        <!-- The ticks save as soon as they're clicked, like Less see-through. The boxes above, the step names, and the steps keep Save. -->
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Wind-down steps, each with its own reminder. Tick to turn one on, and name it." />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <CheckBox x:Name="EveningStepOn" VerticalAlignment="Center" AutomationProperties.Name="First wind-down step's reminder" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked" />
+                            <TextBox x:Name="EveningStepName" Grid.Column="1" Margin="10,0,0,0" Style="{StaticResource FieldBox}" Tag="Evening step" AutomationProperties.Name="First wind-down step's name" />
+                            <CheckBox x:Name="WindDownStepOn" Grid.Row="1" Margin="0,8,0,0" VerticalAlignment="Center" AutomationProperties.Name="Second wind-down step's reminder" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked" />
+                            <TextBox x:Name="WindDownStepName" Grid.Row="1" Grid.Column="1" Margin="10,8,0,0" Style="{StaticResource FieldBox}" Tag="Wind-down step" AutomationProperties.Name="Second wind-down step's name" />
+                        </Grid>
+                        <CheckBox x:Name="LateCheckInsOn" Margin="0,8,0,0" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked">
+                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Late-night check-ins: a Discord card every 30 minutes while the PC is still in use after bedtime" Foreground="{DynamicResource PrimaryText}" />
+                        </CheckBox>
+                        <CheckBox x:Name="QuietOn" Margin="0,8,0,0" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked">
+                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Quiet evening: hold money notices and nudges after the wrap-up" Foreground="{DynamicResource PrimaryText}" />
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Extra routine steps, one per line" />
+                        <TextBox x:Name="RoutineSteps"
+                                 Style="{StaticResource FieldBox}"
+                                 MinHeight="70"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 AutomationProperties.Name="Extra routine steps, one per line" />
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button Padding="14,6" Content="Save" AutomationProperties.Name="Save bedtime" Click="OnBedtimeSaved" />
+                        </StackPanel>
+                        <TextBlock x:Name="BedtimeNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock Style="{StaticResource Note}" Text="The reminders and switches are saved as soon as you click them. Save keeps the times, the step names, and the routine steps." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="NotesSection" Visibility="Collapsed">
+                        <!-- Notes folder -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Notes folder" />
+                        <TextBlock Style="{StaticResource Note}" Margin="0,0,0,10" Text="Changes here are saved as soon as you make them." />
+                        <TextBlock x:Name="NotesFolderPath" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryText}" />
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button Padding="14,6" Content="Open folder" Click="OnNotesFolderOpened" />
+                            <Button Margin="8,0,0,0" Padding="14,6" Content="Change folder" Click="OnNotesFolderChanged" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="Each note is a .md file here, in a folder for each notes folder. Edits made in other apps, such as Obsidian or VS Code, show up in Waypoint within a few seconds." />
+
+                        <!-- Recording -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Recording" />
+                        <CheckBox x:Name="OfferRecordOn" Checked="OnOfferRecordChanged" Unchecked="OnOfferRecordChanged">
+                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Offer to record when a class starts" Foreground="{DynamicResource PrimaryText}" />
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="A card asks at the start of each class, with Record and Not now. Nothing records unless you choose Record." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="DiscordSection" Visibility="Collapsed">
+                        <!-- Discord -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Discord" />
+                        <TextBlock x:Name="DiscordState" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryText}" />
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Bot token" />
+                        <PasswordBox x:Name="DiscordToken"
+                                     Style="{StaticResource PasswordFieldBox}"
+                                     AutomationProperties.Name="Discord bot token" />
+                        <TextBlock x:Name="DiscordTokenNote" Style="{StaticResource Note}" Text="A token is saved. Leave this blank to keep it." />
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Your user ID" />
+                        <TextBox x:Name="DiscordOwner" Style="{StaticResource FieldBox}" AutomationProperties.Name="Discord user ID" />
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Channel IDs: capture, alerts, and budget" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="DiscordCapture" Style="{StaticResource FieldBox}" Tag="Capture" AutomationProperties.Name="Capture channel ID" />
+                            <TextBox x:Name="DiscordAlerts" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Alerts" AutomationProperties.Name="Alerts channel ID" />
+                            <TextBox x:Name="DiscordBudget" Grid.Column="2" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Budget" AutomationProperties.Name="Budget channel ID" />
+                        </Grid>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Forum channel IDs: notes and lists (optional)" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="DiscordNotesForum" Style="{StaticResource FieldBox}" Tag="Notes forum" AutomationProperties.Name="Notes forum channel ID" />
+                            <TextBox x:Name="DiscordListsForum" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource FieldBox}" Tag="Lists forum" AutomationProperties.Name="Lists forum channel ID" />
+                        </Grid>
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="Make these as Forum channels in Discord. Each note gets its own post there, with its folder as a tag, and each list gets one too. Type in a post to add to that note or list, or start a new post to make a new one. Leave them blank to skip this." />
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button Padding="14,6" Content="Save" AutomationProperties.Name="Save Discord" Click="OnDiscordSaved" />
+                            <Button x:Name="DiscordTest" Margin="8,0,0,0" Padding="14,6" Content="Send test message" Click="OnDiscordTested" />
+                        </StackPanel>
+                        <TextBlock x:Name="DiscordNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock x:Name="DiscordWhere"
+                                   Style="{StaticResource Note}"
+                                   Text="What's saved here is used on this PC, and the token is kept encrypted to your Windows user." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="ConnectionsSection" Visibility="Collapsed">
+                        <!-- Connections -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Connections" />
+                        <ItemsControl x:Name="Connections">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock FontSize="14" Text="{Binding Name}" Foreground="{DynamicResource PrimaryText}" />
+                                        <TextBlock FontSize="13" TextWrapping="Wrap" Text="{Binding State}" Foreground="{DynamicResource SecondaryText}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Calendar feed link, for assignments and events" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="CalendarFeed"
+                                     Style="{StaticResource FieldBox}"
+                                     Tag="Paste the calendar's .ics or webcal link"
+                                     AutomationProperties.Name="Calendar feed link" />
+                            <Button Grid.Column="1" Margin="8,0,0,0" Padding="14,6" Content="Save" AutomationProperties.Name="Save calendar feed" Click="OnCalendarFeedSaved" />
+                            <Button x:Name="CalendarRemove" Grid.Column="2" Margin="8,0,0,0" Padding="14,6" Content="Remove" AutomationProperties.Name="Remove calendar feed" Click="OnCalendarFeedRemoved" />
+                        </Grid>
+                        <TextBlock x:Name="CalendarFeedNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock x:Name="CalendarStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
+
+
+                        <!-- Alert email -->
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Alert email app ID" />
+                        <TextBox x:Name="EmailClientId" Style="{StaticResource FieldBox}" AutomationProperties.Name="Alert email app ID" />
+                        <TextBlock x:Name="EmailOwnAddressLabel" Style="{StaticResource FieldLabel}" Text="Payment app emails are forwarded from (optional)" />
+                        <TextBox x:Name="EmailOwnAddress" Style="{StaticResource FieldBox}" AutomationProperties.Name="Address payment app emails are forwarded from" />
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button Padding="14,6" Content="Save" AutomationProperties.Name="Save alert email" Click="OnAlertEmailSaved" />
+                        </StackPanel>
+                        <TextBlock x:Name="EmailNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="The app ID is the Application (client) ID of the app made for Waypoint in Azure. Once it's saved, choose Connect alert email in the tray menu to sign in." />
+
+                        <TextBlock x:Name="SetUpElsewhere"
+                                   Style="{StaticResource Note}"
+                                   Margin="0,16,0,0"
+                                   Text="A few rarer options, such as the briefing time, are kept in the setup file in the Waypoint data folder. Changes there take effect the next time Waypoint starts." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="FeedbackSection" Visibility="Collapsed">
+                        <!-- Feedback -->
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Feedback" />
+                        <local:UndoBar x:Name="FeedbackBar" Margin="0,0,0,10" />
+                        <TextBlock Style="{StaticResource Note}"
+                                   Text="Each time you chose This didn't help, newest first, with the line you added if there was one. Nothing else about how you use Waypoint is kept." />
+                        <ItemsControl x:Name="FeedbackRows" Margin="0,10,0,0" AutomationProperties.Name="Feedback">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Margin="0,0,0,8" FontSize="13" TextWrapping="Wrap" Text="{Binding}" Foreground="{DynamicResource PrimaryText}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoFeedback" Style="{StaticResource Note}" Text="Nothing yet." />
+                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                            <Button x:Name="FeedbackClear" Padding="14,6" Content="Clear all" AutomationProperties.Name="Clear all feedback" Click="OnFeedbackCleared" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Note}" Text="They're also in backups, and Export notes writes them to Feedback.txt." />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</UserControl>

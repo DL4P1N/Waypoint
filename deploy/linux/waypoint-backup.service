@@ -1,0 +1,42 @@
+[Unit]
+Description=Encrypted backup of Waypoint's data to a second location
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/waypoint/deploy/waypoint-backup.sh
+# The service user, so the data folder is only ever read with the server's own rights, and never by root. The
+# waypoint-backup group, which can write to BACKUP_DIR, is given to this unit alone: the server doesn't have it.
+User=waypoint
+Group=waypoint
+SupplementaryGroups=waypoint-backup
+# Root only, and read by systemd before the script starts, so the service user can't read it on its own.
+EnvironmentFile=/etc/waypoint/backup.env
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening. BACKUP_DIR can be anywhere, so the system is read-only by area rather than strict, and the folders
+# themselves keep everyone but the service user and the backup group out.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+# The home folder is read-only, except rclone's settings, which it rewrites when a sign-in is refreshed.
+ProtectHome=read-only
+ReadWritePaths=-/home/waypoint/.config/rclone
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=

@@ -1,0 +1,78 @@
+<Window x:Class="Waypoint.App.ReminderWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:capture="clr-namespace:Waypoint.Core.Capture;assembly=Waypoint.Core"
+        xmlns:local="clr-namespace:Waypoint.App"
+        Title="Waypoint reminder"
+        Width="440"
+        SizeToContent="Height"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Accent}"
+        BorderThickness="1">
+    <StackPanel Margin="20,16">
+        <TextBlock x:Name="Kind" FontSize="12" Foreground="{DynamicResource SecondaryText}" />
+        <TextBlock x:Name="ItemTitle"
+                   Margin="0,6,0,2"
+                   FontSize="18"
+                   FontWeight="Light"
+                   TextWrapping="Wrap"
+                   Foreground="{StaticResource PrimaryText}" />
+        <TextBlock x:Name="Details" FontSize="12" Foreground="{DynamicResource SecondaryText}" />
+        <!-- Every PC card keeps one order: the main action first, then the one that comes back, then Skip (it doesn't). -->
+        <WrapPanel x:Name="Buttons" Margin="0,12,0,0">
+            <Button x:Name="Start"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="Start"
+                    Visibility="Collapsed"
+                    Click="OnStartClicked" />
+            <Button x:Name="FollowUp"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="{x:Static capture:CardLabels.FollowUp}"
+                    ToolTip="A short note to copy into an email. Nothing is sent."
+                    Visibility="Collapsed"
+                    Click="OnFollowUpClicked" />
+            <Button x:Name="StillWaiting"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="{x:Static capture:CardLabels.StillWaiting}"
+                    ToolTip="Check back in a few days"
+                    Visibility="Collapsed"
+                    Click="OnStillWaitingClicked" />
+            <Button x:Name="Primary" Padding="12,7" Margin="0,4,8,0" Click="OnPrimaryClicked" />
+            <Button x:Name="Snooze"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="{x:Static capture:CardLabels.NotNow}"
+                    Click="OnSnoozeClicked" />
+            <Button x:Name="SkipOne"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="{x:Static capture:CardLabels.Skip}"
+                    ToolTip="No more reminders for this one. It stays on your list."
+                    Visibility="Collapsed"
+                    Click="OnSkipOneClicked" />
+            <Button x:Name="Skip"
+                    Margin="0,4,8,0"
+                    Padding="12,7"
+                    Content="{x:Static capture:CardLabels.SkipAll}"
+                    ToolTip="No more reminders for this assignment. It stays on your list."
+                    Visibility="Collapsed"
+                    Click="OnSkipClicked" />
+        </WrapPanel>
+        <Button x:Name="SaveSpot"
+                Margin="0,10,0,0"
+                HorizontalAlignment="Left"
+                Style="{StaticResource LinkButton}"
+                FontSize="12"
+                Visibility="Collapsed"
+                Click="OnSaveSpotClicked" />
+        <local:FeedbackPrompt x:Name="FeedbackLine" Visibility="Collapsed" />
+    </StackPanel>
+</Window>

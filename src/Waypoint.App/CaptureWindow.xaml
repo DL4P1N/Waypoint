@@ -1,0 +1,50 @@
+<Window x:Class="Waypoint.App.CaptureWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Ask Waypoint"
+        Width="600"
+        SizeToContent="Height"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WindowBackground}"
+        BorderBrush="{DynamicResource Accent}"
+        BorderThickness="1"
+        AllowDrop="True"
+        PreviewDragEnter="OnFileDragOver"
+        PreviewDragOver="OnFileDragOver"
+        PreviewDrop="OnFileDrop"
+        Deactivated="OnDeactivated">
+    <StackPanel Margin="20,18">
+        <Grid>
+            <TextBlock x:Name="Placeholder"
+                       FontSize="20"
+                       FontWeight="Light"
+                       Text="What's on your mind?"
+                       Foreground="{DynamicResource SecondaryText}"
+                       IsHitTestVisible="False" />
+            <TextBox x:Name="Input"
+                     AutomationProperties.Name="What's on your mind?"
+                     FontSize="20"
+                     FontWeight="Light"
+                     Padding="-2,0,0,0"
+                     BorderThickness="0"
+                     MaxHeight="220"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     VerticalScrollBarVisibility="Auto"
+                     Background="Transparent"
+                     Foreground="{StaticResource PrimaryText}"
+                     CaretBrush="{DynamicResource Accent}"
+                     SelectionBrush="{DynamicResource Accent}"
+                     TextChanged="OnInputChanged"
+                     PreviewKeyDown="OnInputKeyDown" />
+        </Grid>
+        <TextBlock Margin="0,14,0,0"
+                   FontSize="12"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Text="Enter to save  ·  Shift+Enter for a new line  ·  Esc to close" />
+    </StackPanel>
+</Window>

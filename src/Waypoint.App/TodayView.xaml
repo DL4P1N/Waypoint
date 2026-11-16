@@ -1,0 +1,280 @@
+<UserControl x:Class="Waypoint.App.TodayView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:capture="clr-namespace:Waypoint.Core.Capture;assembly=Waypoint.Core"
+             xmlns:local="clr-namespace:Waypoint.App">
+    <UserControl.Resources>
+        <DataTemplate x:Key="RowTemplate">
+            <Border Margin="-6,-2,-6,6" Padding="6,2,6,0" CornerRadius="4" Background="{Binding SelectedBrush}">
+            <DockPanel>
+                <!-- Wider than the bar, so its tip can be found with the mouse. -->
+                <Border DockPanel.Dock="Left" Padding="0,3,8,6" Background="Transparent" ToolTip="{Binding MarkTip}">
+                    <Border Width="3" Background="{Binding Mark}" />
+                </Border>
+                <StackPanel Margin="0,0,0,4">
+                    <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
+                        <StackPanel Margin="11,0,0,0">
+                            <TextBlock FontSize="14"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding Title}"
+                                       TextDecorations="{Binding Strike}"
+                                       Foreground="{Binding TitleBrush}" />
+                            <TextBlock Margin="0,1,0,0"
+                                       FontSize="12"
+                                       Text="{Binding Details}"
+                                       Foreground="{Binding DetailBrush}"
+                                       Visibility="{Binding DetailsVisibility}" />
+                            <TextBlock x:Name="FullText"
+                                       Margin="0,4,0,0"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding FullText}"
+                                       Foreground="{Binding DetailBrush}"
+                                       Visibility="{Binding FullTextVisibility}" />
+                        </StackPanel>
+                    </CheckBox>
+                    <ItemsControl Margin="26,6,0,0" ItemsSource="{Binding Steps}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="-4,0" Padding="4,0" CornerRadius="4" Background="{Binding SelectedBrush}">
+                                <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
+                                    <TextBlock Margin="10,0,0,0"
+                                               FontSize="13"
+                                               TextWrapping="Wrap"
+                                               TextDecorations="{Binding Strike}"
+                                               Text="{Binding Title}"
+                                               Foreground="{Binding TitleBrush}" />
+                                </CheckBox>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Margin="51,3,0,0"
+                               FontSize="12"
+                               Text="{Binding MoreSteps}"
+                               Foreground="{DynamicResource SecondaryText}"
+                               Visibility="{Binding MoreStepsVisibility}" />
+                </StackPanel>
+            </DockPanel>
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="GroupTemplate">
+            <StackPanel Margin="0,0,0,20">
+                <TextBlock Margin="0,0,0,8"
+                           Style="{StaticResource SectionHeading}"
+                           Text="{Binding Label}" />
+                <TextBlock Margin="0,0,0,6"
+                           FontSize="12"
+                           Text="Scheduled"
+                           Foreground="{DynamicResource SecondaryText}"
+                           Visibility="{Binding ScheduledVisibility}" />
+                <ItemsControl ItemsSource="{Binding ScheduledRows}" ItemTemplate="{StaticResource RowTemplate}" />
+                <TextBlock Margin="0,4,0,6"
+                           FontSize="12"
+                           Text="To do"
+                           Foreground="{DynamicResource SecondaryText}"
+                           Visibility="{Binding ToDoHeadingVisibility}" />
+                <ItemsControl ItemsSource="{Binding ToDoRows}" ItemTemplate="{StaticResource RowTemplate}" />
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <local:NestedColumn x:Name="Column" SearchHint="Search to do" AddLabel="Add to To do" AddMode="Menu" />
+
+        <DockPanel Grid.Column="1">
+            <Grid DockPanel.Dock="Top" Margin="28,22,24,12" MinHeight="34">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="PageTitle"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Style="{StaticResource ColumnTitle}"
+                           Text="Up next" />
+                <Button x:Name="ViewToggle"
+                        Grid.Column="1"
+                        Margin="12,0,0,0"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource PageAction}"
+                        Content="Week view"
+                        ToolTip="Switch between the list and a week of time blocks"
+                        Click="OnViewToggleClicked" />
+                <CheckBox x:Name="HideFinished"
+                          Grid.Column="2"
+                          Margin="12,0,0,0"
+                          VerticalAlignment="Center"
+                          Checked="OnHideFinishedClicked" Unchecked="OnHideFinishedClicked">
+                    <TextBlock x:Name="HideFinishedText" Margin="8,0,0,0" FontSize="13" Text="Hide finished" Foreground="{DynamicResource SecondaryText}" />
+                </CheckBox>
+            </Grid>
+            <Border x:Name="SuggestionCard"
+                    DockPanel.Dock="Top"
+                    Margin="28,0,24,12"
+                    Padding="14,10"
+                    Background="{DynamicResource Surface}"
+                    BorderBrush="{DynamicResource Accent}"
+                    BorderThickness="2,0,0,0"
+                    Visibility="Collapsed">
+                <DockPanel>
+                    <StackPanel x:Name="SuggestionButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- For an exam's study window, practice questions from its notes are one click away too. -->
+                        <Button x:Name="PracticeButton"
+                                Margin="12,0,0,0"
+                                VerticalAlignment="Center"
+                                Style="{StaticResource SmallButton}"
+                                FontSize="12"
+                                Content="Practice questions"
+                                ToolTip="Make practice questions from this class's notes, on Notes"
+                                Visibility="Collapsed"
+                                Click="OnPracticeClicked" />
+                        <Button x:Name="SuggestionSkip"
+                                Margin="12,0,6,0"
+                                VerticalAlignment="Center"
+                                Style="{StaticResource SmallButton}"
+                                FontSize="12"
+                                Content="{x:Static capture:CardLabels.NotNow}"
+                                ToolTip="Suggest something else for the rest of today"
+                                Click="OnSuggestionSkipClicked" />
+                        <Button x:Name="SuggestionStart"
+                                Margin="0"
+                                VerticalAlignment="Center"
+                                Style="{StaticResource PageAction}"
+                                Content="Start"
+                                ToolTip="Start on this, one tiny action at a time"
+                                Click="OnSuggestionStartClicked" />
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="SuggestionTitle"
+                                   FontSize="14"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource PrimaryText}" />
+                        <TextBlock x:Name="SuggestionReason"
+                                   Margin="0,2,0,0"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SecondaryText}" />
+                        <local:FeedbackPrompt x:Name="SuggestionFeedback" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <Border x:Name="SetupCard"
+                    DockPanel.Dock="Top"
+                    Margin="28,0,24,12"
+                    Padding="14,10"
+                    Background="{DynamicResource Surface}"
+                    BorderBrush="{DynamicResource Accent}"
+                    BorderThickness="2,0,0,0"
+                    Visibility="Collapsed">
+                <DockPanel>
+                    <Button x:Name="SetupHide"
+                            DockPanel.Dock="Right"
+                            Margin="12,0,0,0"
+                            VerticalAlignment="Top"
+                            Style="{StaticResource SmallButton}"
+                            FontSize="12"
+                            Content="Hide this"
+                            ToolTip="Put this away for good. Everything here is also on its page."
+                            Click="OnSetupHideClicked" />
+                    <StackPanel>
+                        <TextBlock Margin="0,0,0,6"
+                                   FontSize="13"
+                                   Text="Getting set up, whenever you like"
+                                   Foreground="{DynamicResource SecondaryText}" />
+                        <ItemsControl x:Name="SetupSteps">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Margin="0,2,0,2"
+                                            Style="{StaticResource LinkButton}"
+                                            AutomationProperties.Name="{Binding Label}"
+                                            Click="OnSetupStepClicked">
+                                        <TextBlock FontSize="13" TextWrapping="Wrap" Text="{Binding Label}" />
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <WrapPanel DockPanel.Dock="Top" Margin="28,0,24,8">
+                <Button x:Name="RowStart" Style="{StaticResource PageAction}" Content="Start" ToolTip="Start on the most pressing thing, one tiny action at a time" Click="OnStartClicked" />
+                <Button Style="{StaticResource PageAction}" Content="I have 15 minutes" ToolTip="Pick one small thing that fits" Click="OnFifteenClicked" />
+                <Button Style="{StaticResource PageAction}" Content="Low energy" ToolTip="Pick the lightest thing" Click="OnLowEnergyClicked" />
+                <Button x:Name="RowSaveSpot" Style="{StaticResource PageAction}" Content="Save my spot" Click="OnSaveSpotClicked" />
+            </WrapPanel>
+            <local:UndoBar x:Name="Bar" DockPanel.Dock="Top" Margin="28,0,24,12" />
+            <!-- The row menu's This didn't help opens its optional line here. -->
+            <local:FeedbackPrompt x:Name="RowFeedback" DockPanel.Dock="Top" Margin="28,0,24,12" ShowLink="False" MaxWidth="480" HorizontalAlignment="Left" />
+            <StackPanel DockPanel.Dock="Top" Margin="28,0,24,14" MaxWidth="{x:Static local:TodayView.RowsMaxWidth}" HorizontalAlignment="Left">
+                <Button x:Name="SafeLine"
+                        Style="{StaticResource LinkButton}"
+                        FontSize="13"
+                        Visibility="Collapsed"
+                        Click="OnMoneyClicked" />
+
+            </StackPanel>
+            <Border x:Name="TonightCard"
+                    DockPanel.Dock="Top"
+                    Margin="28,0,24,14"
+                    Padding="14,11"
+                    Background="{StaticResource Surface}"
+                    BorderBrush="{DynamicResource Accent}"
+                    BorderThickness="2,0,0,0"
+                    Visibility="Collapsed">
+                <StackPanel>
+                    <TextBlock x:Name="TonightLabel"
+                               Margin="0,0,0,8"
+                               FontSize="13"
+                               Foreground="{DynamicResource SecondaryText}" />
+                    <ItemsControl x:Name="TonightSteps">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Margin="0,0,0,5" AutomationProperties.Name="{Binding Label}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnRoutineStepClicked" Unchecked="OnRoutineStepClicked">
+                                    <TextBlock Margin="10,0,0,0"
+                                               FontSize="13"
+                                               Text="{Binding Label}"
+                                               Foreground="{StaticResource PrimaryText}" />
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <WrapPanel>
+                        <Button Margin="0,4,6,0" Padding="10,5" Content="Save my spot" Click="OnSaveSpotClicked" />
+                        <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.NotNow}" ToolTip="Bring the bedtime reminder back in a little while" Click="OnBedtimeSnoozeClicked" />
+                        <Button Margin="0,4,6,0" Padding="10,5" Content="Skip tonight" ToolTip="No more bedtime reminders tonight" Click="OnBedtimeSkipClicked" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+            <Grid>
+                <TextBlock x:Name="Empty"
+                           Margin="28,0"
+                           VerticalAlignment="Top"
+                           FontSize="14"
+                           Text="Nothing on To do yet. Type anything in Ask on the right, or press +."
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource SecondaryText}"
+                           Visibility="Collapsed" />
+                <local:WeekView x:Name="WeekPage" Visibility="Collapsed" />
+                <ScrollViewer x:Name="ItemsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" LostKeyboardFocus="OnRowsLeft" PreviewKeyDown="OnRowsKeyDown">
+                    <!-- Held to a readable width in a big window, so the eye doesn't travel far from a title to its row's end. -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="RowsColumn" Width="*" MaxWidth="{x:Static local:TodayView.RowsMaxWidth}" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel x:Name="RowsPanel" Margin="28,0,24,24">
+                            <ItemsControl x:Name="Groups" ItemTemplate="{StaticResource GroupTemplate}" />
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </Grid>
+        </DockPanel>
+    </Grid>
+</UserControl>

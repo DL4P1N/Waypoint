@@ -1,0 +1,172 @@
+<UserControl x:Class="Waypoint.App.NoteToolbar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Waypoint.App"
+             AutomationProperties.Name="Note formatting">
+    <UserControl.Resources>
+        <!-- Square, flat buttons in the app's colors. A pressed one sits on a surface with an accent line under it. -->
+        <Style x:Key="ToolButton" TargetType="ToggleButton">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="MinWidth" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Frame"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="0,0,0,2"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="6,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource Surface}" />
+                                <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource QuietMark}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The same look for a button that only does something, such as Undo, so it isn't read as on or off. -->
+        <Style x:Key="ToolCommandButton" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="MinWidth" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Frame"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="0,0,0,2"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="6,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource QuietMark}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ToolDivider" TargetType="Rectangle">
+            <Setter Property="Width" Value="1" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="Margin" Value="5,0" />
+            <Setter Property="Fill" Value="{DynamicResource Rule}" />
+        </Style>
+    </UserControl.Resources>
+
+    <!--
+        Wraps in a narrow window rather than cutting buttons off. A click never takes focus, so the note keeps its
+        selection. From the keyboard, Alt+F10 in the note moves into the strip: arrow keys go between the buttons,
+        and Esc, or using one, goes back to the note.
+    -->
+    <WrapPanel x:Name="Strip" Orientation="Horizontal">
+        <ToggleButton x:Name="StyleButton"
+                      Style="{StaticResource ToolButton}"
+                      Margin="0,0,6,0"
+                      MinWidth="96"
+                      AutomationProperties.Name="Text style"
+                      ToolTip="Text style: Normal or Heading 1 to 3 (Ctrl+Alt+0 to 3)"
+                      Click="OnStyleClicked">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="StyleText" Text="Normal" />
+                <TextBlock Text="&#x25BE;" Margin="6,0,0,0" Foreground="{DynamicResource SecondaryText}" />
+            </StackPanel>
+        </ToggleButton>
+        <Rectangle Style="{StaticResource ToolDivider}" />
+        <ToggleButton x:Name="BoldButton" Style="{StaticResource ToolButton}"
+                      Command="EditingCommands.ToggleBold"
+                      AutomationProperties.Name="Bold" ToolTip="Bold (Ctrl+B)">
+            <TextBlock Text="B" FontWeight="Bold" />
+        </ToggleButton>
+        <ToggleButton x:Name="ItalicButton" Style="{StaticResource ToolButton}"
+                      Command="EditingCommands.ToggleItalic"
+                      AutomationProperties.Name="Italic" ToolTip="Italic (Ctrl+I)">
+            <TextBlock Text="I" FontStyle="Italic" />
+        </ToggleButton>
+        <ToggleButton x:Name="UnderlineButton" Style="{StaticResource ToolButton}"
+                      Command="EditingCommands.ToggleUnderline"
+                      AutomationProperties.Name="Underline" ToolTip="Underline (Ctrl+U)">
+            <TextBlock Text="U" TextDecorations="Underline" />
+        </ToggleButton>
+        <ToggleButton x:Name="StrikeButton" Style="{StaticResource ToolButton}"
+                      Command="{x:Static local:NoteCommands.Strikethrough}"
+                      AutomationProperties.Name="Strikethrough" ToolTip="Strikethrough (Ctrl+Shift+X)">
+            <TextBlock Text="S" TextDecorations="Strikethrough" />
+        </ToggleButton>
+        <ToggleButton x:Name="CodeButton" Style="{StaticResource ToolButton}"
+                      Command="{x:Static local:NoteCommands.Code}"
+                      AutomationProperties.Name="Code" ToolTip="Code (or type the text between backticks, `like this`)">
+            <TextBlock Text="&lt;/&gt;" FontFamily="Cascadia Mono, Consolas" FontSize="12" />
+        </ToggleButton>
+        <Button x:Name="ClearButton" Style="{StaticResource ToolCommandButton}"
+                Command="{x:Static local:NoteCommands.ClearFormatting}"
+                AutomationProperties.Name="Clear formatting" ToolTip="Clear formatting (Ctrl+Space or Ctrl+\)">
+            <TextBlock><Run Text="T" /><Run Text="x" FontSize="9" /></TextBlock>
+        </Button>
+        <Rectangle Style="{StaticResource ToolDivider}" />
+        <ToggleButton x:Name="BulletsButton" Style="{StaticResource ToolButton}"
+                      Command="EditingCommands.ToggleBullets"
+                      AutomationProperties.Name="Bulleted list" ToolTip="Bulleted list (Ctrl+Shift+8)">
+            <TextBlock Text="&#x2022;&#x2261;" />
+        </ToggleButton>
+        <ToggleButton x:Name="NumbersButton" Style="{StaticResource ToolButton}"
+                      Command="EditingCommands.ToggleNumbering"
+                      AutomationProperties.Name="Numbered list" ToolTip="Numbered list (Ctrl+Shift+7)">
+            <TextBlock Text="1." />
+        </ToggleButton>
+        <ToggleButton x:Name="ChecklistButton" Style="{StaticResource ToolButton}"
+                      Command="{x:Static local:NoteCommands.Checklist}"
+                      AutomationProperties.Name="Checklist" ToolTip="Checklist (Ctrl+Shift+9)">
+            <TextBlock Text="&#x2610;" />
+        </ToggleButton>
+        <ToggleButton x:Name="QuoteButton" Style="{StaticResource ToolButton}"
+                      Command="{x:Static local:NoteCommands.Quote}"
+                      AutomationProperties.Name="Quote" ToolTip="Quote (or type &gt; and a space at the start of a line)">
+            <TextBlock Text="&#x201C;" FontSize="16" />
+        </ToggleButton>
+        <ToggleButton x:Name="LinkButton" Style="{StaticResource ToolButton}"
+                      Command="{x:Static local:NoteCommands.Link}"
+                      AutomationProperties.Name="Link" ToolTip="Link (Ctrl+K). Ctrl+click a link to open it.">
+            <TextBlock Text="Link" />
+        </ToggleButton>
+        <Rectangle Style="{StaticResource ToolDivider}" />
+        <Button x:Name="UndoButton" Style="{StaticResource ToolCommandButton}"
+                Command="ApplicationCommands.Undo"
+                AutomationProperties.Name="Undo" ToolTip="Undo (Ctrl+Z)">
+            <TextBlock Text="&#x21B6;" FontSize="15" />
+        </Button>
+        <Button x:Name="RedoButton" Style="{StaticResource ToolCommandButton}"
+                Command="ApplicationCommands.Redo"
+                AutomationProperties.Name="Redo" ToolTip="Redo (Ctrl+Y)">
+            <TextBlock Text="&#x21B7;" FontSize="15" />
+        </Button>
+    </WrapPanel>
+</UserControl>

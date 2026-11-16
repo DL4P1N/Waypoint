@@ -1,0 +1,64 @@
+<Window x:Class="Waypoint.App.SaveSpotWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Save my spot"
+        SizeToContent="Height"
+        Width="440"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Rule}"
+        BorderThickness="1"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,12,0,6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+        </Style>
+    </Window.Resources>
+    <StackPanel Margin="18">
+        <TextBlock FontSize="16" FontWeight="Light" Text="Save my spot" Foreground="{DynamicResource PrimaryText}" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Project" />
+        <TextBox x:Name="ProjectBox" Style="{StaticResource FieldBox}" Tag="Such as Paper #2" AutomationProperties.Name="Project" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Stopped at" />
+        <TextBox x:Name="StoppedBox" Style="{StaticResource FieldBox}" Tag="Where you are right now" AutomationProperties.Name="Stopped at" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Next step" />
+        <TextBox x:Name="NextBox" Style="{StaticResource FieldBox}" Tag="The first thing to do when you come back" AutomationProperties.Name="Next step" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Links, one per line, optional" />
+        <TextBox x:Name="LinksBox"
+                 Style="{StaticResource FieldBox}"
+                 MinHeight="52"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"
+                 AutomationProperties.Name="Links, one per line" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Loose thoughts, one per line, optional" />
+        <TextBox x:Name="ThoughtsBox"
+                 Style="{StaticResource FieldBox}"
+                 MinHeight="52"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"
+                 AutomationProperties.Name="Loose thoughts, one per line" />
+
+        <TextBlock x:Name="Problem"
+                   AutomationProperties.LiveSetting="Polite"
+                   Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Visibility="Collapsed" />
+        <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
+            <Button x:Name="Save" Padding="14,6" Content="Save" IsDefault="True" Click="OnSaveClicked" />
+        </StackPanel>
+    </StackPanel>
+</Window>

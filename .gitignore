@@ -1,0 +1,29 @@
+bin/
+obj/
+*.user
+.vs/
+*.db
+*.db-shm
+*.db-wal
+.claude/
+publish/
+
+# Local working notes, kept out of the repo
+HANDOFF-*.md
+
+# Secrets and personal data that belong next to the app, never in the repo
+*.env
+!*.env.example
+*.key
+*.token
+settings.json
+pairing-token.txt
+server-token.sha256
+errors.log
+unread-alerts.txt
+Feedback.txt
+*.age
+*.pem
+*.pfx
+server-*.json
+bank-profiles.json

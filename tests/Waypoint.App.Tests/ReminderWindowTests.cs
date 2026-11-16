@@ -1,0 +1,113 @@
+using System.Windows;
+using System.Windows.Controls;
+using Waypoint.App;
+using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
+
+namespace Waypoint.App.Tests;
+
+public sealed class ReminderWindowTests
+{
+    private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+
+    [Fact]
+    public void Start_clears_the_card_without_counting_as_not_now() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var said = new List<string>();
+        var transition = new ReminderTransition(true, () => said.Add("cleared"), () => said.Add("not now"), null, null);
+        var card = new ReminderWindow(new DueReminder(1, item, null, null, IsFollowUp: true), "Done", 10, () => { }, () => said.Add("snoozed"), start: () => said.Add("started"), transition: transition);
+
+        Click(UiTest.Named<Button>(card, "Start"));
+
+        // "Not now" feeds the suggestion habits, so starting must not also be counted as declining.
+        Assert.Equal(["cleared", "started"], said);
+    });
+
+    [Fact]
+    public void Skip_is_recorded_as_not_now() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var said = new List<string>();
+        var transition = new ReminderTransition(true, () => said.Add("cleared"), () => said.Add("not now"), null, null);
+        var card = new ReminderWindow(new DueReminder(1, item, null, null), "Done", 10, () => { }, () => { }, transition: transition);
+
+        Click(UiTest.Named<Button>(card, "SkipOne"));
+
+        Assert.Equal(["not now"], said);
+    });
+
+    [Fact]
+    public void The_header_names_the_kind_in_sentence_case() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Reminder, "Water the plants", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var card = new ReminderWindow(new DueReminder(1, item, null, null), "Done", 10, () => { }, () => { });
+
+        Assert.Equal("Reminder", UiTest.Named<TextBlock>(card, "Kind").Text);
+    });
+
+    [Fact]
+    public void The_detail_line_says_how_often_it_comes_back_and_the_class()
+    {
+        var today = new DateOnly(2026, 11, 10);
+        var due = new DateTimeOffset(today.ToDateTime(new TimeOnly(8, 0)));
+        var plants = new StoredItem(1, ItemKind.Reminder, "Water the plants", today, null, false, DueAt: due, Recurs: new Recurrence(RecurrenceUnit.Day));
+        var reading = new StoredItem(2, ItemKind.Task, "Read chapter 4", today, null, false, Course: "CS 101", DueAt: due);
+
+        var time = due.LocalDateTime.ToString("h:mm tt", System.Globalization.CultureInfo.CurrentCulture);
+        Assert.Equal($"Today {time}  ·  Every day", ReminderWindow.DetailLine(new DueReminder(1, plants, null, 1440), today));
+        Assert.Equal($"Read chapter 4  ·  Today {time}  ·  CS 101", ReminderWindow.DetailLine(new DueReminder(2, reading, "Time to read", null), today));
+    }
+
+    [Fact]
+    public void Every_card_puts_the_main_action_first_then_not_now_then_skip_on_one_row() => Ui.Run(ui =>
+    {
+        var task = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var transition = new ReminderTransition(true, () => { }, () => { }, () => { }, null);
+        var card = new ReminderWindow(new DueReminder(1, task, null, null), "Done", 10, () => { }, () => { }, skip: () => { }, start: () => { }, transition: transition);
+
+        // The widest card there is: a started-able item with Done, Not now, Skip, and Skip these.
+        var visible = VisibleButtons(card);
+        Assert.Equal(["Start", "Done", "10 more minutes", "Skip", "Skip these"], visible.Select(button => (string)button.Content));
+        var row = UiTest.Named<WrapPanel>(card, "Buttons");
+        Assert.Single(visible.Select(button => button.TranslatePoint(new Point(), row).Y).Distinct());
+    });
+
+    [Fact]
+    public void A_plain_card_snoozes_with_not_now() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Reminder, "Water the plants", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var said = new List<string>();
+        var card = new ReminderWindow(new DueReminder(1, item, null, 1440), "Done", 1440, () => { }, () => said.Add("snoozed"));
+
+        Assert.Equal(["Done", "Not now"], VisibleButtons(card).Select(button => (string)button.Content));
+        Assert.Equal("Back in a day", UiTest.Named<Button>(card, "Snooze").ToolTip);
+        Click(UiTest.Named<Button>(card, "Snooze"));
+        Assert.Equal(["snoozed"], said);
+    });
+
+    [Fact]
+    public void A_waiting_nudge_offers_follow_up_still_waiting_and_done() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddWaitingByHand("Prof. Quill", "the extension", null, null, DateTime.Now).Item!;
+        var said = new List<string>();
+        var waiting = new ReminderWaiting(() => said.Add("follow up"), () => said.Add("still waiting"));
+        var card = new ReminderWindow(new DueReminder(1, item, "Follow up with Prof. Quill?", null), "Done", 10, () => said.Add("done"), () => said.Add("snoozed"), start: () => said.Add("started"), waiting: waiting);
+
+        Assert.Equal([CardLabels.FollowUp, CardLabels.StillWaiting, "Done"], VisibleButtons(card).Select(button => (string)button.Content));
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<Button>(card, "SaveSpot").Visibility);
+
+        Click(UiTest.Named<Button>(card, "FollowUp"));
+        Click(UiTest.Named<Button>(card, "StillWaiting"));
+        Click(UiTest.Named<Button>(card, "Primary"));
+        Assert.Equal(["follow up", "still waiting", "done"], said);
+    });
+
+    private static List<Button> VisibleButtons(ReminderWindow card)
+    {
+        var content = (FrameworkElement)card.Content;
+        content.Measure(new Size(card.Width - 2, double.PositiveInfinity));
+        content.Arrange(new Rect(0, 0, card.Width - 2, content.DesiredSize.Height));
+        return UiTest.Named<WrapPanel>(card, "Buttons").Children.OfType<Button>().Where(button => button.Visibility == Visibility.Visible).ToList();
+    }
+}

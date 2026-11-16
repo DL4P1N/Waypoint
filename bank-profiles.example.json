@@ -1,0 +1,92 @@
+// Copy this file to bank-profiles.json next to settings.json (%LOCALAPPDATA%\Waypoint on Windows, the server's
+// data folder on Linux) and change the values to match your own bank's exports and alert emails. Waypoint reads it
+// once at startup. Anything left out keeps the built-in value shown here. Comments and trailing commas are fine.
+//
+// Names are also the account names purchases are kept under, so once purchases are imported, keep each name the
+// same as the account in Waypoint. Sender domains are the only places an alert counts from: a subdomain such as
+// alerts.northwind.example.com counts, and a lookalike such as northwind.example.com.evil.test doesn't.
+{
+  // The checking account: its export and its balance and daily summary emails.
+  "checking": {
+    "name": "Northwind Bank checking",
+    // How its purchases are labeled in lists.
+    "shortName": "Checking",
+    "senderDomains": ["northwind.example.com"],
+    // Column names that are all in the first line of a checking export.
+    "csvHeaders": ["Details", "Balance"],
+    // A regular expression (case ignored) for how a card purchase starts in the export. Rows it matches at the
+    // start count as spending, and what it matched is taken off to leave the merchant.
+    "purchasePrefix": "^(?:CARD )?PURCHASE(?: RETURN)?(?:\\s+\\d{2}/\\d{2})?\\s*",
+    // A regular expression (case matters) for the reference number, and anything after it, at the end of a purchase.
+    "referenceSuffix": "\\s+REF\\s?\\d{6,}.*$",
+    // A regular expression (case ignored) for the words just before the balance in a balance alert. The amount
+    // follows after a colon or "is", as in "available balance: $40.00" or "available balance is -$150.00".
+    "balanceWording": "available balance"
+  },
+
+  // The card whose alerts say "Merchant:", "Date:" and "Amount:", and whose exports have no type column.
+  "card": {
+    "name": "Contoso Card",
+    "senderDomains": ["contoso.example.com"],
+    // How paying this card starts in a checking export, and appears in a checking summary email.
+    "paymentDescriptors": ["CONTOSO CARD"],
+    // Rewards credits in the card's export. They lower the balance but aren't refunds.
+    "creditDescriptors": ["REWARD CREDIT"],
+    // How paying the card reads in its own export, besides PAYMENT, AUTOPAY and STATEMENT CREDIT, which always count.
+    "exportPaymentDescriptors": [],
+    // The purchase date column in the card's export, besides "Transaction Date" and "Date".
+    "csvDateHeaders": ["Purchase Date"],
+    // The one subject a purchase alert has. The card's other emails about the same purchase are skipped. Include
+    // "purchase", "transaction" or "charge" in it, so an alert that can't be read is kept to fix the reader from.
+    "alertSubject": "Purchase alert"
+  },
+
+  // The card whose exports have a type column (DEBIT or CREDIT). Its alerts are read by their wording.
+  "rewardsCard": {
+    "name": "Lucerne Card",
+    "shortName": "Lucerne Card",
+    "senderDomains": ["lucerne.example.com"],
+    "paymentDescriptors": ["LUCERNE CARD"],
+    "creditDescriptors": [],
+    "exportPaymentDescriptors": [],
+    "csvDateHeaders": [],
+    // The column (case ignored) that says DEBIT or CREDIT in this card's export. A file with it is this card's, and
+    // shows purchases as negative amounts. Date, description and amount are found by their usual column names.
+    "typeColumn": "Type"
+  },
+
+  // Where savings transfers and investing go. Its deposit emails add to the cushion.
+  "brokerage": {
+    "name": "Fabrikam",
+    "senderDomains": ["fabrikam.example.com"],
+    // How money moved to it appears in a checking export.
+    "checkingDescriptors": ["FABRIKAM INV"]
+  },
+
+  // The payment app people pay you back through.
+  "paymentApp": {
+    "name": "Tailspin Pay",
+    "senderDomains": ["tailspinpay.example.com"],
+    // How the app's rows start in a checking export.
+    "checkingDescriptors": ["TAILSPIN PAY"],
+    // A regular expression (case ignored) for the subject of an email saying someone paid you, with groups named
+    // payer and amount. A forward's "Fw:" or "Fwd:" is taken off first.
+    "receivedPattern": "^(?!you\\b)(?<payer>.{1,60}?) sent you \\$\\s?(?<amount>[\\d,]+\\.\\d{2})\\.?$",
+    // A regular expression (case ignored) for the subject of money you sent or asked for. These are skipped.
+    "outgoingPattern": "^(?:you (?:sent|requested|asked)\\b|.* asked you for\\b)",
+    // Wording on the body line just before a note that has no label.
+    "noteAfter": "sent you",
+    // Labels a note can start with, before a colon, as in "Note: tacos".
+    "noteLabels": ["Note", "Message"],
+    // Wording that makes a body line part of the email rather than the note, besides amounts, links, addresses,
+    // long numbers and the app's name.
+    "notNoteWords": ["view payment"]
+  },
+
+  // Readable names for merchants, tried before the built-in ones. Each is a pair: text a statement has (case
+  // ignored), then the name to show and group purchases under. The first pair that matches wins. Empty by default.
+  "merchantNames": [
+    ["BLUEPLATE*", "Blue Plate"],
+    ["OAKHAVEN COF", "Oakhaven Coffee"]
+  ]
+}

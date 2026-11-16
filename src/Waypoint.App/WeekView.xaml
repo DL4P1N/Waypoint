@@ -1,0 +1,32 @@
+<UserControl x:Class="Waypoint.App.WeekView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <DockPanel>
+        <WrapPanel DockPanel.Dock="Top" Margin="28,0,24,10">
+            <Button Style="{StaticResource PageAction}" Content="Previous week" Click="OnBackClicked" />
+            <Button x:Name="ThisWeekButton" Style="{StaticResource PageAction}" Content="This week" Click="OnThisWeekClicked" />
+            <Button Style="{StaticResource PageAction}" Content="Next week" Click="OnNextClicked" />
+            <TextBlock x:Name="WeekLabel"
+                       Margin="8,0,0,6"
+                       VerticalAlignment="Center"
+                       FontSize="14"
+                       Foreground="{DynamicResource PrimaryText}" />
+        </WrapPanel>
+        <Button x:Name="UndatedLine"
+                DockPanel.Dock="Bottom"
+                Margin="28,6,24,12"
+                Style="{StaticResource LinkButton}"
+                ToolTip="Show them in the list"
+                Visibility="Collapsed"
+                Click="OnUndatedClicked">
+            <TextBlock x:Name="Undated" FontSize="12" TextWrapping="Wrap" />
+        </Button>
+        <Grid x:Name="Header" DockPanel.Dock="Top" Margin="28,0,24,0" />
+        <ScrollViewer x:Name="GridScroll"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      ScrollChanged="OnGridScrolled">
+            <Grid x:Name="Hours" Margin="28,0,24,8" />
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

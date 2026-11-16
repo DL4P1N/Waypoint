@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Waypoint backup
+
+[Timer]
+# 3:15 AM local time, after the night's reminders and before the morning ones. Missed runs happen at the next boot.
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

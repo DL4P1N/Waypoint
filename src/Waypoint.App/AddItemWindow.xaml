@@ -1,0 +1,99 @@
+<Window x:Class="Waypoint.App.AddItemWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add to To do"
+        SizeToContent="Height"
+        Width="420"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Rule}"
+        BorderThickness="1"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,12,0,6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+        </Style>
+        <DataTemplate x:Key="ChoiceTemplate">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+    </Window.Resources>
+    <StackPanel Margin="18">
+        <TextBox x:Name="TitleBox"
+                 Style="{StaticResource FieldBox}"
+                 Tag="Title"
+                 AutomationProperties.Name="Title" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Type" />
+        <ListBox x:Name="Kinds"
+                 Style="{StaticResource ChoiceList}"
+                 ItemTemplate="{StaticResource ChoiceTemplate}"
+                 AutomationProperties.Name="Type"
+                 SelectionChanged="OnKindPicked" />
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Date" />
+        <WrapPanel>
+            <ListBox x:Name="Dates"
+                     Style="{StaticResource ChoiceList}"
+                     ItemTemplate="{StaticResource ChoiceTemplate}"
+                     AutomationProperties.Name="Date"
+                     SelectionChanged="OnDateChosen" />
+            <Button x:Name="DateButton"
+                    Margin="0,0,0,6"
+                    Padding="12,6"
+                    VerticalAlignment="Top"
+                    BorderBrush="{DynamicResource Rule}"
+                    Content="Pick a date..."
+                    Click="OnDateClicked" />
+        </WrapPanel>
+
+        <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TimeBox"
+                     Style="{StaticResource FieldBox}"
+                     Tag="Time, optional (5:30 PM)"
+                     AutomationProperties.Name="Time, optional" />
+            <TextBox x:Name="EndBox"
+                     Grid.Column="2"
+                     Margin="8,0,0,0"
+                     Style="{StaticResource FieldBox}"
+                     Tag="Ends, optional"
+                     ToolTip="Leave it empty to end an hour after the start."
+                     AutomationProperties.Name="End time, optional. Leave it empty to end an hour after the start." />
+        </Grid>
+
+        <StackPanel x:Name="PlacePanel">
+            <TextBlock Style="{StaticResource FieldLabel}" Text="Class or filter" />
+            <ListBox x:Name="Places"
+                     Style="{StaticResource ChoiceList}"
+                     ItemTemplate="{StaticResource ChoiceTemplate}"
+                     AutomationProperties.Name="Class or filter" />
+        </StackPanel>
+
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Reminder, optional" />
+        <ListBox x:Name="Reminders"
+                 Style="{StaticResource ChoiceList}"
+                 ItemTemplate="{StaticResource ChoiceTemplate}"
+                 AutomationProperties.Name="Reminder" />
+
+        <TextBlock x:Name="Problem"
+                   AutomationProperties.LiveSetting="Polite"
+                   Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Visibility="Collapsed" />
+        <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
+            <Button Padding="14,6" Content="Add" IsDefault="True" Click="OnAddClicked" />
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -1,0 +1,58 @@
+<Window x:Class="Waypoint.App.RecordWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Record a lecture"
+        SizeToContent="Height"
+        Width="440"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}"
+        BorderBrush="{DynamicResource Rule}"
+        BorderThickness="1"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <StackPanel Margin="18">
+        <TextBlock x:Name="Question"
+                   FontSize="14"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource PrimaryText}" />
+        <TextBlock Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Text="The recording stays on this PC. When you stop, Waypoint turns it into text here and writes notes from the text. Only the text is sent to Claude." />
+
+        <TextBlock Margin="0,14,0,6" FontSize="13" Foreground="{DynamicResource SecondaryText}" Text="Record from" />
+        <RadioButton x:Name="FromMicrophone" GroupName="Input" Foreground="{DynamicResource PrimaryText}" Content="Microphone, for a class in the room" />
+        <RadioButton x:Name="FromComputer" Margin="0,6,0,0" GroupName="Input" Foreground="{DynamicResource PrimaryText}" Content="Computer audio, for Zoom or another call" />
+        <RadioButton x:Name="FromBoth" Margin="0,6,0,0" GroupName="Input" Foreground="{DynamicResource PrimaryText}" Content="Both, to include your own voice on a call" />
+
+        <CheckBox x:Name="KeepAudio"
+                  Margin="0,14,0,0"
+                  Content="Keep the audio"
+                  Foreground="{DynamicResource PrimaryText}" />
+        <TextBlock Margin="22,2,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Text="Saves a copy with your Waypoint data. Without it, the audio is deleted once the transcript is saved." />
+
+        <TextBlock Margin="0,14,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource PrimaryText}"
+                   Text="Keep the lid open while recording. Waypoint keeps the PC awake, but closing the lid still puts it to sleep, unless you set closing the lid to do nothing in Windows power settings." />
+        <TextBlock x:Name="MarkHint"
+                   Margin="0,8,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Text="Press Ctrl+Alt+M or Mark at the top of Waypoint to flag a moment that matters." />
+
+        <StackPanel Margin="0,16,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
+            <Button x:Name="GoButton" Padding="14,6" Content="Start recording" IsDefault="True" Click="OnGoClicked" />
+        </StackPanel>
+    </StackPanel>
+</Window>

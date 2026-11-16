@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Waypoint.App/Waypoint.App.csproj" />
+    <Project Path="src/Waypoint.Core/Waypoint.Core.csproj" />
+    <Project Path="src/Waypoint.Server/Waypoint.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Waypoint.App.Tests/Waypoint.App.Tests.csproj" />
+    <Project Path="tests/Waypoint.Core.Tests/Waypoint.Core.Tests.csproj" />
+    <Project Path="tests/Waypoint.Server.Tests/Waypoint.Server.Tests.csproj" />
+  </Folder>
+</Solution>

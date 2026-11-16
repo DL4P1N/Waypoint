@@ -1,0 +1,341 @@
+<UserControl x:Class="Waypoint.App.BudgetView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Waypoint.App">
+    <UserControl.Resources>
+        <Style x:Key="RowText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+        </Style>
+        <Style x:Key="Heading" TargetType="TextBlock" BasedOn="{StaticResource SectionHeading}" />
+        <Style x:Key="EmptyText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+        </Style>
+        <DataTemplate x:Key="CapTemplate">
+            <StackPanel Margin="0,0,0,14" Background="Transparent" Focusable="True" FocusVisualStyle="{StaticResource FocusRing}" AutomationProperties.Name="{Binding}" ContextMenuOpening="OnCategoryMenuOpening">
+                <Grid>
+                    <TextBlock Style="{StaticResource RowText}" FontSize="15" Text="{Binding Name}" />
+                    <TextBlock Style="{StaticResource RowText}"
+                               HorizontalAlignment="Right"
+                               FontSize="15"
+                               Text="{Binding Left}"
+                               FontWeight="{Binding Weight}" />
+                </Grid>
+                <ProgressBar Margin="0,6,0,0"
+                             Maximum="1"
+                             Value="{Binding Fill, Mode=OneWay}"
+                             BorderThickness="0"
+                             Background="{DynamicResource Rule}"
+                             Foreground="{Binding Bar}" />
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="SectionTemplate">
+            <StackPanel Margin="0,8,0,8">
+                <TextBlock Margin="0,0,0,6" Style="{StaticResource Heading}" Text="{Binding Heading}" Visibility="{Binding HeadingVisibility}" />
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource RowText}" TextWrapping="Wrap" Text="{Binding Label}" FontWeight="{Binding Weight}" />
+                                <TextBlock Style="{StaticResource RowText}" Grid.Column="1" Margin="12,0,0,0" Text="{Binding Value}" FontWeight="{Binding Weight}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <local:NestedColumn x:Name="Column" SearchHint="Search purchases" AddLabel="Add to Budget" AddMode="Menu" />
+
+        <DockPanel Grid.Column="1">
+            <Grid DockPanel.Dock="Top" Margin="28,22,24,10" MinHeight="34">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="PageTitle"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Style="{StaticResource ColumnTitle}"
+                           Text="Budget" />
+                <StackPanel x:Name="MonthSwitcher" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Padding="10,3"
+                            BorderThickness="0"
+                            Content="‹"
+                            FontSize="16"
+                            ToolTip="Previous month"
+                            AutomationProperties.Name="Previous month"
+                            Click="OnPreviousMonth" />
+                    <TextBlock x:Name="MonthLabel"
+                               Margin="8,0"
+                               VerticalAlignment="Center"
+                               FontSize="15"
+                               FontWeight="Light"
+                               Foreground="{DynamicResource PrimaryText}" />
+                    <Button x:Name="NextMonth"
+                            Padding="10,3"
+                            BorderThickness="0"
+                            Content="›"
+                            FontSize="16"
+                            ToolTip="Next month"
+                            AutomationProperties.Name="Next month"
+                            Click="OnNextMonth" />
+                </StackPanel>
+            </Grid>
+
+            <WrapPanel DockPanel.Dock="Top" Margin="28,0,24,10">
+                <Button Style="{StaticResource PageAction}" Content="Can I afford this?" Click="OnAffordClicked" />
+                <Button Style="{StaticResource PageAction}" Content="Import card or bank CSV..." Click="OnImportClicked" />
+            </WrapPanel>
+
+            <local:UndoBar x:Name="Bar" DockPanel.Dock="Top" Margin="28,0,24,10" />
+
+            <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid Margin="28,4,24,24">
+                    <!-- Overview -->
+                    <StackPanel x:Name="OverviewPage">
+                        <StackPanel x:Name="Hero" Margin="0,0,0,22">
+                            <TextBlock Style="{StaticResource Heading}" Text="Safe to spend today" />
+                            <TextBlock x:Name="SafeToSpend"
+                                       Margin="0,2,0,0"
+                                       FontSize="48"
+                                       FontWeight="Light"
+                                       Foreground="{DynamicResource PrimaryText}" />
+                            <TextBlock x:Name="SafeReason" Margin="0,0,0,4" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource SecondaryText}" Effect="{StaticResource TextHalo}" />
+                            <TextBlock x:Name="HeroNote" FontSize="13" Foreground="{DynamicResource SecondaryText}" Effect="{StaticResource TextHalo}" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="StaleNote" Margin="0,-12,0,22" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource SecondaryText}" Effect="{StaticResource TextHalo}" Visibility="Collapsed" />
+
+                        <Border x:Name="SetupPanel" Margin="0,0,0,22" Padding="14,12" Background="{DynamicResource Surface}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Margin="0,0,0,6" Style="{StaticResource RowText}" FontSize="15" Text="Start with one of these. Any of them is enough to begin." TextWrapping="Wrap" />
+                                <Button x:Name="SetupCap" Margin="0,3" Padding="0,2" Style="{StaticResource LinkButton}" Content="Set a budget for a category, such as groceries" Click="OnSetCapClicked" />
+                                <Button x:Name="SetupBalance" Margin="0,3" Padding="0,2" Style="{StaticResource LinkButton}" Content="Add a balance, such as checking" Click="OnSetBalanceClicked" />
+                                <Button x:Name="SetupImport" Margin="0,3" Padding="0,2" Style="{StaticResource LinkButton}" Content="Import a card or bank CSV" Click="OnImportClicked" />
+                                <Button x:Name="SetupPay" Margin="0,3" Padding="0,2" Style="{StaticResource LinkButton}" Content="Tell me how you're paid" Click="OnPayScheduleClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <ItemsControl x:Name="Repayments" Margin="0,0,0,18">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,6"
+                                            Padding="14,11"
+                                            Background="{DynamicResource Surface}"
+                                            BorderBrush="{DynamicResource MoneyMark}"
+                                            BorderThickness="2,0,0,0">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource RowText}" TextWrapping="Wrap" Text="{Binding Question}" />
+                                            <TextBlock Margin="0,8,0,4" Style="{StaticResource Heading}" Text="{Binding PickLabel}" />
+                                            <ItemsControl ItemsSource="{Binding Candidates}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Margin="0,2"
+                                                                Padding="0,2"
+                                                                Style="{StaticResource LinkButton}"
+                                                                Foreground="{DynamicResource PrimaryText}"
+                                                                Content="{Binding Label}"
+                                                                AutomationProperties.Name="{Binding Label}"
+                                                                Click="OnRepaymentPicked" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <Button Margin="0,6,0,0"
+                                                    Padding="0,2"
+                                                    Style="{StaticResource LinkButton}"
+                                                    Content="Not a repayment"
+                                                    Click="OnRepaymentCleared" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <StackPanel x:Name="AttentionPanel" Margin="0,0,0,24">
+                            <TextBlock Margin="0,0,0,8" Style="{StaticResource Heading}" Text="Worth a look" />
+                            <ItemsControl x:Name="Attention">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,4"
+                                                Padding="12,8"
+                                                Background="{DynamicResource Surface}"
+                                                BorderBrush="{DynamicResource Soon}"
+                                                BorderThickness="2,0,0,0">
+                                            <TextBlock Style="{StaticResource RowText}" TextWrapping="Wrap" Text="{Binding}" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <StackPanel x:Name="WeekPanel">
+                            <TextBlock Margin="0,0,0,10" Style="{StaticResource Heading}" Text="Left this week" />
+                            <ItemsControl x:Name="WeekRows" ItemTemplate="{StaticResource CapTemplate}" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="MonthPanel" Margin="0,6,0,0">
+                            <TextBlock Margin="0,0,0,10" Style="{StaticResource Heading}" Text="Left this month" />
+                            <ItemsControl x:Name="MonthRows" ItemTemplate="{StaticResource CapTemplate}" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="GoalPanel" Margin="0,6,0,14">
+                            <TextBlock Margin="0,0,0,10" Style="{StaticResource Heading}" Text="Savings goal" />
+                            <Grid>
+                                <TextBlock x:Name="GoalSaved" Style="{StaticResource RowText}" FontSize="15" />
+                                <TextBlock x:Name="GoalBy" Style="{StaticResource RowText}" HorizontalAlignment="Right" FontSize="15" />
+                            </Grid>
+                            <ProgressBar x:Name="GoalBar"
+                                         Margin="0,6,0,0"
+                                         Maximum="1"
+                                         BorderThickness="0"
+                                         Background="{DynamicResource Rule}" />
+                            <TextBlock x:Name="GoalNote"
+                                       Margin="0,6,0,0"
+                                       FontSize="13"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SecondaryText}" />
+                        </StackPanel>
+
+                        <Border x:Name="TipPanel" Margin="0,8,0,20" Padding="14,12" Background="{DynamicResource Surface}">
+                            <StackPanel>
+                                <TextBlock Margin="0,0,0,5" Style="{StaticResource Heading}" Text="One thing to try" />
+                                <TextBlock x:Name="Tip" Style="{StaticResource RowText}" LineHeight="19" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Balances -->
+                    <StackPanel x:Name="BalancesPage" Visibility="Collapsed">
+                        <ItemsControl x:Name="MonthCards" ItemTemplate="{StaticResource SectionTemplate}" />
+                        <TextBlock x:Name="PastNote"
+                                   Margin="0,4,0,8"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SecondaryText}"
+                                   Text="Only card balances are kept by month." />
+                        <ItemsControl x:Name="Sections" ItemTemplate="{StaticResource SectionTemplate}" />
+                        <TextBlock x:Name="NoBalances" Style="{StaticResource EmptyText}" Text="No balances yet. Use + and Set a balance, or import a card or bank CSV." />
+                        <StackPanel x:Name="TrendPanel" Margin="0,8,0,4">
+                            <TextBlock Margin="0,0,0,8" Style="{StaticResource Heading}" Text="Net worth, last 90 days" />
+                            <Polyline x:Name="TrendLine"
+                                      Height="36"
+                                      Stretch="Fill"
+                                      StrokeThickness="1.5"
+                                      StrokeLineJoin="Round"
+                                      Stroke="{DynamicResource PrimaryText}" />
+                            <Rectangle x:Name="TrendFlat" Height="1.5" Margin="0,17" Fill="{DynamicResource PrimaryText}" />
+                        </StackPanel>
+                        <ItemsControl x:Name="TrendMonths" ItemTemplate="{StaticResource SectionTemplate}" />
+                        <ItemsControl x:Name="CreditScores" ItemTemplate="{StaticResource SectionTemplate}" />
+                    </StackPanel>
+
+                    <!-- Monthly summary -->
+                    <StackPanel x:Name="SummaryPage" Visibility="Collapsed">
+                        <ItemsControl x:Name="SummarySections" ItemTemplate="{StaticResource SectionTemplate}" />
+                    </StackPanel>
+
+                    <!-- Purchases -->
+                    <StackPanel x:Name="PurchasesPage" Visibility="Collapsed">
+                        <TextBlock x:Name="MonthTotal" Margin="0,0,0,12" FontSize="12" Foreground="{DynamicResource SecondaryText}" />
+                        <TextBlock x:Name="NeedCategory" Margin="0,0,0,12" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryText}" Visibility="Collapsed" />
+                        <ItemsControl x:Name="Categories">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- On the Expander, so the menu key on its header opens the category's menu too. -->
+                                    <Expander IsExpanded="{Binding Expanded, Mode=OneWay}" AutomationProperties.Name="{Binding}" ContextMenuOpening="OnCategoryMenuOpening">
+                                        <Expander.Header>
+                                            <Grid Background="Transparent">
+                                                <TextBlock Style="{StaticResource RowText}" Text="{Binding Name}" FontWeight="{Binding Weight}" />
+                                                <TextBlock Style="{StaticResource RowText}" HorizontalAlignment="Right" Text="{Binding Summary}" FontWeight="{Binding Weight}" />
+                                            </Grid>
+                                        </Expander.Header>
+                                        <ItemsControl Margin="0,0,0,4" ItemsSource="{Binding Rows}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,2" Background="Transparent" Focusable="True" FocusVisualStyle="{StaticResource FocusRing}" AutomationProperties.Name="{Binding}" ContextMenuOpening="OnPurchaseMenuOpening">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="52" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="86" />
+                                                            <ColumnDefinition Width="110" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock FontSize="12" Text="{Binding Date}" Foreground="{DynamicResource SecondaryText}" />
+                                                        <TextBlock Grid.Column="1" FontSize="12" Text="{Binding Title}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PrimaryText}" />
+                                                        <TextBlock Grid.Column="2" Margin="10,0,0,0" FontSize="12" Text="{Binding Source}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource SecondaryText}" />
+                                                        <TextBlock Grid.Column="3" FontSize="12" TextAlignment="Right" TextTrimming="CharacterEllipsis" Text="{Binding Amount}" Foreground="{DynamicResource PrimaryText}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoPurchases" Style="{StaticResource EmptyText}" />
+                    </StackPanel>
+
+                    <!-- Until payday -->
+                    <StackPanel x:Name="PaydayPage" Visibility="Collapsed">
+                        <TextBlock x:Name="PayLine" Margin="0,0,0,4" Style="{StaticResource RowText}" FontSize="15" TextWrapping="Wrap" />
+                        <Button x:Name="GotPaid" Margin="0,0,0,8" Padding="0,2" HorizontalAlignment="Left" Style="{StaticResource LinkButton}" Content="I got paid" ToolTip="Count the paycheck expected around today, before the bank export shows it" Click="OnGotPaidClicked" />
+                        <Expander x:Name="PayHowPanel" Margin="0,0,0,10" Header="How this is worked out" Foreground="{DynamicResource SecondaryText}" FontSize="12">
+                            <TextBlock x:Name="PayHow" Margin="0,4,0,0" FontSize="12" LineHeight="17" TextWrapping="Wrap" Foreground="{DynamicResource SecondaryText}" />
+                        </Expander>
+                        <ItemsControl x:Name="PaydaySections" ItemTemplate="{StaticResource SectionTemplate}" />
+                    </StackPanel>
+
+                    <!-- Spending review -->
+                    <StackPanel x:Name="ReviewPage" Visibility="Collapsed">
+                        <ItemsControl x:Name="Review" ItemTemplate="{StaticResource SectionTemplate}" />
+                        <TextBlock x:Name="NoReview" Style="{StaticResource EmptyText}" Text="Nothing to review yet." />
+                        <Button Margin="0,8,0,4" Padding="0,2" HorizontalAlignment="Left" Style="{StaticResource LinkButton}" Content="Look for patterns" ToolTip="What stands out in the last month of spending" Click="OnPatternsClicked" />
+                        <TextBlock x:Name="Patterns" FontSize="13" LineHeight="19" TextWrapping="Wrap" Foreground="{DynamicResource SecondaryText}" Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <!-- Waiting purchases -->
+                    <StackPanel x:Name="WaitPage" Visibility="Collapsed">
+                        <ItemsControl x:Name="WaitRows">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,10"
+                                          Background="Transparent"
+                                          Focusable="True"
+                                          FocusVisualStyle="{StaticResource FocusRing}"
+                                          AutomationProperties.Name="{Binding}"
+                                          ToolTip="Right-click, or press the menu key, to choose Bought it or Let it go"
+                                          ContextMenuOpening="OnWaitMenuOpening">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource RowText}" FontSize="14" TextWrapping="Wrap" Text="{Binding Title}" FontWeight="{Binding Weight}" />
+                                            <TextBlock FontSize="12" TextWrapping="Wrap" Text="{Binding Details}" Foreground="{DynamicResource SecondaryText}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Margin="12,0,0,0" Style="{StaticResource RowText}" FontSize="14" Text="{Binding Price}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoWaits" Style="{StaticResource EmptyText}" Text="Nothing is waiting. Use + to park a purchase for a day or two." />
+                        <Button x:Name="WaitHours" Margin="0,8,0,0" Padding="0,2" HorizontalAlignment="Left" Style="{StaticResource LinkButton}" ToolTip="Change how long new waiting purchases wait" Click="OnWaitHoursClicked" />
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</UserControl>

@@ -1,0 +1,79 @@
+using System.Globalization;
+
+namespace Waypoint.Core.Theme;
+
+/// <summary>One look. The app turns these into its brushes, so the contrast tests check what's really shown.</summary>
+public sealed record ThemePalette(string Name, string Accent, string Urgent, string Soon, string Money, string QuietMark, string SecondaryText)
+{
+    public const string Background = "#000000";
+    public const string Surface = "#141414";
+
+    /// <summary>
+    /// The tint over the blur behind every window and menu, in the panels' color. Each theme's is the lightest that
+    /// keeps its text readable even over a white window behind: 4.5:1 for text, links, and marks, 3:1 for secondary text.
+    /// </summary>
+    public string WindowTint { get; init; } = SolidWindowTint;
+
+    /// <summary>The tint with Less see-through on: the same black as the panels, nearly solid, so little shows through.</summary>
+    public const string SolidWindowTint = "#F2141414";
+
+    // Grayer than anything still to do, but light enough to read and uncheck, at 4.5:1 or better on black.
+    public const string FinishedText = "#8A8A8A";
+    public const string FinishedDetail = "#8A8A8A";
+
+    /// <summary>A preference of its own, set beside the theme, so it's kept whichever theme is picked.</summary>
+    public bool LessSeeThrough { get; init; }
+
+    /// <summary>The window tint this look uses.</summary>
+    public string Tint => LessSeeThrough ? SolidWindowTint : WindowTint;
+
+    /// <summary>The WCAG contrast ratio between two colors, from 1 to 21.</summary>
+    public static double Contrast(string first, string second)
+    {
+        var (light, dark) = (Luminance(first), Luminance(second));
+        return (Math.Max(light, dark) + 0.05) / (Math.Min(light, dark) + 0.05);
+    }
+
+    private static int Channel(string color, int index) =>
+        int.Parse(color.AsSpan(1 + (index * 2), 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+
+    private static double Luminance(string color) =>
+        (0.2126 * Linear(Channel(color, 0))) + (0.7152 * Linear(Channel(color, 1))) + (0.0722 * Linear(Channel(color, 2)));
+
+    private static double Linear(int channel)
+    {
+        var value = channel / 255.0;
+        return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+    }
+}
+
+public static class Themes
+{
+    private const string SharedUrgent = "#FF7A70";
+    private const string SharedSoon = "#FFC857";
+    private const string SharedMoney = "#6FD08C";
+    private const string SharedQuiet = "#8A8A8A";
+    private const string SharedSecondary = "#A3A3A3";
+
+    // The shared red (#FF7A70) is the hardest color to read over white, so the colored themes need the same tint.
+    // Mono has no red, so its lighter tint is set by the 3:1 its quiet gray needs.
+    private const string ColoredTint = "#D7141414";
+    private const string MonoTint = "#CF141414";
+
+    public static readonly ThemePalette Default = new("gray", "#D0D0D0", SharedUrgent, SharedSoon, SharedMoney, SharedQuiet, SharedSecondary) { WindowTint = ColoredTint };
+
+    public static readonly IReadOnlyList<ThemePalette> All =
+    [
+        Default,
+        Default with { Name = "blue", Accent = "#6CB2FF" },
+        Default with { Name = "amber", Accent = "#FFB547" },
+        Default with { Name = "teal", Accent = "#4FD1C5" },
+        new("mono", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#C8C8C8", SharedQuiet, SharedSecondary) { WindowTint = MonoTint },
+    ];
+
+    public static string Names => string.Join(", ", All.Select(theme => theme.Name));
+
+    /// <summary>Finds a theme in what was typed, so "the amber theme" works as well as "amber".</summary>
+    public static ThemePalette? Find(string? text) =>
+        text is null ? null : All.FirstOrDefault(theme => text.Contains(theme.Name, StringComparison.OrdinalIgnoreCase));
+}

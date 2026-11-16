@@ -1,0 +1,85 @@
+<UserControl x:Class="Waypoint.App.NestedColumn"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="210">
+    <Border BorderBrush="{DynamicResource Rule}" BorderThickness="0,0,1,0">
+        <DockPanel>
+            <Grid DockPanel.Dock="Top" Margin="16,22,16,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <!-- Square, as tall as the search box. The + is drawn rather than typed, since a font's + sits off center. -->
+                <Button x:Name="AddButton"
+                        Grid.Column="1"
+                        Margin="8,0,0,0"
+                        Padding="0"
+                        Width="{Binding ActualHeight, RelativeSource={RelativeSource Self}}"
+                        BorderBrush="{DynamicResource Rule}"
+                        Click="OnAddClicked">
+                    <Path Data="M 5,0 L 5,10 M 0,5 L 10,5"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.2"
+                          SnapsToDevicePixels="True"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center" />
+                </Button>
+                <TextBox x:Name="SearchBox"
+                         Style="{StaticResource FieldBox}"
+                         Tag="Search"
+                         AutomationProperties.Name="Search"
+                         TextChanged="OnSearchChanged"
+                         PreviewKeyDown="OnSearchKey" />
+            </Grid>
+            <TextBlock x:Name="Problem"
+                       AutomationProperties.LiveSetting="Polite"
+                       DockPanel.Dock="Bottom"
+                       Margin="24,8,16,22"
+                       FontSize="13"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource SecondaryText}"
+                       Visibility="Collapsed" />
+            <ListBox x:Name="Entries"
+                     Margin="10,0"
+                     Style="{StaticResource PlainList}"
+                     ItemContainerStyle="{StaticResource PickRow}"
+                     AllowDrop="True"
+                     SelectionChanged="OnEntryPicked"
+                     LostKeyboardFocus="OnEntriesLeft"
+                     PreviewKeyDown="OnEntriesKey"
+                     PreviewMouseLeftButtonDown="OnEntriesPressed"
+                     PreviewMouseMove="OnEntriesMouseMove"
+                     DragOver="OnEntriesDragOver"
+                     DragLeave="OnEntriesDragLeave"
+                     Drop="OnEntriesDrop"
+                     ContextMenuOpening="OnEntriesMenuOpening">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="{Binding Indent}">
+                            <!-- Sits on the row's top edge, so it reads as a divider rather than part of the entry. -->
+                            <Border Height="1"
+                                    Margin="-14,-8,-11,9"
+                                    Background="{DynamicResource Rule}"
+                                    Visibility="{Binding RuleVisibility}" />
+                            <!-- A group's name, such as Lists, above its first entry. Only a label: picking it picks that entry. -->
+                            <TextBlock Margin="0,0,0,4"
+                                       FontSize="12"
+                                       FontWeight="Normal"
+                                       IsHitTestVisible="False"
+                                       Text="{Binding Heading}"
+                                       Visibility="{Binding HeadingVisibility}"
+                                       Foreground="{DynamicResource SecondaryText}" />
+                            <TextBlock TextWrapping="Wrap" Text="{Binding Label}" />
+                            <TextBlock FontSize="12"
+                                       FontWeight="Normal"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding Subtitle}"
+                                       Visibility="{Binding SubtitleVisibility}"
+                                       Foreground="{DynamicResource SecondaryText}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DockPanel>
+    </Border>
+</UserControl>

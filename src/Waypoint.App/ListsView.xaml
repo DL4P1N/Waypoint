@@ -1,0 +1,130 @@
+<UserControl x:Class="Waypoint.App.ListsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Waypoint.App">
+    <!-- The open list. It sits on the Notes page, which picks the list in its column and passes its search in. -->
+    <DockPanel>
+        <Grid DockPanel.Dock="Top" Margin="24,22,24,12" MinHeight="34">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="ListTitle"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"
+                       Style="{StaticResource ColumnTitle}" />
+            <TextBox x:Name="RenameBox"
+                     Style="{StaticResource FieldBox}"
+                     Tag="List name"
+                     AutomationProperties.Name="List name"
+                     Visibility="Collapsed"
+                     PreviewKeyDown="OnRenameKey"
+                     LostKeyboardFocus="OnRenameLeft" />
+            <!-- Once something on a routine or checklist is checked, it can be run again from here, not only by typing. -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="StartOver"
+                        Margin="12,0,0,0"
+                        Padding="10,4"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource PageAction}"
+                        Content="Start over"
+                        ToolTip="Uncheck everything on this list to run it again"
+                        Visibility="Collapsed"
+                        Click="OnStartOverClicked" />
+                <!-- Rename and Delete list sit behind one quiet button, and on the list's right-click in the column, so the page is the items. -->
+                <Button x:Name="ListActions"
+                        Margin="6,0,0,0"
+                        MinWidth="28"
+                        MinHeight="28"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource SmallButton}"
+                        Padding="8,0"
+                        FontSize="18"
+                        Content="&#x22EF;"
+                        ToolTip="Rename or delete this list"
+                        AutomationProperties.Name="List options"
+                        Click="OnListActionsClicked" />
+            </StackPanel>
+        </Grid>
+
+        <local:UndoBar x:Name="Bar" DockPanel.Dock="Top" Margin="24,0,24,12" />
+
+        <!-- Add item sits right under the last entry, so a short list doesn't leave it far below. -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="24,0,24,22">
+                <TextBlock x:Name="Empty"
+                           Margin="0,0,0,8"
+                           FontSize="14"
+                           TextWrapping="Wrap"
+                           Text="Nothing on this list yet."
+                           Foreground="{DynamicResource SecondaryText}"
+                           Visibility="Collapsed" />
+                <ItemsControl x:Name="Entries">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,0,0,6" PreviewKeyDown="OnEntryKey">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox VerticalAlignment="Top"
+                                          IsChecked="{Binding Done, Mode=OneWay}"
+                                          AutomationProperties.Name="{Binding Text}"
+                                          Checked="OnEntryClicked" Unchecked="OnEntryClicked" />
+                                <TextBlock Grid.Column="1"
+                                           Margin="10,1,8,0"
+                                           FontSize="14"
+                                           TextWrapping="Wrap"
+                                           Background="Transparent"
+                                           Text="{Binding Text}"
+                                           TextDecorations="{Binding Strike}"
+                                           Foreground="{Binding TextBrush}"
+                                           Visibility="{Binding TextVisibility}"
+                                           MouseLeftButtonDown="OnEntryTextPressed" />
+                                <TextBox Grid.Column="1"
+                                         Margin="8,0,8,0"
+                                         Padding="6,3"
+                                         Style="{StaticResource FieldBox}"
+                                         Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                                         Visibility="{Binding EditVisibility}"
+                                         IsVisibleChanged="OnEditShown"
+                                         LostKeyboardFocus="OnEditLeft" />
+                                <!-- A 24 px target that shows while the row is pointed at or has focus, so it doesn't sit in gray on every row. -->
+                                <Button Grid.Column="2"
+                                        MinWidth="24"
+                                        MinHeight="24"
+                                        Padding="6,0"
+                                        FontSize="16"
+                                        Content="×"
+                                        ToolTip="Delete"
+                                        AutomationProperties.Name="{Binding Text, StringFormat='Delete {0}'}"
+                                        Click="OnDeleteEntryClicked">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                            <Setter Property="Opacity" Value="0" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Grid}}" Value="True">
+                                                    <Setter Property="Opacity" Value="1" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=Grid}}" Value="True">
+                                                    <Setter Property="Opacity" Value="1" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBox x:Name="AddItem"
+                         Margin="0,2,0,0"
+                         Style="{StaticResource FieldBox}"
+                         Tag="Add item"
+                         AutomationProperties.Name="Add item"
+                         PreviewKeyDown="OnAddItemKey" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>
