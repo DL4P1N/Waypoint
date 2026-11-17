@@ -242,8 +242,9 @@ public sealed partial class WaypointWorker
     /// </summary>
     public void CheckAlerts()
     {
-        // Another copy sends the alerts, so this one only keeps its own backups.
-        if (DiscordRunsOn is not null)
+        // Another copy sends the alerts, or Discord is still connecting here, so this one only keeps its own backups.
+        // Anything due stays due and goes to Discord on a later round.
+        if (DiscordRunsOn is not null || WaitingForDiscord)
         {
             Guarded(CheckBackup);
             return;
@@ -271,6 +272,7 @@ public sealed partial class WaypointWorker
     public void StartDiscord()
     {
         _discordWanted = true;
+        _discordWantedAt ??= _clock();
         if (HoldsConnections)
         {
             return;
@@ -293,6 +295,19 @@ public sealed partial class WaypointWorker
 
     /// <summary>The machine that uses the bot instead of this one, or null when this one does or may.</summary>
     public string? DiscordRunsOn { get; private set; }
+
+    /// <summary>How long alerts wait for Discord to connect before they show on this PC instead.</summary>
+    public static readonly TimeSpan DiscordConnectGrace = TimeSpan.FromMinutes(2);
+
+    private DateTime? _discordWantedAt;
+
+    /// <summary>
+    /// Discord is set up here but hasn't connected yet, as in the first moments after starting. Alerts wait for it
+    /// rather than showing on this PC, unless it takes much longer than it should.
+    /// </summary>
+    private bool WaitingForDiscord =>
+        _discordWanted && !HoldsConnections && DiscordSettings is not null && Discord is null && DiscordRunsOn is null
+        && _discordWantedAt is { } since && _clock() - since < DiscordConnectGrace;
 
     /// <summary>Why the one-copy check couldn't be made, until it can.</summary>
     public string? ClaimProblem { get; private set; }
@@ -443,6 +458,7 @@ public sealed partial class WaypointWorker
     public void StopDiscord()
     {
         _discordWanted = false;
+        _discordWantedAt = null;
         Disconnect();
     }
 
@@ -1213,6 +1229,13 @@ public sealed partial class WaypointWorker
         {
             _database.HoldNotice(title, text, tone, toBudgetChannel);
             return null;
+        }
+
+        // Right after starting, Discord may still be connecting. The notice waits for it instead of showing here.
+        var step = TimeSpan.FromSeconds(1);
+        for (var waited = TimeSpan.Zero; WaitingForDiscord && waited < DiscordConnectGrace; waited += step)
+        {
+            await (RetryWait ?? (span => Task.Delay(span)))(step);
         }
 
         if (Discord is not { } discord)

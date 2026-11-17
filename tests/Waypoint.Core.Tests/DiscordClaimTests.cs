@@ -394,6 +394,49 @@ public sealed class DiscordClaimTests : IDisposable
             .DiscordTrouble(_now.LocalDateTime.AddHours(1)));
     }
 
+    [Fact]
+    public async Task While_Discord_is_still_connecting_reminders_and_notices_wait_for_it_instead_of_showing_on_the_PC()
+    {
+        var due = _now.LocalDateTime.AddMinutes(-1);
+        _database.CompleteCapture(_database.AddCapture("Water the plants"), [new SortedItem(ItemKind.Reminder, "Water the plants", DateOnly.FromDateTime(due), null, TimeOnly.FromDateTime(due))]);
+        var host = new Host();
+        var waits = 0;
+        var worker = new WaypointWorker(_database, new WaypointSettings(Discord: Settings), _folder, host, exception => throw exception, new WorkerParts(
+            _ => new NoTokens(), Clock: () => _now.LocalDateTime, Http: () => new HttpClient(new Hangs()), CaptureSorter: new NullSorter(), ConnectGateway: false, Runner: DiscordRunner.Pc))
+        {
+            RetryWait = _ =>
+            {
+                waits++;
+                return Task.CompletedTask;
+            },
+        };
+
+        // The one-copy check never answers, so Discord stays unconnected.
+        worker.StartDiscord();
+        worker.CheckAlerts();
+        Assert.Null(worker.Discord);
+        Assert.Equal(0, host.Reminders);
+
+        // A notice waits out the grace period, then shows here because Discord never came.
+        await worker.NotifyAsync("Heads up", "Something", CardTone.Attention);
+        Assert.True(waits >= (int)WaypointWorker.DiscordConnectGrace.TotalSeconds);
+        Assert.Equal(["Heads up"], host.Notices);
+
+        // Long past the grace period, reminders show on the PC as before.
+        _now += WaypointWorker.DiscordConnectGrace + TimeSpan.FromMinutes(1);
+        worker.CheckAlerts();
+        Assert.Equal(1, host.Reminders);
+    }
+
+    private sealed class Hangs : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new OperationCanceledException();
+        }
+    }
+
     private sealed class Refuses : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
