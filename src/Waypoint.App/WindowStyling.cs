@@ -6,7 +6,7 @@ using System.Windows.Media;
 
 namespace Waypoint.App;
 
-/// <summary>Turns off Windows 11's rounded corners and uses a dark title bar. Windows and menus also blur what's behind them.</summary>
+/// <summary>Turns off Windows 11's rounded corners and uses a dark title bar. Windows and menus also show acrylic behind them.</summary>
 public static class WindowStyling
 {
     private const int UseImmersiveDarkMode = 20;
@@ -16,6 +16,14 @@ public static class WindowStyling
     private const uint NoBorder = 0xFFFFFFFE;
     private const int AccentPolicyAttribute = 19;
     private const int BlurBehind = 3;
+    private const int AcrylicBlurBehind = 4;
+
+    /// <summary>
+    /// The gray Windows lays over its acrylic, given as AABBGGRR. Windows 11's own acrylic pulls what's behind toward
+    /// a middle gray (its luminosity layer), so a white page shows as about #939393 and a black one as about #3F3F3F
+    /// rather than white and black. This gray at 58% does the same over the blur, measured on Windows 11 26H2.
+    /// </summary>
+    internal const uint AcrylicGray = 0x955E5E5E;
 
     private const int StyleIndex = -16;
     private const long ResizeFrame = 0x00040000;
@@ -50,9 +58,15 @@ public static class WindowStyling
     }
 
     /// <summary>
-    /// Blurs whatever is behind a WPF window or menu for a frosted-glass look. The tint on top is the
-    /// WindowBackground brush, so it's set in App.xaml with the other colors.
+    /// Puts acrylic behind a WPF window or menu, like the Start menu and right-click menus in dark mode: a heavy blur
+    /// with a little grain, pulled toward a middle gray so a white page behind turns soft gray. The tint on top is the
+    /// WindowBackground brush, so it's set in App.xaml with the other colors. Windows before the April 2018 update
+    /// get the plain blur.
     /// </summary>
+    /// <remarks>
+    /// Windows 11's own backdrop (DWMWA_SYSTEMBACKDROP_TYPE) isn't used: it turns solid gray whenever its window isn't
+    /// the active one, and a menu never is, so menus would never be see-through and windows only while focused.
+    /// </remarks>
     public static void Blur(IntPtr handle)
     {
         if (handle == IntPtr.Zero)
@@ -70,7 +84,9 @@ public static class WindowStyling
         var border = unchecked((int)NoBorder);
         DwmSetWindowAttribute(handle, BorderColor, ref border, sizeof(int));
 
-        var accent = new AccentPolicy { State = BlurBehind };
+        var accent = Environment.OSVersion.Version.Build >= 17134
+            ? new AccentPolicy { State = AcrylicBlurBehind, GradientColor = AcrylicGray }
+            : new AccentPolicy { State = BlurBehind };
         var size = Marshal.SizeOf<AccentPolicy>();
         var pointer = Marshal.AllocHGlobal(size);
         try

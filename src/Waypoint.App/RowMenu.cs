@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace Waypoint.App;
@@ -60,16 +61,26 @@ internal static class RowMenu
             menu.Items.Add(ReferenceEquals(entry, RowMenuEntry.Separator) ? new Separator() : Item(menu, entry));
         }
 
-        menu.Opened += (_, _) =>
-        {
-            if (PresentationSource.FromVisual(menu) is HwndSource source)
-            {
-                WindowStyling.Apply(source.Handle);
-                WindowStyling.Blur(source.Handle);
-            }
-        };
+        menu.Opened += (_, _) => Frost(menu);
         menu.Closed += (_, _) => closed();
         menu.IsOpen = true;
+    }
+
+    private static void OnSubmenuPopupOpened(object? sender, EventArgs args)
+    {
+        if (sender is Popup { Child: { } child })
+        {
+            Frost(child);
+        }
+    }
+
+    private static void Frost(Visual popup)
+    {
+        if (PresentationSource.FromVisual(popup) is HwndSource source)
+        {
+            WindowStyling.Apply(source.Handle);
+            WindowStyling.Blur(source.Handle);
+        }
     }
 
     public static void Copy(string text)
@@ -90,6 +101,21 @@ internal static class RowMenu
         foreach (var child in entry.Children ?? [])
         {
             item.Items.Add(Item(menu, child));
+        }
+
+        if (item.HasItems)
+        {
+            // A submenu is a popup of its own, so it needs the same backdrop as the menu.
+            // It may not have its window yet when this runs, so it's done once the popup has opened as well.
+            item.SubmenuOpened += (_, args) =>
+            {
+                if (ReferenceEquals(args.OriginalSource, item) && item.Template.FindName("PART_Popup", item) is Popup { Child: { } child } popup)
+                {
+                    Frost(child);
+                    popup.Opened -= OnSubmenuPopupOpened;
+                    popup.Opened += OnSubmenuPopupOpened;
+                }
+            };
         }
 
         if (entry.Run is { } run)
