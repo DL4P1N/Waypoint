@@ -9,8 +9,9 @@ public sealed record ThemePalette(string Name, string Accent, string Urgent, str
     public const string Surface = "#141414";
 
     /// <summary>
-    /// The tint over the blur behind every window and menu, in the panels' color. Each theme's is the lightest that
-    /// keeps its text readable even over a white window behind: 4.5:1 for text, links, and marks, 3:1 for secondary text.
+    /// The tint over the acrylic behind every window and menu, in the panels' color. The acrylic already pulls what's
+    /// behind toward a middle gray, as Windows' own does, so the tint can stay light. See <see cref="Themes"/> for how
+    /// light.
     /// </summary>
     public string WindowTint { get; init; } = SolidWindowTint;
 
@@ -55,12 +56,13 @@ public static class Themes
     private const string SharedQuiet = "#8A8A8A";
     private const string SharedSecondary = "#A3A3A3";
 
-    // The shared red (#FF7A70) is the hardest color to read over white, so the colored themes need the same tint.
-    // Mono has no red, so its lighter tint is set by the 3:1 its quiet gray needs.
-    private const string ColoredTint = "#D7141414";
-    private const string MonoTint = "#CF141414";
+    // Half the panels' black over the acrylic, the lightest that keeps every theme readable over a white page behind:
+    // 4.5:1 for plain text and 3:1 for colored text, marks, and secondary text. The shared red needs this much in the
+    // colored themes, and mono's secondary gray nearly as much. Finished rows' gray is meant to fade, and over a white
+    // page it drops to about 2.2:1.
+    private const string AcrylicTint = "#80141414";
 
-    public static readonly ThemePalette Default = new("gray", "#D0D0D0", SharedUrgent, SharedSoon, SharedMoney, SharedQuiet, SharedSecondary) { WindowTint = ColoredTint };
+    public static readonly ThemePalette Default = new("gray", "#D0D0D0", SharedUrgent, SharedSoon, SharedMoney, SharedQuiet, SharedSecondary) { WindowTint = AcrylicTint };
 
     public static readonly IReadOnlyList<ThemePalette> All =
     [
@@ -68,7 +70,7 @@ public static class Themes
         Default with { Name = "blue", Accent = "#6CB2FF" },
         Default with { Name = "amber", Accent = "#FFB547" },
         Default with { Name = "teal", Accent = "#4FD1C5" },
-        new("mono", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#C8C8C8", SharedQuiet, SharedSecondary) { WindowTint = MonoTint },
+        new("mono", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#C8C8C8", SharedQuiet, SharedSecondary) { WindowTint = AcrylicTint },
     ];
 
     public static string Names => string.Join(", ", All.Select(theme => theme.Name));

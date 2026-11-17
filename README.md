@@ -362,7 +362,7 @@ If one recent food purchase clearly fits, it's marked repaid. Otherwise a card i
 
 ### Settings page
 
-Settings has sections for Look, Work, Bedtime, Classes, Notes and recording, Discord, and Connections, and a search box. Under **Look**, pick a theme (gray, blue, amber, teal, or mono) and **Less see-through** for a nearly solid window background. Even without it, the window is dark enough that text stays readable over a white page behind it. Under **Bedtime**, the reminder and check-in ticks save as soon as you click them; the times and routine steps keep their **Save** button.
+Settings has sections for Look, Work, Bedtime, Classes, Notes and recording, Discord, and Connections, and a search box. Under **Look**, pick a theme (gray, blue, amber, teal, or mono) and **Less see-through** for a nearly solid window background. Without it, windows and menus use acrylic like Windows 11's own menus: what's behind shows through, heavily blurred and softened toward gray, under a light dark tint that keeps text readable even over a white page. Under **Bedtime**, the reminder and check-in ticks save as soon as you click them; the times and routine steps keep their **Save** button.
 
 ### settings.json
 
