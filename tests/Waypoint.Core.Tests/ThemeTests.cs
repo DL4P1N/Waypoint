@@ -195,7 +195,7 @@ public sealed class ThemeTests : IDisposable
     [MemberData(nameof(Palettes))]
     public void Less_see_through_keeps_text_readable_even_over_a_white_window_behind(ThemePalette palette)
     {
-        var behind = OverWhite(ThemePalette.SolidWindowTint);
+        var behind = Over(ThemePalette.SolidWindowTint, "#FFFFFF");
         foreach (var color in new[] { palette.Accent, palette.Urgent, palette.Soon, palette.Money, palette.SecondaryText })
         {
             Assert.True(ThemePalette.Contrast(color, behind) >= TextContrast, $"{palette.Name} {color} over {behind}");
@@ -204,9 +204,21 @@ public sealed class ThemeTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Palettes))]
-    public void The_default_tint_keeps_text_readable_over_a_white_window_behind(ThemePalette palette)
+    public void The_tint_keeps_text_readable_over_the_acrylic_of_a_white_page(ThemePalette palette)
     {
-        var behind = OverWhite(palette.WindowTint);
+        var behind = Over(palette.WindowTint, AcrylicOverWhite);
+        Assert.True(ThemePalette.Contrast(PrimaryText, behind) >= TextContrast, $"{palette.Name} text over {behind}");
+        foreach (var color in ColoredText(palette))
+        {
+            Assert.True(ThemePalette.Contrast(color, behind) >= QuietContrast, $"{palette.Name} {color} over {behind}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Palettes))]
+    public void The_tint_keeps_every_color_readable_over_the_acrylic_of_a_black_page(ThemePalette palette)
+    {
+        var behind = Over(palette.WindowTint, AcrylicOverBlack);
         foreach (var color in BodyText(palette))
         {
             Assert.True(ThemePalette.Contrast(color, behind) >= TextContrast, $"{palette.Name} {color} over {behind}");
@@ -218,18 +230,17 @@ public sealed class ThemeTests : IDisposable
         }
     }
 
-    [Theory]
-    [MemberData(nameof(Palettes))]
-    public void The_default_tint_is_the_lightest_that_stays_readable_over_white(ThemePalette palette)
+    [Fact]
+    public void The_tint_is_the_lightest_that_keeps_every_theme_readable_over_white()
     {
-        var alpha = Alpha(palette.WindowTint);
-        var lighter = $"#{alpha - 1:X2}{palette.WindowTint[3..]}";
-        var behind = OverWhite(lighter);
+        var tint = Themes.Default.WindowTint;
+        Assert.All(Themes.All, palette => Assert.Equal(tint, palette.WindowTint));
 
-        Assert.True(
-            BodyText(palette).Any(color => ThemePalette.Contrast(color, behind) < TextContrast)
-                || QuietText(palette).Any(color => ThemePalette.Contrast(color, behind) < QuietContrast),
-            $"{palette.Name} could use {lighter}");
+        var lighter = $"#{Alpha(tint) - 1:X2}{tint[3..]}";
+        var behind = Over(lighter, AcrylicOverWhite);
+        Assert.Contains(Themes.All, palette =>
+            ThemePalette.Contrast(PrimaryText, behind) < TextContrast
+                || ColoredText(palette).Any(color => ThemePalette.Contrast(color, behind) < QuietContrast));
     }
 
     [Theory]
@@ -237,7 +248,7 @@ public sealed class ThemeTests : IDisposable
     public void The_default_tint_keeps_the_blur_and_the_panel_color(ThemePalette palette)
     {
         Assert.Equal(ThemePalette.Surface[1..], palette.WindowTint[3..]);
-        Assert.True(Alpha(palette.WindowTint) < 0xFF, $"{palette.Name} is see-through");
+        Assert.True(Alpha(palette.WindowTint) <= 0x80, $"{palette.Name} stays see-through, at half or less");
         Assert.True(Alpha(ThemePalette.SolidWindowTint) > Alpha(palette.WindowTint), $"Less see-through is more solid than {palette.Name}");
         Assert.Equal(palette.WindowTint, palette.Tint);
         Assert.Equal(ThemePalette.SolidWindowTint, (palette with { LessSeeThrough = true }).Tint);
@@ -249,13 +260,28 @@ public sealed class ThemeTests : IDisposable
     /// <summary>Secondary and finished text, which need 3:1.</summary>
     private static string[] QuietText(ThemePalette palette) => [palette.SecondaryText, palette.QuietMark, ThemePalette.FinishedText, ThemePalette.FinishedDetail];
 
+    /// <summary>
+    /// Links, colored marks, and secondary text. Over a white page they need 3:1, the bar for large text and marks.
+    /// Finished rows and the quiet gray are left out there: they're meant to fade, and drop to about 2.2:1.
+    /// </summary>
+    private static string[] ColoredText(ThemePalette palette) => [palette.Accent, palette.Urgent, palette.Soon, palette.Money, palette.SecondaryText];
+
+    // What the window shows behind its text before the tint, measured from screenshots on Windows 11 26H2. The acrylic
+    // blurs what's behind so heavily that a page's text and pictures average out, then lays a middle gray over it
+    // (WindowStyling.AcrylicGray), as Windows' own acrylic does. So a plain white page filling the whole window shows
+    // as this gray, not white, and is the worst case; a busy, colorful page came out darker, at about #676061. The tint
+    // is then blended over it the way WPF draws it, which matched the screenshots to within one step.
+    private const string AcrylicOverWhite = "#939393";
+    private const string AcrylicOverBlack = "#3F3F3F";
+
     private static int Alpha(string tint) => Convert.ToInt32(tint.Substring(1, 2), 16);
 
-    /// <summary>A #AARRGGBB tint laid over plain white, the worst case for light text.</summary>
-    private static string OverWhite(string tint)
+    /// <summary>A #AARRGGBB tint laid over a #RRGGBB color.</summary>
+    private static string Over(string tint, string behind)
     {
         var alpha = Convert.ToInt32(tint.Substring(1, 2), 16) / 255.0;
-        int Channel(int index) => (int)Math.Round((Convert.ToInt32(tint.Substring(3 + (index * 2), 2), 16) * alpha) + (255 * (1 - alpha)));
+        int Channel(int index) => (int)Math.Round((Convert.ToInt32(tint.Substring(3 + (index * 2), 2), 16) * alpha)
+            + (Convert.ToInt32(behind.Substring(1 + (index * 2), 2), 16) * (1 - alpha)));
         return $"#{Channel(0):X2}{Channel(1):X2}{Channel(2):X2}";
     }
 

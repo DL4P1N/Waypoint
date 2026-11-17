@@ -3,8 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <!-- The tint over the blur behind every window and menu, for a frosted-glass look. Surfaces and rules are white over it. -->
-        <SolidColorBrush x:Key="WindowBackground" Color="#25323232" />
+        <!-- The tint over the acrylic behind every window and menu. ThemeBrushes sets it from the theme. Surfaces and rules are white over it. -->
+        <SolidColorBrush x:Key="WindowBackground" Color="#80141414" />
         <SolidColorBrush x:Key="InputBackground" Color="#15000000" />
         <SolidColorBrush x:Key="Surface" Color="#14FFFFFF" />
         <SolidColorBrush x:Key="SurfaceHover" Color="#1CFFFFFF" />
