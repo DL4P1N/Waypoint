@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Data.Sqlite;
 using Waypoint.Core.Budget;
 
 namespace Waypoint.Core.Data;
@@ -9,23 +10,37 @@ namespace Waypoint.Core.Data;
 /// </summary>
 public sealed partial class WaypointDatabase
 {
-    private void CreateTransferTables() => Execute("""
-        CREATE TABLE IF NOT EXISTS brokerage_deposits (
-            id INTEGER PRIMARY KEY,
-            received_on TEXT NOT NULL,
-            cents INTEGER NOT NULL
-        );
-        """);
+    private void CreateTransferTables()
+    {
+        Execute("""
+            CREATE TABLE IF NOT EXISTS brokerage_deposits (
+                id INTEGER PRIMARY KEY,
+                received_on TEXT NOT NULL,
+                cents INTEGER NOT NULL
+            );
+            """);
+
+        // The email a deposit was read from, so reading it again after a crash doesn't count it twice.
+        AddColumnIfMissing("brokerage_deposits", "message_id", "TEXT");
+        Execute("CREATE UNIQUE INDEX IF NOT EXISTS brokerage_deposits_message ON brokerage_deposits (message_id) WHERE message_id IS NOT NULL");
+    }
 
     /// <summary>Keeps a brokerage deposit read from email, so a scheduled transfer can be matched to it later.</summary>
     public void RecordBrokerageDeposit(long cents, DateOnly on)
     {
         using var connection = Open();
+        RecordBrokerageDeposit(connection, cents, on, null);
+    }
+
+    /// <summary>False when the email with this id was already kept.</summary>
+    private static bool RecordBrokerageDeposit(SqliteConnection connection, long cents, DateOnly on, string? messageId)
+    {
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO brokerage_deposits (received_on, cents) VALUES ($on, $cents)";
+        command.CommandText = "INSERT OR IGNORE INTO brokerage_deposits (received_on, cents, message_id) VALUES ($on, $cents, $message)";
         command.Parameters.AddWithValue("$on", on.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$cents", cents);
-        command.ExecuteNonQuery();
+        command.Parameters.AddWithValue("$message", (object?)messageId ?? DBNull.Value);
+        return command.ExecuteNonQuery() > 0;
     }
 
     public IReadOnlyList<TransferStatus> GetTransferStatuses(DateOnly today) =>

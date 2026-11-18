@@ -155,8 +155,9 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
                 }
 
                 seen.Add(id);
-                database.SetPreference(LastMailKey, received);
-                database.SetPreference(SeenMailKey, string.Join('\n', seen));
+
+                // Both together, so the time read to and the messages already read at that time always agree.
+                database.SetPreferences((LastMailKey, received), (SeenMailKey, string.Join('\n', seen)));
             }
 
             LastError = null;
@@ -231,8 +232,12 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
 
         if (AlertParser.ReadDeposit(from, subject, body) is { } deposit)
         {
-            database.AddToCushion(deposit, DateOnly.FromDateTime(received.DateTime));
-            onDeposit?.Invoke(deposit);
+            // Already counted means already told, so the same email read again after a crash sends nothing.
+            if (database.AddToCushion(deposit, DateOnly.FromDateTime(received.DateTime), message.GetProperty("id").GetString()))
+            {
+                onDeposit?.Invoke(deposit);
+            }
+
             return;
         }
 

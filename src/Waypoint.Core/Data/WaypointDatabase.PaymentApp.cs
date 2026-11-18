@@ -31,7 +31,11 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public PaymentAppOutcome? AddRepayment(string messageId, PaymentAppPayment payment, DateOnly received)
     {
+        var food = FoodCategories();
+
+        // Kept and settled in one write, so a failure between can't leave it counted on the purchase but still waiting.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using (var insert = connection.CreateCommand())
         {
             insert.CommandText = """
@@ -51,13 +55,15 @@ public sealed partial class WaypointDatabase
         }
 
         var money = Briefing.Money(payment.Cents);
-        if (ClearMatch(connection, payment, received) is not { } match)
+        if (ClearMatch(connection, food, payment, received) is not { } match)
         {
+            transaction.Commit();
             var reason = payment.Note is { } note ? $" for {note}" : "";
             return new PaymentAppOutcome($"{payment.Payer} paid you {money}{reason}. Which purchase was it for?", false, messageId);
         }
 
         SettleRepayment(connection, messageId, match.Id, payment.Cents);
+        transaction.Commit();
         return new PaymentAppOutcome($"{payment.Payer} paid you {money}, so it's marked repaid on {match.Title}", true, messageId);
     }
 
@@ -164,6 +170,7 @@ public sealed partial class WaypointDatabase
         }
 
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var from = today.AddDays(-TypedMatchLookBackDays);
         var named = Squash(purchase);
 
@@ -181,7 +188,9 @@ public sealed partial class WaypointDatabase
             return new OpReply($"Couldn't find a recent {purchase.Trim()} purchase. {DescribeCandidates(repayment)}");
         }
 
-        return Settle(connection, repayment, matches[0].Id, matches[0].Title, matches[0].LeftCents);
+        var reply = Settle(connection, repayment, matches[0].Id, matches[0].Title, matches[0].LeftCents);
+        transaction.Commit();
+        return reply;
     }
 
     /// <summary>The purchases it could be for, so a name that didn't match can be typed again or picked.</summary>
@@ -248,17 +257,25 @@ public sealed partial class WaypointDatabase
         }
 
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var match = Purchases(connection, DateOnly.MinValue, DateOnly.MaxValue).FirstOrDefault(row => row.Id == itemId);
-        return match.Title is null
-            ? new OpReply("Couldn't find that purchase")
-            : Settle(connection, repayment, match.Id, match.Title, match.LeftCents);
+        if (match.Title is null)
+        {
+            return new OpReply("Couldn't find that purchase");
+        }
+
+        var reply = Settle(connection, repayment, match.Id, match.Title, match.LeftCents);
+        transaction.Commit();
+        return reply;
     }
 
+    /// <summary>Run inside the caller's write. One settled meanwhile, from another card or the Budget page, adds nothing.</summary>
     private static OpReply Settle(SqliteConnection connection, PaymentAppRepayment repayment, long itemId, string title, long leftCents)
     {
         var applied = Math.Min(repayment.Cents, leftCents);
-        SettleRepayment(connection, repayment.MessageId, itemId, applied);
-        return new OpReply($"Marked {Briefing.Money(applied)} from {repayment.Payer} repaid on {title}");
+        return SettleRepayment(connection, repayment.MessageId, itemId, applied)
+            ? new OpReply($"Marked {Briefing.Money(applied)} from {repayment.Payer} repaid on {title}")
+            : new OpReply("That repayment is already settled");
     }
 
     public OpReply ClearRepayment(string? payer) =>
@@ -289,13 +306,8 @@ public sealed partial class WaypointDatabase
     /// The one purchase this has to be for: a recent food charge it fits inside. If a note narrows several
     /// down to one, that's clear too. Anything less certain is left for the user.
     /// </summary>
-    private (long Id, string Title, long LeftCents)? ClearMatch(SqliteConnection connection, PaymentAppPayment payment, DateOnly received)
+    private static (long Id, string Title, long LeftCents)? ClearMatch(SqliteConnection connection, HashSet<string> categories, PaymentAppPayment payment, DateOnly received)
     {
-        var categories = GetCategories()
-            .Select(category => category.Name)
-            .Where(name => FoodWords.Any(word => name.Contains(word, StringComparison.OrdinalIgnoreCase)))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var fits = Purchases(connection, received.AddDays(-RepaymentLookBackDays), received)
             .Where(row => row.Category is { } category && categories.Contains(category) && row.LeftCents >= payment.Cents)
             .ToList();
@@ -310,6 +322,13 @@ public sealed partial class WaypointDatabase
             ? (fits[0].Id, fits[0].Title, fits[0].LeftCents)
             : null;
     }
+
+    /// <summary>The categories a repayment can be matched in without asking, read before a write opens.</summary>
+    private HashSet<string> FoodCategories() =>
+        GetCategories()
+            .Select(category => category.Name)
+            .Where(name => FoodWords.Any(word => name.Contains(word, StringComparison.OrdinalIgnoreCase)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Charges with money still unrepaid, newest first.</summary>
     private static List<(long Id, string Title, string? Category, long LeftCents, DateOnly Date)> Purchases(SqliteConnection connection, DateOnly from, DateOnly through)
@@ -336,15 +355,31 @@ public sealed partial class WaypointDatabase
         return rows;
     }
 
-    private static void SettleRepayment(SqliteConnection connection, string messageId, long itemId, long cents)
+    /// <summary>
+    /// Marks a waiting repayment matched and counts it on the purchase, in the caller's write. False when it was
+    /// no longer waiting, so the money is never counted on a purchase twice.
+    /// </summary>
+    private static bool SettleRepayment(SqliteConnection connection, string messageId, long itemId, long cents)
     {
+        using (var claim = connection.CreateCommand())
+        {
+            claim.CommandText = "UPDATE repayments SET status = $status, item_id = $item WHERE message_id = $id AND status = $pending";
+            claim.Parameters.AddWithValue("$status", RepaymentMatched);
+            claim.Parameters.AddWithValue("$item", itemId);
+            claim.Parameters.AddWithValue("$id", messageId);
+            claim.Parameters.AddWithValue("$pending", RepaymentPending);
+            if (claim.ExecuteNonQuery() != 1)
+            {
+                return false;
+            }
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE items SET reimbursed_cents = MIN(amount_cents, reimbursed_cents + $cents) WHERE id = $id";
         command.Parameters.AddWithValue("$cents", cents);
         command.Parameters.AddWithValue("$id", itemId);
         command.ExecuteNonQuery();
-
-        SetRepaymentStatus(connection, messageId, RepaymentMatched, itemId);
+        return true;
     }
 
     private static void SetRepaymentStatus(SqliteConnection connection, string messageId, string status, long? itemId)

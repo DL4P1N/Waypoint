@@ -27,6 +27,82 @@ public sealed class AtomicWriteTests : IDisposable
     }
 
     [Fact]
+    public void A_checking_export_that_fails_partway_keeps_none_of_its_rows_or_payments()
+    {
+        FailWhen("BEFORE INSERT ON items WHEN NEW.kind = 'Expense'");
+        CheckingRow[] rows =
+        [
+            new(Day, "MADE UP DEPOSIT", 50000, CheckingKind.Other),
+            new(Day, "MADE UP CARD PAYMENT", -12000, CheckingKind.CardPayment, "Made Up Card"),
+            new(Day, "MADE UP SHOP", -2500, CheckingKind.Spending),
+        ];
+
+        Assert.ThrowsAny<SqliteException>(() => _database.ImportChecking(rows));
+
+        Assert.Equal(0, Count("checking_activity"));
+        Assert.Equal(0, Count("card_payments"));
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_card_export_whose_payments_fail_keeps_none_of_its_purchases()
+    {
+        FailWhen("BEFORE INSERT ON card_payments");
+        const string csv = """
+            Posted On,Purchase Date,Category,Description,Amount
+            03/10/2030,03/10/2030,Payments,AUTOPAY STATEMENT BALANCE,-80.00
+            03/11/2030,03/11/2030,Restaurants,MADE UP DINER,14.50
+            """;
+
+        Assert.ThrowsAny<SqliteException>(() => _database.ImportStatement(csv));
+
+        Assert.Equal(0, Count("items"));
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_repayment_whose_match_fails_isnt_counted_on_the_purchase()
+    {
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP BAKERY", 3000)]);
+        var purchase = Scalar("SELECT id FROM items WHERE kind = 'Expense'");
+        Assert.NotNull(_database.AddRepayment("made-up-payment", new PaymentAppPayment("A Made Up Friend", 1500, null), Day));
+        FailWhen("BEFORE UPDATE OF status ON repayments");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.MatchRepaymentTo("made-up-payment", purchase));
+
+        Assert.Equal(0, Scalar("SELECT reimbursed_cents FROM items WHERE kind = 'Expense'"));
+    }
+
+    [Fact]
+    public void A_deposit_whose_balance_fails_isnt_kept_and_the_same_email_counts_once()
+    {
+        _database.SaveBudgetAccount(new BudgetAccount("Made Up Cushion", AccountKind.Cushion, 40000, Day));
+        FailWhen("BEFORE UPDATE ON budget_accounts");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.AddToCushion(5000, Day.AddDays(1), "made-up-email"));
+        Assert.Equal(0, Count("brokerage_deposits"));
+
+        Run("DROP TRIGGER fail_partway");
+        Assert.True(_database.AddToCushion(5000, Day.AddDays(1), "made-up-email"));
+        Assert.False(_database.AddToCushion(5000, Day.AddDays(1), "made-up-email"));
+        Assert.Equal(1, Count("brokerage_deposits"));
+        Assert.Equal(45000, _database.GetBudgetAccounts().Single().BalanceCents);
+    }
+
+    [Fact]
+    public void Categorizing_a_purchase_that_fails_keeps_no_merchant_rule()
+    {
+        _database.AddCategory("Made Up Snacks", null, BudgetPeriod.Month);
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP KIOSK", 800)]);
+        var purchase = Scalar("SELECT id FROM items WHERE kind = 'Expense'");
+        FailWhen("BEFORE UPDATE OF category ON items");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.CategorizePurchase(purchase, "Made Up Snacks"));
+
+        Assert.Equal(0, Count("merchant_rules"));
+    }
+
+    [Fact]
     public void Checking_off_an_item_whose_history_fails_leaves_it_open()
     {
         var item = AddTask("Return the made up form");
