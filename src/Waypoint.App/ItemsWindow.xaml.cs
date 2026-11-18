@@ -96,6 +96,7 @@ public partial class ItemsWindow : Window
         WindowStyling.Apply(this);
         RestorePlace();
         TodayPage.Work = PageWorkFor(server);
+        NotesPage.Work = PageWorkFor(server);
         _askWork = PageWorkFor(server);
         PageWork.SavingChanged += ShowSaving;
         Closed += (_, _) => PageWork.SavingChanged -= ShowSaving;
@@ -408,7 +409,11 @@ public partial class ItemsWindow : Window
 
                 break;
             case Page.Notes:
-                NotesPage.Refresh();
+                if (!every || !NotesPage.Work.IsBusy)
+                {
+                    NotesPage.Work.Show(() => NotesPage.Refresh(), () => NotesPage.Refresh());
+                }
+
                 break;
             case Page.Budget:
                 MoneyPage.Refresh();
