@@ -143,11 +143,83 @@ public sealed partial class DiscordPhoneTests : IDisposable
 
             if (request.Method == HttpMethod.Get)
             {
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ListMade && ListedChannel(url) is { } listed ? Listing(listed) : "[]") };
             }
 
-            var id = request.Method == HttpMethod.Post ? $"m{Interlocked.Increment(ref _posts)}" : "x";
+            var id = request.Method == HttpMethod.Post ? Make(url, body) : "x";
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($$"""{"id":"{{id}}"}""") };
+        }
+
+        /// <summary>Each message made, by channel, with what was sent. A post sent again with its nonce isn't made twice.</summary>
+        public List<(string Channel, string Id, string Body)> MadeMessages { get; } = [];
+
+        /// <summary>When set, reading a channel's messages lists the ones made in it, as the bot's.</summary>
+        public bool ListMade { get; set; }
+
+        /// <summary>Discord only keeps to a nonce for a few minutes. Setting this is those minutes passing.</summary>
+        public void ForgetNonces()
+        {
+            lock (_nonces)
+            {
+                _nonces.Clear();
+            }
+        }
+
+        private readonly Dictionary<string, string> _nonces = [];
+
+        private string Make(string url, string body)
+        {
+            var channel = System.Text.RegularExpressions.Regex.Match(url, "/channels/([^/]+)/messages$") is { Success: true } match ? match.Groups[1].Value : null;
+            string? nonce = null;
+            if (channel is not null && body.Length > 0)
+            {
+                using var json = JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("enforce_nonce", out var enforce) && enforce.ValueKind == JsonValueKind.True && json.RootElement.TryGetProperty("nonce", out var sent))
+                {
+                    nonce = sent.GetString();
+                }
+            }
+
+            lock (_nonces)
+            {
+                if (nonce is not null && _nonces.TryGetValue(nonce, out var made))
+                {
+                    return made;
+                }
+
+                var id = $"m{Interlocked.Increment(ref _posts)}";
+                if (nonce is not null)
+                {
+                    _nonces[nonce] = id;
+                }
+
+                if (channel is not null)
+                {
+                    lock (MadeMessages)
+                    {
+                        MadeMessages.Add((channel, id, body));
+                    }
+                }
+
+                return id;
+            }
+        }
+
+        private static string? ListedChannel(string url) =>
+            System.Text.RegularExpressions.Regex.Match(url, "/channels/([^/]+)/messages[?]") is { Success: true } match ? match.Groups[1].Value : null;
+
+        /// <summary>The messages made in a channel as Discord lists them: the bot's, without the nonce.</summary>
+        private string Listing(string channel)
+        {
+            lock (MadeMessages)
+            {
+                return "[" + string.Join(",", MadeMessages.Where(made => made.Channel == channel).Select(made =>
+                {
+                    using var json = JsonDocument.Parse(made.Body);
+                    var embeds = json.RootElement.TryGetProperty("embeds", out var sent) ? sent.GetRawText() : "[]";
+                    return $$"""{"id":"{{made.Id}}","channel_id":"{{channel}}","author":{"id":"bot","bot":true},"embeds":{{embeds}}}""";
+                })) + "]";
+            }
         }
     }
 

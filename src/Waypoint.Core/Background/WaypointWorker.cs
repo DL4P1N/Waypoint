@@ -691,30 +691,59 @@ public sealed partial class WaypointWorker
 
         // The same offer the PC card makes: only on a reminder that can be started, and not right after a spot was saved.
         card = card with { SaveSpot = card.Transition && TransitionAssist.OffersSaveSpot(_database.GetLastSpotSaved(), _clock()), FeedbackFeature = Feedback.Reminder, FeedbackRef = ItemRef.Format(reminder.Item) };
-        string? messageId = null;
-        var sent = await AlertRetry.RunAsync(async () =>
+
+        // The card is noted before it goes, so a crash before it's saved finds the card it sent instead of sending
+        // another. The note is kept with Discord's nonce, so a try that went through unheard isn't made twice.
+        var key = ReminderSendKey(reminder);
+        var channel = discord.AlertsChannelFor();
+        var send = _database.BeginDiscordSend(key, channel, _clock());
+        var messageId = send.MessageId;
+        if (messageId is null && !send.Fresh && channel is not null)
         {
-            var delivery = await discord.DeliverAsync(card);
-            messageId = delivery.MessageId;
-            return delivery.Sent;
-        }, RetryWait);
-        DiscordHealth.Sent(sent, _clock());
+            messageId = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card)).MessageId;
+        }
+
+        var sent = messageId is not null;
+        if (!sent)
+        {
+            sent = await AlertRetry.RunAsync(async () =>
+            {
+                var delivery = await discord.DeliverOnceAsync(channel, card, send.Nonce);
+                messageId = delivery.MessageId;
+                return delivery.Sent;
+            }, RetryWait);
+            DiscordHealth.Sent(sent, _clock());
+        }
 
         if (!sent)
         {
+            // Shown here instead, and answered here, so a later card for the same reminder starts afresh.
+            _database.FinishDiscordSend(key);
             ShowReminder(reminder);
             return;
         }
 
         try
         {
-            // A waiting nudge's buttons carry its item, so there's nothing to look up later.
-            if (waiting is null && (canFinish || canStart) && messageId is not null)
+            if (messageId is not null)
             {
-                _database.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock(), dueOn: dose ? reminder.Item.DueDate : null);
+                _database.SetDiscordSendMessage(key, messageId);
             }
 
-            _database.SettleSentReminder(reminder, _clock());
+            // The card's record, the reminder moving on, and the note going are one write, so a crash leaves the note
+            // with the card in it and the next try saves that card instead of sending another.
+            _database.InOneWrite(() =>
+            {
+                // A waiting nudge's buttons carry its item, so there's nothing to look up later.
+                if (waiting is null && (canFinish || canStart) && messageId is not null)
+                {
+                    _database.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock(), dueOn: dose ? reminder.Item.DueDate : null);
+                }
+
+                _database.SettleSentReminder(reminder, _clock());
+                _database.FinishDiscordSend(key);
+                return 0;
+            });
         }
         finally
         {
@@ -723,6 +752,10 @@ public sealed partial class WaypointWorker
 
         _host.Changed();
     }
+
+    /// <summary>One reminder's card, the same each time it's tried, until the reminder moves on.</summary>
+    private static string ReminderSendKey(DueReminder reminder) =>
+        $"reminder:{(reminder.Item.Source == ItemSource.Calendar ? "event" : "item")}:{reminder.Id}";
 
     /// <summary>The pause between Discord retries. Tests set it to skip the waiting.</summary>
     public Func<TimeSpan, Task>? RetryWait { get; set; }

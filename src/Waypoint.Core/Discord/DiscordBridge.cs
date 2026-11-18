@@ -296,6 +296,80 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// <summary>Sends a card to any channel, for pinned views. Returns its ID, or null if it wasn't sent.</summary>
     public Task<string?> PostAsync(string channel, DiscordCard card) => SendAsync(channel, card);
 
+    /// <summary>
+    /// One try at a post noted beforehand, carrying that note's nonce, so trying again soon after never makes a second.
+    /// Null for the channel goes to alerts.
+    /// </summary>
+    public Task<DiscordDelivery> DeliverOnceAsync(string? channel, DiscordCard card, string nonce) =>
+        TrySendAsync(channel ?? settings.AlertsChannelId, card, nonce: nonce);
+
+    /// <summary>Where alerts go, or with <paramref name="toBudgetChannel"/>, where budget alerts go.</summary>
+    public string? AlertsChannelFor(bool toBudgetChannel = false) => toBudgetChannel ? settings.BudgetChannelId : settings.AlertsChannelId;
+
+    /// <summary>
+    /// Looks in a channel for a post of the bot's from a try that went through before Waypoint could note it, made
+    /// since <paramref name="since"/> and carrying this nonce or showing this card. Read is false when the channel
+    /// couldn't be read, so it isn't known.
+    /// </summary>
+    public async Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card)
+    {
+        try
+        {
+            using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?limit={MaxFetched}&after={SnowflakeAt(since - SentLookBack)}"));
+            if (!response.IsSuccessStatusCode)
+            {
+                return (false, null);
+            }
+
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return (false, null);
+            }
+
+            var found = document.RootElement.EnumerateArray()
+                .Where(message => IsFromBot(message) && (NonceOf(message) == nonce || Shows(message, card)))
+                .Select(message => Text(message, "id"))
+                .FirstOrDefault(id => id is not null);
+            return (true, found);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            LastError = exception.Message;
+            return (false, null);
+        }
+    }
+
+    /// <summary>How far before a post's note to look, in case this PC's clock runs a little ahead of Discord's.</summary>
+    private static readonly TimeSpan SentLookBack = TimeSpan.FromMinutes(1);
+
+    private static readonly DateTime DiscordEpoch = new(2015, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>The smallest message ID Discord could give at this time, so messages after it are the ones made since.</summary>
+    public static string SnowflakeAt(DateTime time)
+    {
+        var milliseconds = (time.ToUniversalTime() - DiscordEpoch).TotalMilliseconds;
+        return milliseconds <= 0 ? "0" : (((ulong)milliseconds) << 22).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsFromBot(JsonElement message) =>
+        message.TryGetProperty("author", out var author) && author.TryGetProperty("bot", out var bot) && bot.ValueKind == JsonValueKind.True;
+
+    private static string? NonceOf(JsonElement message) =>
+        message.TryGetProperty("nonce", out var nonce) ? nonce.ValueKind switch
+        {
+            JsonValueKind.String => nonce.GetString(),
+            JsonValueKind.Number => nonce.GetRawText(),
+            _ => null,
+        } : null;
+
+    /// <summary>Whether a message shows this card's title and words, the way Waypoint posts it.</summary>
+    private static bool Shows(JsonElement message, DiscordCard card) =>
+        message.TryGetProperty("embeds", out var embeds) && embeds.ValueKind == JsonValueKind.Array
+        && embeds.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } embed
+        && (Text(embed, "title") ?? "") == (card.Title ?? "")
+        && (Text(embed, "description") ?? "") == (card.Description ?? "");
+
     /// <summary>Changes a sent card in place. Editing makes no sound on the phone, so a view can change as often as it needs to.</summary>
     public async Task<EditOutcome> EditAsync(string channel, string messageId, DiscordCard card)
     {
@@ -1715,7 +1789,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
     private async Task<string?> SendAsync(string? channel, DiscordCard card) => (await TrySendAsync(channel, card)).MessageId;
 
-    private async Task<DiscordDelivery> TrySendAsync(string? channel, DiscordCard card, string? replyTo = null)
+    private async Task<DiscordDelivery> TrySendAsync(string? channel, DiscordCard card, string? replyTo = null, string? nonce = null)
     {
         if (channel is null)
         {
@@ -1727,7 +1801,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             using var response = await SendWithLimitsAsync(() =>
             {
                 var request = NewRequest(HttpMethod.Post, $"{ApiBase}/channels/{channel}/messages");
-                request.Content = JsonContent.Create(MessageBody(card, replyTo));
+                request.Content = JsonContent.Create(WithNonce(MessageBody(card, replyTo), nonce));
                 return request;
             });
             response.EnsureSuccessStatusCode();
@@ -1741,6 +1815,21 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             LastError = exception.Message;
             return new DiscordDelivery(null, false);
         }
+    }
+
+    /// <summary>
+    /// A post noted before it's made carries its nonce, and Discord is told to keep to it, so a try sent again
+    /// within a few minutes hands back the message already made instead of making another.
+    /// </summary>
+    private static Dictionary<string, object> WithNonce(Dictionary<string, object> body, string? nonce)
+    {
+        if (nonce is not null)
+        {
+            body["nonce"] = nonce;
+            body["enforce_nonce"] = true;
+        }
+
+        return body;
     }
 
     /// <summary>Item titles can come from the calendar, so nothing sent is allowed to ping anyone.</summary>
