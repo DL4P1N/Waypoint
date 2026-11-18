@@ -5,6 +5,9 @@ using Waypoint.Core.Schedule;
 
 namespace Waypoint.Core.Data;
 
+/// <summary>A notice held through the quiet part of the night, to go out once it's over.</summary>
+public sealed record HeldNotice(long Id, string Title, string Text, CardTone Tone, bool ToBudget);
+
 public sealed partial class WaypointDatabase : IBedtimeLog
 {
     private const string SnoozeKey = "bedtime_snooze";
@@ -166,6 +169,32 @@ public sealed partial class WaypointDatabase : IBedtimeLog
         command.Parameters.AddWithValue("$text", text);
         command.Parameters.AddWithValue("$tone", tone.ToString());
         command.Parameters.AddWithValue("$toBudget", toBudget ? 1 : 0);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>What's held, oldest first, each kept until it's gone out (see <see cref="DropHeldNotice"/>).</summary>
+    public IReadOnlyList<HeldNotice> GetHeldNotices()
+    {
+        using var connection = Open();
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT id, title, text, tone, to_budget FROM held_notices ORDER BY id";
+        using var reader = read.ExecuteReader();
+        var notices = new List<HeldNotice>();
+        while (reader.Read())
+        {
+            notices.Add(new HeldNotice(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), Enum.Parse<CardTone>(reader.GetString(3)), reader.GetInt64(4) != 0));
+        }
+
+        return notices;
+    }
+
+    /// <summary>A held notice has gone out, so it's forgotten.</summary>
+    public void DropHeldNotice(long id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM held_notices WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
         command.ExecuteNonQuery();
     }
 

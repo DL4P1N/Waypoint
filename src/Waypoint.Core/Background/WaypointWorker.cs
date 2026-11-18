@@ -765,9 +765,17 @@ public sealed partial class WaypointWorker
         var now = _clock();
         if (!BedtimeSchedule.IsQuiet(now))
         {
-            foreach (var (title, text, tone, toBudget) in _database.TakeHeldNotices())
+            foreach (var notice in _database.GetHeldNotices())
             {
-                _ = NotifyAsync(title, text, tone, toBudget);
+                lock (_heldSending)
+                {
+                    if (!_heldSending.Add(notice.Id))
+                    {
+                        continue;
+                    }
+                }
+
+                _ = SendHeldNoticeAsync(notice);
             }
         }
 
@@ -797,6 +805,39 @@ public sealed partial class WaypointWorker
         var stepName = BedtimeRoutine.StepName(reminder.Task, BedtimeSchedule.Settings);
         _ = NotifyAsync(headline, held.Line is { } line ? $"{details}\n{line}" : details, bedtimeButton: button, actions: held.Actions, saveSpot: BedtimeRoutine.OffersSaveSpot(reminder, spotSaved), bedtimeLabel: stepName is null ? null : DoneLabel(stepName));
         _host.Changed();
+    }
+
+    /// <summary>Held notices going out now, so a slow send isn't started again on the next round.</summary>
+    private readonly HashSet<long> _heldSending = [];
+
+    /// <summary>
+    /// A held notice is kept until it's gone out, and noted before it's sent, so a crash partway sends it once:
+    /// never lost, and never twice. It's let go in the same write that notes it's done.
+    /// </summary>
+    private async Task SendHeldNoticeAsync(HeldNotice notice)
+    {
+        var key = $"held:{notice.Id}";
+        try
+        {
+            await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key);
+            _database.InOneWrite(() =>
+            {
+                _database.DropHeldNotice(notice.Id);
+                _database.FinishDiscordSend(key);
+                return 0;
+            });
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _logError(exception);
+        }
+        finally
+        {
+            lock (_heldSending)
+            {
+                _heldSending.Remove(notice.Id);
+            }
+        }
     }
 
     private void CheckSessionPrompt()
@@ -1385,7 +1426,11 @@ public sealed partial class WaypointWorker
         SendNoticeAsync(title, text, tone, toBudgetChannel, canWait, bedtimeButton, actions, toCaptureChannel, saveSpot, feedback, bedtimeLabel);
 
     /// <summary>The same, handing back the Discord message's ID when it went to Discord, so the card can be found again.</summary>
-    private async Task<string?> SendNoticeAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null)
+    /// <param name="sendKey">
+    /// For a notice that must go out once, such as a held one: it's noted under this key before it's sent and sent with
+    /// Discord's nonce, so a try before that went through is found instead of sent again. The caller lets the note go.
+    /// </param>
+    private async Task<string?> SendNoticeAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null, string? sendKey = null)
     {
         if (canWait && BedtimeSchedule.IsQuiet(_clock()))
         {
@@ -1408,15 +1453,32 @@ public sealed partial class WaypointWorker
 
         var card = DiscordText.Notice(title, text, tone) with { BedtimeButton = bedtimeButton, BedtimeLabel = bedtimeLabel, Actions = actions ?? [], SaveSpot = saveSpot, FeedbackFeature = feedback };
         string? id = null;
-        var sent = await AlertRetry.RunAsync(
+        var send = sendKey is null ? null : _database.BeginDiscordSend(sendKey, discord.AlertsChannelFor(toBudgetChannel), _clock());
+        if (send is { MessageId: { } before })
+        {
+            id = before;
+        }
+        else if (send is { Fresh: false, Channel: { } channel })
+        {
+            id = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card)).MessageId;
+        }
+
+        var sent = id is not null || await AlertRetry.RunAsync(
             async () =>
             {
-                var delivery = toCaptureChannel ? await discord.DeliverToCaptureAsync(card) : await discord.DeliverAsync(card, toBudgetChannel);
+                var delivery = send is not null ? await discord.DeliverOnceAsync(send.Channel, card, send.Nonce)
+                    : toCaptureChannel ? await discord.DeliverToCaptureAsync(card)
+                    : await discord.DeliverAsync(card, toBudgetChannel);
                 id = delivery.MessageId;
                 return delivery.Sent;
             },
             RetryWait);
         DiscordHealth.Sent(sent, _clock());
+        if (sent && send is not null && id is not null)
+        {
+            _database.SetDiscordSendMessage(send.Key, id);
+        }
+
         if (!sent)
         {
             _host.ShowNotice(title, text);

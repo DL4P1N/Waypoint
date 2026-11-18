@@ -144,6 +144,31 @@ public sealed partial class DiscordPhoneTests
         AssertEachViewMadeOnce();
     }
 
+    [Fact]
+    public async Task A_held_notice_sent_just_before_a_crash_goes_out_once_and_is_never_lost()
+    {
+        _database.HoldNotice("Made up deposit", "Added: $12.00", CardTone.Money, false);
+
+        // It goes out and is noted, then Waypoint stops before it's let go.
+        FailPartway("BEFORE DELETE ON held_notices");
+        var first = Worker(toDo: null, lists: null);
+        first.CheckAlerts();
+        await Until(() => _database.GetDiscordSends("held:").SingleOrDefault()?.MessageId is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+        Assert.Single(_database.GetHeldNotices());
+
+        var second = Worker(toDo: null, lists: null);
+        second.CheckAlerts();
+        await Until(() => _database.GetHeldNotices().Count == 0);
+        second.CheckAlerts();
+        await Task.Delay(50);
+
+        Assert.Single(CardsAbout("Made up deposit"));
+        Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up deposit"));
+        Assert.Empty(_database.GetDiscordSends("held:"));
+    }
+
     /// <summary>The messages Discord made in the views channel, by their title.</summary>
     private List<string> ViewsMade()
     {

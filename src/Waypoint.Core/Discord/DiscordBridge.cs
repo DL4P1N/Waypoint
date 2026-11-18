@@ -298,10 +298,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
     /// <summary>
     /// One try at a post noted beforehand, carrying that note's nonce, so trying again soon after never makes a second.
-    /// Null for the channel goes to alerts.
+    /// Without a channel there's nowhere to send it, which counts as sent, the same as for any alert.
     /// </summary>
     public Task<DiscordDelivery> DeliverOnceAsync(string? channel, DiscordCard card, string nonce) =>
-        TrySendAsync(channel ?? settings.AlertsChannelId, card, nonce: nonce);
+        TrySendAsync(channel, card, nonce: nonce);
 
     /// <summary>Where alerts go, or with <paramref name="toBudgetChannel"/>, where budget alerts go.</summary>
     public string? AlertsChannelFor(bool toBudgetChannel = false) => toBudgetChannel ? settings.BudgetChannelId : settings.AlertsChannelId;
