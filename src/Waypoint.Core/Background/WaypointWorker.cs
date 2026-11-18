@@ -833,7 +833,20 @@ public sealed partial class WaypointWorker
     {
         lock (_heldSending)
         {
-            return _database.GetHeldNotices().Where(notice => _heldSending.Add(notice.Id)).ToList();
+            var held = _database.GetHeldNotices();
+
+            // A note is let go in the same write as its notice, so one left without its notice is stale, and a later
+            // notice given the same id would otherwise take its message and never go out.
+            var keys = held.Select(notice => HeldSendKey(notice.Id)).ToHashSet(StringComparer.Ordinal);
+            foreach (var send in _database.GetDiscordSends("held:"))
+            {
+                if (!keys.Contains(send.Key))
+                {
+                    _database.FinishDiscordSend(send.Key);
+                }
+            }
+
+            return held.Where(notice => _heldSending.Add(notice.Id)).ToList();
         }
     }
 
@@ -841,9 +854,11 @@ public sealed partial class WaypointWorker
     /// A held notice is kept until it's gone out, and noted before it's sent, so a crash partway sends it once:
     /// never lost, and never twice. It's let go in the same write that notes it's done.
     /// </summary>
+    private static string HeldSendKey(long id) => $"held:{id}";
+
     private async Task SendHeldNoticeAsync(HeldNotice notice)
     {
-        var key = $"held:{notice.Id}";
+        var key = HeldSendKey(notice.Id);
         try
         {
             await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key);

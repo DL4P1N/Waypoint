@@ -215,9 +215,10 @@ public sealed partial class WaypointDatabase : IBedtimeLog
             }
         }
 
+        // Their send notes go too, so a notice held later under one of the same ids isn't taken for one already sent.
         using (var clear = connection.CreateCommand())
         {
-            clear.CommandText = "DELETE FROM held_notices";
+            clear.CommandText = "DELETE FROM held_notices; DELETE FROM discord_sends WHERE substr(send_key, 1, 5) = 'held:';";
             clear.ExecuteNonQuery();
         }
 

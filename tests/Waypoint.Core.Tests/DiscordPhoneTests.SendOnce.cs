@@ -221,6 +221,31 @@ public sealed partial class DiscordPhoneTests
         Assert.Empty(_database.GetDiscordSends("held:"));
     }
 
+    [Fact]
+    public async Task A_held_notice_given_the_id_of_one_whose_note_was_left_behind_still_goes_out()
+    {
+        _database.HoldNotice("Made up first deposit", "Added: $3.00", CardTone.Money, false);
+        FailPartway("BEFORE DELETE ON held_notices");
+        var first = Worker(toDo: null, lists: null);
+        first.CheckAlerts();
+        await Until(() => _database.GetDiscordSends("held:").SingleOrDefault()?.MessageId is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+
+        // The held notice goes some other way, and the next one held takes its id.
+        var gone = Assert.Single(_database.GetHeldNotices());
+        _database.TakeHeldNotices();
+        _database.HoldNotice("Made up second deposit", "Added: $4.00", CardTone.Money, false);
+        Assert.Equal(gone.Id, Assert.Single(_database.GetHeldNotices()).Id);
+
+        var second = Worker(toDo: null, lists: null);
+        second.CheckAlerts();
+        await Until(() => _database.GetHeldNotices().Count == 0);
+
+        Assert.Single(CardsAbout("Made up second deposit"));
+        Assert.Empty(_database.GetDiscordSends("held:"));
+    }
+
     /// <summary>The messages Discord made in the views channel, by their title.</summary>
     private List<string> ViewsMade()
     {
