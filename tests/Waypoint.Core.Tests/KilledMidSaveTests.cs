@@ -26,6 +26,12 @@ public sealed class KilledMidSaveTests : IDisposable
     private readonly string _path;
     private WaypointDatabase _database;
 
+    /// <summary>
+    /// Kept open from <see cref="Before"/> until the log is read. Other tests clear the shared pool at any moment, and
+    /// if that closed the last connection SQLite would copy the log into the main file and empty it mid-test.
+    /// </summary>
+    private SqliteConnection? _holder;
+
     public KilledMidSaveTests()
     {
         Directory.CreateDirectory(_folder);
@@ -45,6 +51,7 @@ public sealed class KilledMidSaveTests : IDisposable
 
     public void Dispose()
     {
+        _holder?.Dispose();
         for (var attempt = 0; ; attempt++)
         {
             SqliteConnection.ClearAllPools();
@@ -128,7 +135,7 @@ public sealed class KilledMidSaveTests : IDisposable
 
         var before = Before("captures");
         await new CaptureService(_database, new Sorts(result)).ProcessPendingAsync();
-        var wal = ReadShared(_path + "-wal");
+        var wal = ReadWal(before);
         var frame = FrameHeader + BinaryPrimitives.ReadInt32BigEndian(wal.AsSpan(8, 4));
         var frames = (wal.Length - WalHeader) / frame;
 
@@ -218,14 +225,32 @@ public sealed class KilledMidSaveTests : IDisposable
         SqliteConnection.ClearAllPools();
         var before = Path.Combine(_folder, "before.db");
         File.Copy(_path, before);
+        _holder = new SqliteConnection($"Data Source={_path};Pooling=False");
+        _holder.Open();
+        using (var command = _holder.CreateCommand())
+        {
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master";
+            command.ExecuteScalar();
+        }
+
         _database = new WaypointDatabase(_path);
         return new Saved(before, tables, Read(_path, tables));
+    }
+
+    /// <summary>The log the workflow wrote, read while the main file is still as it was before, then let go.</summary>
+    private byte[] ReadWal(Saved saved)
+    {
+        var wal = ReadShared(_path + "-wal");
+        Assert.True(File.ReadAllBytes(saved.File).AsSpan().SequenceEqual(ReadShared(_path)), "The log was copied into the main file during the test.");
+        _holder?.Dispose();
+        _holder = null;
+        return wal;
     }
 
     private void AfterEveryPoint(Saved saved)
     {
         var (before, tables, old) = saved;
-        var wal = ReadShared(_path + "-wal");
+        var wal = ReadWal(saved);
         var now = Read(_path, tables);
         Assert.NotEqual(old, now);
         Assert.True(wal.Length > WalHeader, "The workflow wrote nothing to the log.");
