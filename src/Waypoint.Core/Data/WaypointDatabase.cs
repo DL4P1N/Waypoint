@@ -1596,9 +1596,9 @@ public sealed partial class WaypointDatabase
     /// </summary>
     internal SqliteConnection Open()
     {
-        if (_oneWrite.Value is { } shared)
+        if (_oneWrite.Value is { Over: false } shared)
         {
-            return new SharedConnection(shared);
+            return new SharedConnection(shared.Join());
         }
 
         var connection = new SqliteConnection(_connectionString);

@@ -10,7 +10,27 @@ namespace Waypoint.Core.Data;
 /// </summary>
 public sealed partial class WaypointDatabase
 {
-    private readonly AsyncLocal<(SqliteConnection Connection, SqliteTransaction Transaction)?> _oneWrite = new();
+    private readonly AsyncLocal<OneWrite?> _oneWrite = new();
+
+    /// <summary>
+    /// The write running on this flow, and the thread that began it. Work handed to another thread carries it along,
+    /// so <see cref="Open"/> refuses that loudly while the write runs instead of sharing its connection. Once it's
+    /// over, anything still carrying it opens a connection of its own as usual.
+    /// </summary>
+    private sealed class OneWrite(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        public (SqliteConnection Connection, SqliteTransaction Transaction) Shared { get; } = (connection, transaction);
+
+        public int Thread { get; } = Environment.CurrentManagedThreadId;
+
+        /// <summary>Set once the write has landed or been let go. Read from other threads, so always read fresh.</summary>
+        public volatile bool Over;
+
+        public (SqliteConnection Connection, SqliteTransaction Transaction) Join() =>
+            Thread != Environment.CurrentManagedThreadId
+                ? throw new InvalidOperationException("A single write was used from a thread other than the one that began it.")
+                : Shared;
+    }
 
     /// <summary>
     /// Runs <paramref name="work"/> as a single write. It all lands when the work returns, and none of it lands when
@@ -19,24 +39,28 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public T InOneWrite<T>(Func<T> work)
     {
-        if (_oneWrite.Value is not null)
+        if (_oneWrite.Value is { Over: false } running)
         {
+            running.Join();
             return work();
         }
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        _oneWrite.Value = (connection, transaction);
+        var write = new OneWrite(connection, transaction);
+        _oneWrite.Value = write;
         try
         {
             var result = work();
             _oneWrite.Value = null;
+            write.Over = true;
             transaction.Commit();
             return result;
         }
         finally
         {
             _oneWrite.Value = null;
+            write.Over = true;
         }
     }
 

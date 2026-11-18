@@ -92,4 +92,39 @@ public sealed class OneWriteTests : IDisposable
         Assert.Null(outside);
         Assert.Equal("1", _database.GetPreference("made_up_one"));
     }
+
+    [Fact]
+    public void A_database_call_handed_to_another_thread_inside_one_write_fails_loudly_instead_of_sharing_it()
+    {
+        Exception? handedOff = null;
+        _database.InOneWrite(() =>
+        {
+            _database.SetPreference("made_up_one", "1");
+            handedOff = Record.Exception(() => Task.Factory.StartNew(() => _database.GetPreference("made_up_one"), TaskCreationOptions.LongRunning).GetAwaiter().GetResult());
+            return 0;
+        });
+
+        Assert.IsType<InvalidOperationException>(handedOff);
+        Assert.Equal("1", _database.GetPreference("made_up_one"));
+    }
+
+    [Fact]
+    public async Task Work_still_running_after_one_write_is_over_opens_a_connection_of_its_own()
+    {
+        var go = new TaskCompletionSource();
+        Task<string?>? later = null;
+        _database.InOneWrite(() =>
+        {
+            _database.SetPreference("made_up_one", "1");
+            later = Task.Run(async () =>
+            {
+                await go.Task;
+                return _database.GetPreference("made_up_one");
+            });
+            return 0;
+        });
+
+        go.SetResult();
+        Assert.Equal("1", await later!);
+    }
 }
