@@ -103,6 +103,24 @@ public sealed class ApiTests : IDisposable
         Assert.Equal("""{"status":"ok"}""", await response.Content.ReadAsStringAsync());
     }
 
+    [Fact]
+    public async Task Health_warns_while_plain_http_is_allowed_outside_this_machine_and_tailscale()
+    {
+        using var exposed = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.Configure<ServerOptions>(options =>
+            {
+                options.Listen = "http://192.168.1.20:5280";
+                options.AllowPublicHttp = true;
+            })));
+
+        var response = await exposed.CreateClient().GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal("ok", body.GetProperty("status").GetString());
+        Assert.Contains("Waypoint__AllowPublicHttp", body.GetProperty("warning").GetString());
+    }
+
     [Theory]
     [InlineData("/api/status")]
     [InlineData("/api/items/open")]
