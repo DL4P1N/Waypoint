@@ -36,6 +36,21 @@ public sealed class ServerNotesClickTests
 
         public ManualResetEventSlim ChangeArrived { get; } = new();
 
+        /// <summary>While unset, reads of the lists wait for it.</summary>
+        public ManualResetEventSlim ReleaseListReads { get; } = new(initialState: true);
+
+        /// <summary>Set once a read of the lists has arrived.</summary>
+        public ManualResetEventSlim ListReadArrived { get; } = new();
+
+        /// <summary>Something added to Shopping from another PC.</summary>
+        public void AddElsewhere(ListEntry entry)
+        {
+            lock (_gate)
+            {
+                _entries.Add(entry);
+            }
+        }
+
         /// <summary>A class is on, so a new note started from All goes in its folder, titled with it.</summary>
         public bool ClassOn { get; set; }
 
@@ -151,6 +166,12 @@ public sealed class ServerNotesClickTests
                 }
             }
 
+            if (request.Method == HttpMethod.Get && path == "/api/lists")
+            {
+                ListReadArrived.Set();
+                await Task.Run(() => ReleaseListReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+            }
+
             if (request.Method == HttpMethod.Get && path is "/api/notes/7" or "/api/notes/8")
             {
                 await Task.Run(() => ReleaseReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
@@ -173,12 +194,12 @@ public sealed class ServerNotesClickTests
         body.CaretIndex = body.Text.Length;
     }
 
-    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, NotesServer server)
+    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, NotesServer server, bool withLists = false)
     {
         var client = Client(server);
         var work = new PageWork(client);
         var view = new NotesView { Work = work };
-        view.Connect(new ServerNotesData(client));
+        view.Connect(new ServerNotesData(client), withLists ? new ServerListsData(client) : null);
         ui.Host(view);
         work.Show(() => view.Refresh(force: true));
         var body = UiTest.Named<MarkdownBox>(view, "BodyBox");
@@ -287,6 +308,35 @@ public sealed class ServerNotesClickTests
         {
             System.IO.File.Delete(file);
         }
+    });
+
+    [Fact]
+    public void Find_anywhere_jumping_to_a_list_entry_returns_at_once_and_shows_the_entry_once_read() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, _, client) = OpenNotes(ui, server, withLists: true);
+
+        // Added from another PC, so it isn't in what was kept, and the lists have to be read again to show it.
+        var chia = new ListEntry(3, "Shopping", "chia seeds", false, new DateTime(2030, 4, 2, 9, 0, 0));
+        server.AddElsewhere(chia);
+        client.Send(HttpMethod.Post, "api/elsewhere");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the page to settle");
+        server.ListReadArrived.Reset();
+        server.ReleaseListReads.Reset();
+
+        view.RevealListEntry(chia);
+
+        // It came back while the server still held the read.
+        Assert.True(server.ListReadArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(work.IsBusy);
+        var lists = UiTest.Named<ListsView>(view, "ListsPanel");
+        var entries = UiTest.Named<ItemsControl>(lists, "Entries");
+        bool Shown() => entries.Items.Cast<object>().Any(row => UiTest.Prop<ListEntry>(row, "Entry")!.Id == chia.Id);
+        Assert.False(Shown());
+
+        server.ReleaseListReads.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Shown(), "the entry");
+        Assert.Equal("Shopping", lists.Selected);
     });
 
     [Fact]

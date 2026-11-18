@@ -184,7 +184,7 @@ public partial class NotesView : UserControl
             }
             else
             {
-                ShowList(force: true);
+                Work.Show(() => ShowList(force: true), () => ShowList());
             }
         };
         Column.AddChosen += OnAddChosen;
