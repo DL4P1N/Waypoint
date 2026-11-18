@@ -321,6 +321,27 @@ public sealed class DiscordInboxTests : IDisposable
     }
 
     [Fact]
+    public async Task A_typed_done_handed_over_again_never_finishes_a_reminder_sent_after_it_was_typed()
+    {
+        var older = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up older", null), _now).Item!;
+        var newer = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up newer", null), _now).Item!;
+        _database.TrackSentReminder("100", older.Id);
+        var bridge = Bridge();
+        bridge.AlertActed = action => _database.ApplyAlertAction(action, _now, 15);
+
+        // Typed as message 150 under no card. The older card is answered, then a newer one goes out at 200.
+        await bridge.ActOnAlertAsync(new AlertAction("100", AlertActionKind.Done));
+        _database.TrackSentReminder("200", newer.Id);
+        Assert.True(_database.ClaimDiscordMessage("150", "alerts", _now, DiscordBridge.UnfinishedAfter));
+
+        await bridge.ActOnAlertAsync(new AlertAction(null, AlertActionKind.Done, "150"));
+        Assert.Null(_database.ApplyAlertAction(new AlertAction(null, AlertActionKind.Done, "151"), _now, 15));
+
+        Assert.Equal(["Made up newer"], _database.GetOpenItems().Select(item => item.Title));
+        Assert.True(_database.IsDiscordMessageFinished("150"));
+    }
+
+    [Fact]
     public void Messages_seen_before_the_upgrade_still_count_as_done()
     {
         _database.SetPreference("discord_seen", "made-up-1 made-up-2");

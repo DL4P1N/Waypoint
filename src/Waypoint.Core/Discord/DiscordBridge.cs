@@ -508,7 +508,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     public async Task ActOnAlertAsync(AlertAction action)
     {
         // An answer with no card in mind is about the newest reminder, so that's the card that turns gray.
-        if (action.MessageId is null && database.LatestSentReminderMessage() is { } latest)
+        if (action.MessageId is null && database.LatestSentReminderMessage(action.SentAs) is { } latest)
         {
             action = action with { MessageId = latest };
         }

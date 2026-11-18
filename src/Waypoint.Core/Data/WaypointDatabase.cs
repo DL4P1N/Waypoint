@@ -554,13 +554,16 @@ public sealed partial class WaypointDatabase
         long itemId = 0;
         DateOnly? dueOn = null;
 
+        // Without a message, this means the most recent reminder, and for a typed answer one sent before it.
+        if ((action.MessageId ?? LatestSentReminder(connection, action.SentAs)) is not { } target)
+        {
+            return null;
+        }
+
         using (var find = connection.CreateCommand())
         {
-            // Without a message, this means the most recent reminder.
-            find.CommandText = action.MessageId is null
-                ? "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 ORDER BY rowid DESC LIMIT 1"
-                : "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
-            find.Parameters.AddWithValue("$message", (object?)action.MessageId ?? DBNull.Value);
+            find.CommandText = "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
+            find.Parameters.AddWithValue("$message", target);
             using var reader = find.ExecuteReader();
             if (reader.Read())
             {
