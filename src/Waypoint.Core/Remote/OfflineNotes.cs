@@ -51,11 +51,10 @@ public sealed class OfflineNotes(string path)
 
     public const string UnsavedCopyName = "Notes not saved on the server.txt";
 
-    private readonly List<string> _setAside = [];
-
     /// <summary>
-    /// The files of notes found damaged and set aside since the app started, so the person can be told. What was in
-    /// them was never sent, so they're named in the unsaved copy too.
+    /// The files of notes found damaged and set aside, then or before a restart, that haven't been opened or had their
+    /// notice closed, so the person can be told. What was in them was never sent, so they're named in the unsaved copy
+    /// too.
     /// </summary>
     public IReadOnlyList<string> SetAsideFiles
     {
@@ -66,10 +65,14 @@ public sealed class OfflineNotes(string path)
                 // Read first, so a damaged file is found even before the Notes page is opened.
                 Read();
                 ReadUnsaved();
-                return _setAside.ToList();
             }
+
+            return KeptCopy.SetAsideOf([path, UnsavedPath], seen: false);
         }
     }
+
+    /// <summary>Opened or closed: the files set aside so far aren't told about again. One set aside later is.</summary>
+    public void MarkSetAsideSeen() => KeptCopy.MarkSeen(SetAsideFiles);
 
     /// <summary>What to show while any file of notes was found damaged and set aside. Null when none was.</summary>
     public string? Unreadable => SetAsideFiles switch
@@ -86,12 +89,13 @@ public sealed class OfflineNotes(string path)
     public string? WriteUnsavedCopy()
     {
         List<UnsavedNote> unsaved;
-        List<string> aside;
         lock (_gate)
         {
             unsaved = ReadUnsaved();
-            aside = _setAside.ToList();
         }
+
+        // Every one still on this PC, opened before or not, so the copy shows all that's kept.
+        var aside = KeptCopy.SetAsideOf([path, UnsavedPath]);
 
         return unsaved.Count == 0 && aside.Count == 0
             ? null
@@ -313,14 +317,14 @@ public sealed class OfflineNotes(string path)
         }
         catch (JsonException)
         {
-            _setAside.Add(KeptCopy.SetAside(file));
+            KeptCopy.SetAside(file);
             return [];
         }
 
         var good = entries.Where(whole).Select(entry => entry!).ToList();
         if (good.Count != entries.Count)
         {
-            _setAside.Add(KeptCopy.SetAside(file));
+            KeptCopy.SetAside(file);
             if (good.Count > 0)
             {
                 keep(good);

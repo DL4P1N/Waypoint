@@ -212,4 +212,64 @@ public sealed class DamagedOfflineFilesTests : IDisposable
         // A queue whose files are fine says nothing.
         Assert.Null(new CaptureQueue(Path.Combine(_folder, "other-queue.json")).Refused);
     }
+
+    [Fact]
+    public void Damaged_notes_are_told_about_again_after_a_restart_until_the_notice_is_dismissed()
+    {
+        File.WriteAllText(NotesFile, """[{"id":-638000000000000000,"title":"Made up packing","body":"socks and a lan""");
+        var told = Notes().Unreadable;
+        Assert.NotNull(told);
+
+        // Started again: the file read now is fine, but the one set aside is still told about.
+        Assert.Equal(told, Notes().Unreadable);
+
+        var notes = Notes();
+        notes.MarkSetAsideSeen();
+        Assert.Null(notes.Unreadable);
+        Assert.Null(Notes().Unreadable);
+
+        // The file itself stays, and the copy that Open shows still has it.
+        var aside = Assert.Single(SetAside(NotesFile));
+        Assert.Contains(aside, File.ReadAllText(Notes().WriteUnsavedCopy()!));
+
+        // Another one found damaged later is told about, by itself.
+        File.WriteAllText(NotesFile, "not notes at all");
+        var later = Notes().Unreadable;
+        var newer = Assert.Single(SetAside(NotesFile), file => file != aside);
+        Assert.Equal(
+            $"Some notes typed while the server was away couldn't be read, so they weren't saved on the server. They're kept on this PC in {Path.GetFileName(newer)}.",
+            later);
+    }
+
+    [Fact]
+    public void Damaged_captures_are_told_about_again_after_a_restart_until_the_notice_is_dismissed()
+    {
+        File.WriteAllText(QueueFile, """[{"id":"made-up","text":"call a made up plum""");
+        var told = new CaptureQueue(QueueFile).Refused;
+        Assert.NotNull(told);
+        Assert.Equal(told, new CaptureQueue(QueueFile).Refused);
+
+        new CaptureQueue(QueueFile).MarkSetAsideSeen();
+        var restarted = new CaptureQueue(QueueFile);
+        Assert.Null(restarted.Refused);
+        Assert.Empty(restarted.SetAsideFiles);
+        Assert.Contains("call a made up plum", File.ReadAllText(restarted.WriteRefusedCopy()!));
+    }
+
+    [Fact]
+    public void A_dismissal_is_kept_per_file_and_a_damaged_list_of_them_only_tells_again()
+    {
+        File.WriteAllText(QueueFile, "[{");
+        var queue = new CaptureQueue(QueueFile);
+        var first = Assert.Single(queue.SetAsideFiles);
+        queue.MarkSetAsideSeen();
+
+        // A file set aside from the notes beside it is its own, and still told about.
+        File.WriteAllText(NotesFile, "[{");
+        Assert.NotNull(Notes().Unreadable);
+        Assert.Null(new CaptureQueue(QueueFile).Refused);
+
+        File.WriteAllText(Path.Combine(_folder, KeptCopy.SeenName), "{ not a list");
+        Assert.Equal([first], new CaptureQueue(QueueFile).SetAsideFiles);
+    }
 }

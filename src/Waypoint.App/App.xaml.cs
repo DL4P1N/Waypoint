@@ -1367,13 +1367,15 @@ public partial class App : System.Windows.Application
     /// Opens a plain text copy of what the server couldn't save, in the PC's text editor, so it can be copied back
     /// in. The kept file stays as it is, so opening it never loses anything.
     /// </summary>
-    private void OpenKept(Func<string?> write)
+    /// <returns>Whether it opened.</returns>
+    private bool OpenKept(Func<string?> write)
     {
         try
         {
             if (write() is { } copy)
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(copy) { UseShellExecute = true });
+                return true;
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -1381,6 +1383,28 @@ public partial class App : System.Windows.Application
             _itemsWindow.ShowReply($"Couldn't open what's kept on this PC. {exception.Message}");
             _itemsWindow.ShowList();
         }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Files found damaged and set aside are told about on the status line, after a restart too, until they're opened
+    /// or the notice is dismissed. Each file is remembered by name, so one set aside later is told about again.
+    /// </summary>
+    private void SetAsideSeen(ServerConnection server)
+    {
+        try
+        {
+            server.Queue.MarkSetAsideSeen();
+            server.Notes.MarkSetAsideSeen();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Not remembered, so the notice comes back next time, which loses nothing.
+            LogError(exception);
+        }
+
+        RefreshStatus();
     }
 
     /// <summary>The same as a local reply, with notifications assumed to go out from the server through Discord.</summary>
@@ -1488,6 +1512,7 @@ public partial class App : System.Windows.Application
         // Anything typed here that the server turned down, or that was found damaged, is told with a way to open it.
         var refused = server.Queue.Refused;
         var unreadable = server.Notes.Unreadable;
+        var setAside = unreadable is not null || server.Queue.SetAsideFiles.Count > 0;
 
         _tray!.Text = Trial.TrayTip(text, MaxTrayTextLength);
         ApplyTheme();
@@ -1504,16 +1529,18 @@ public partial class App : System.Windows.Application
                 string.Join("\n", new[] { problem, refused, unreadable }.OfType<string>()) is { Length: > 0 } notice ? notice : null,
                 refused is null && unreadable is null ? null : () =>
                 {
-                    if (refused is not null)
-                    {
-                        OpenKept(server.Queue.WriteRefusedCopy);
-                    }
-
+                    var opened = refused is null || OpenKept(server.Queue.WriteRefusedCopy);
                     if (unreadable is not null)
                     {
-                        OpenKept(server.Notes.WriteUnsavedCopy);
+                        opened &= OpenKept(server.Notes.WriteUnsavedCopy);
                     }
-                });
+
+                    if (opened && setAside)
+                    {
+                        SetAsideSeen(server);
+                    }
+                },
+                setAside ? () => SetAsideSeen(server) : null);
         }
         catch (ServerUnavailableException)
         {

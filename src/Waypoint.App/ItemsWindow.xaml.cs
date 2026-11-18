@@ -41,6 +41,7 @@ public partial class ItemsWindow : Window
     private bool _choosingPage;
     private bool _draftsDiscarded;
     private Action? _openKept;
+    private Action? _dismissKept;
     private string? _noticeKey;
     private string? _choice;
     private string? _dismissedNotice;
@@ -712,6 +713,8 @@ public partial class ItemsWindow : Window
 
     private void OnStatusOpenClicked(object sender, RoutedEventArgs e) => _openKept?.Invoke();
 
+    private void OnStatusDismissClicked(object sender, RoutedEventArgs e) => _dismissKept?.Invoke();
+
     private void OnChatLinkClicked(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is ChatLink link)
@@ -736,10 +739,12 @@ public partial class ItemsWindow : Window
     }
 
     /// <param name="openKept">Shows what the server couldn't save, when there's any, through an Open link beside the status.</param>
-    public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null)
+    public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null, Action? dismissKept = null)
     {
         _openKept = openKept;
+        _dismissKept = dismissKept;
         StatusOpen.Visibility = openKept is null ? Visibility.Collapsed : Visibility.Visible;
+        StatusDismiss.Visibility = dismissKept is null ? Visibility.Collapsed : Visibility.Visible;
         TodayLabel.Text = DateTime.Now.ToString("dddd, MMMM d", CultureInfo.InvariantCulture);
         ShowNextClass(nextClass);
         _tonight = tonight;
