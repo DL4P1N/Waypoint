@@ -14,7 +14,7 @@ using Waypoint.Core.Notes;
 namespace Waypoint.Core.Tests;
 
 /// <summary>Notes and lists as forum posts, against a fake Discord that keeps forums, posts, and their messages.</summary>
-public sealed class DiscordThreadTests : IDisposable
+public sealed partial class DiscordThreadTests : IDisposable
 {
     private static readonly DateTime Morning = new(2026, 11, 15, 10, 0, 0);
     private const string NotesForum = "500000000000000001";
