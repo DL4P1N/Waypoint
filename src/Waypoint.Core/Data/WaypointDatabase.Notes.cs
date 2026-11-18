@@ -35,10 +35,18 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long CreateNote(string title, string body, DateTime now, long? folderId = null)
     {
-        var name = NoteTitle(title, body);
-        var captureId = AddHandTyped(name, now);
-
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var id = CreateNote(connection, title, body, now, folderId);
+        transaction.Commit();
+        return id;
+    }
+
+    /// <summary>The capture, the note, its text, and its folder, in the caller's write, so a note is never left half made.</summary>
+    private static long CreateNote(SqliteConnection connection, string title, string body, DateTime now, long? folderId)
+    {
+        var name = NoteTitle(title, body);
+        var captureId = InsertHandTyped(connection, name, now);
         var id = InsertItem(connection, captureId, new SortedItem(ItemKind.Note, name, null, null), null, null);
         WriteNote(connection, id, name, body, now);
         if (folderId is { } folder && FolderExists(connection, folder))
@@ -64,29 +72,36 @@ public sealed partial class WaypointDatabase
     {
         lock (_sentOnce)
         {
-            using (var connection = Open())
+            // The note and the id it was sent under are one write, so a failure between can't make it twice.
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            using (var find = connection.CreateCommand())
             {
-                using var find = connection.CreateCommand();
-                find.CommandText = "SELECT id FROM items WHERE client_id = $client";
+                find.CommandText = "SELECT id FROM items WHERE client_id = $client AND kind = 'Note' AND canceled = 0";
                 find.Parameters.AddWithValue("$client", clientId);
-                if (find.ExecuteScalar() is long made && GetNote(made) is not null)
+                if (find.ExecuteScalar() is long made)
                 {
                     return made;
                 }
+            }
 
-                using var forget = connection.CreateCommand();
+            using (var forget = connection.CreateCommand())
+            {
                 forget.CommandText = "UPDATE items SET client_id = NULL WHERE client_id = $client";
                 forget.Parameters.AddWithValue("$client", clientId);
                 forget.ExecuteNonQuery();
             }
 
-            var id = CreateNote(title, body, now, folderId);
-            using var marking = Open();
-            using var mark = marking.CreateCommand();
-            mark.CommandText = "UPDATE items SET client_id = $client WHERE id = $id";
-            mark.Parameters.AddWithValue("$client", clientId);
-            mark.Parameters.AddWithValue("$id", id);
-            mark.ExecuteNonQuery();
+            var id = CreateNote(connection, title, body, now, folderId);
+            using (var mark = connection.CreateCommand())
+            {
+                mark.CommandText = "UPDATE items SET client_id = $client WHERE id = $id";
+                mark.Parameters.AddWithValue("$client", clientId);
+                mark.Parameters.AddWithValue("$id", id);
+                mark.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
             return id;
         }
     }
@@ -102,16 +117,21 @@ public sealed partial class WaypointDatabase
     public void DeleteNote(long id, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         if (FindItem(connection, ItemSource.Capture, id) is { Kind: ItemKind.Note, Done: false } note)
         {
             CancelItem(connection, note, now);
         }
+
+        transaction.Commit();
     }
 
     public void RestoreNote(long id, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         RestoreItem(connection, id, now);
+        transaction.Commit();
     }
 
     private static string NoteTitle(string title, string body)

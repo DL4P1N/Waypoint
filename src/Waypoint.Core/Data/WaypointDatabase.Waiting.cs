@@ -41,7 +41,9 @@ public sealed partial class WaypointDatabase
             return new OpReply("Who are you waiting on?", true);
         }
 
+        // The task, the wait, and its nudge are one write, so a failure partway can't leave a task that waits on no one.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var item = ItemRef.TryParse(itemRef, out var source, out var id) && source == ItemSource.Capture
             ? FindItem(connection, ItemSource.Capture, id)
             : null;
@@ -49,7 +51,7 @@ public sealed partial class WaypointDatabase
         if (!listed)
         {
             var newTitle = string.IsNullOrWhiteSpace(title) ? WaitingOn.TitleFor(name, null) : title.Trim();
-            var itemId = InsertItem(connection, captureId ?? AddHandTyped(newTitle, now), new SortedItem(ItemKind.Task, newTitle, null, null), null, null);
+            var itemId = InsertItem(connection, captureId ?? InsertHandTyped(connection, newTitle, now), new SortedItem(ItemKind.Task, newTitle, null, null), null, null);
             item = FindItem(connection, ItemSource.Capture, itemId)!;
         }
 
@@ -79,6 +81,7 @@ public sealed partial class WaypointDatabase
 
         var waiting = ReadWaiting(connection, item.Id)!;
         PlanNudge(connection, waiting, new PlannedReminder(day.ToDateTime(WaitingOn.NudgeTime), WaitingOn.NudgeMessage(waiting)));
+        transaction.Commit();
         return new OpReply($"Waiting on {name}: {item.Title}. I'll check in {WaitingOn.When(day, today)}.");
     }
 
@@ -118,6 +121,7 @@ public sealed partial class WaypointDatabase
 
         var day = WaitingOn.FollowUpOr(until, today);
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "UPDATE waiting_on SET follow_up_on = $day, replied_at = NULL, reply_from = NULL, reply_subject = NULL WHERE item_id = $id";
@@ -127,6 +131,7 @@ public sealed partial class WaypointDatabase
         }
 
         PlanNudge(connection, waiting, new PlannedReminder(day.ToDateTime(WaitingOn.NudgeTime), WaitingOn.NudgeMessage(waiting)));
+        transaction.Commit();
         return new OpReply($"Still waiting on {waiting.Who}. I'll check in {WaitingOn.When(day, today)}.");
     }
 
@@ -134,6 +139,7 @@ public sealed partial class WaypointDatabase
     public bool StopWaiting(long itemId)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         if (ReadReminderId(connection, itemId) is { } reminder)
         {
             DeleteReminder(connection, itemId, reminder);
@@ -142,7 +148,9 @@ public sealed partial class WaypointDatabase
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM waiting_on WHERE item_id = $id";
         command.Parameters.AddWithValue("$id", itemId);
-        return command.ExecuteNonQuery() > 0;
+        var stopped = command.ExecuteNonQuery() > 0;
+        transaction.Commit();
+        return stopped;
     }
 
     /// <summary>Every open item that's waiting, soonest follow-up first. Finished ones are left in the table for a reopen.</summary>
@@ -197,6 +205,7 @@ public sealed partial class WaypointDatabase
         }
 
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var who = string.IsNullOrWhiteSpace(name) ? address : name.Trim();
         foreach (var waiting in answered)
         {
@@ -212,6 +221,8 @@ public sealed partial class WaypointDatabase
 
             PlanNudge(connection, waiting, new PlannedReminder(received, WaitingOn.ReplyMessage(waiting.Who, subject)));
         }
+
+        transaction.Commit();
 
         return answered.Select(waiting => waiting with { RepliedAt = received, ReplyFrom = who, ReplySubject = subject }).ToList();
     }

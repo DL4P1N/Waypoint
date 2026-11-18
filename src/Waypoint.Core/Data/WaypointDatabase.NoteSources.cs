@@ -69,6 +69,11 @@ public sealed partial class WaypointDatabase
     public long AddNoteSource(long noteId, string kind, string name, string text, DateTime now, string? filePath = null)
     {
         using var connection = Open();
+        return AddNoteSource(connection, noteId, kind, name, text, now, filePath);
+    }
+
+    private static long AddNoteSource(SqliteConnection connection, long noteId, string kind, string name, string text, DateTime now, string? filePath)
+    {
         if (!NoteExists(connection, noteId))
         {
             return 0;
@@ -237,12 +242,21 @@ public sealed partial class WaypointDatabase
             return new HandAddResult(null, "That suggestion is gone.");
         }
 
+        var course = GetNoteCourse(found.NoteId);
+
+        // The item and the suggestion's mark are one write, so a failure between can't leave it to be added twice.
+        using var write = Open();
+        using var transaction = write.BeginTransaction();
+        if (ReadSuggestions(write, null, OpenSuggestion, suggestionId).Count == 0)
+        {
+            return new HandAddResult(null, "That suggestion is gone.");
+        }
+
         var item = found.Item;
-        var added = AddByHand(new HandAddedItem(item.Kind, item.Title, item.Date, item.Time, Course: GetNoteCourse(found.NoteId)), now);
+        var added = AddByHand(write, new HandAddedItem(item.Kind, item.Title, item.Date, item.Time, Course: course), now);
         if (added.Item is { } stored)
         {
-            using var connection = Open();
-            using var command = connection.CreateCommand();
+            using var command = write.CreateCommand();
             command.CommandText = "UPDATE note_suggestions SET status = $added, item_id = $item WHERE id = $id";
             command.Parameters.AddWithValue("$added", AddedSuggestion);
             command.Parameters.AddWithValue("$item", stored.Id);
@@ -250,6 +264,7 @@ public sealed partial class WaypointDatabase
             command.ExecuteNonQuery();
         }
 
+        transaction.Commit();
         return added;
     }
 

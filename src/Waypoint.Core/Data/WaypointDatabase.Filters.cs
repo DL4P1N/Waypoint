@@ -185,6 +185,11 @@ public sealed partial class WaypointDatabase
         }
 
         using var connection = Open();
+        return AssignToFilter(connection, item, filterId);
+    }
+
+    private static bool AssignToFilter(SqliteConnection connection, StoredItem item, long? filterId)
+    {
         if (filterId is { } id && ReadFilters(connection).FirstOrDefault(filter => filter.Id == id) is not { Source: FilterSource.Custom })
         {
             return false;

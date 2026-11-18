@@ -428,29 +428,42 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>
-    /// Ties real deposits to what was expected, so the forecast doesn't count them again. Rows are matched
-    /// by date and amount, and the key on each expected date makes a repeated export change nothing.
+    /// The deposits in an export, oldest first, each with the expected pay it's nearest to. That comes from the
+    /// schedule and work hours alone, so it's worked out before the import's write opens.
     /// </summary>
-    private void ConfirmDeposits(IReadOnlyList<CheckingRow> rows)
+    private List<(CheckingRow Row, (string Label, DateOnly Due)? Expected)> PlanDeposits(IReadOnlyList<CheckingRow> rows)
     {
-        var schedule = GetSchedule();
         var deposits = rows
             .Where(row => row.Kind == CheckingKind.Other && row.Cents > 0)
             .Where(row => !IsNotPay(row.Description))
-            .OrderBy(row => row.Date);
+            .OrderBy(row => row.Date)
+            .ToList();
+        if (deposits.Count == 0)
+        {
+            return [];
+        }
 
-        using var connection = Open();
-        foreach (var row in deposits)
+        var schedule = GetSchedule();
+        return deposits
+            .Select(row => (row, IncomeNear(schedule, row.Date)
+                .Select(item => (item.Label, Due: BudgetMath.ExpectedNear(item, row.Date, row.Cents)))
+                .Where(entry => entry.Due is not null)
+                .OrderBy(entry => Math.Abs(entry.Due!.Value.DayNumber - row.Date.DayNumber))
+                .Select(entry => ((string Label, DateOnly Due)?)(entry.Label, entry.Due!.Value))
+                .FirstOrDefault()))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Ties real deposits to what was expected, so the forecast doesn't count them again. Rows are matched
+    /// by date and amount, and the key on each expected date makes a repeated export change nothing.
+    /// </summary>
+    private static void ConfirmDeposits(SqliteConnection connection, IReadOnlyList<(CheckingRow Row, (string Label, DateOnly Due)? Expected)> deposits)
+    {
+        foreach (var (row, expected) in deposits)
         {
             var typed = FindTyped(connection, row);
-            var match = typed is not null
-                ? typed
-                : IncomeNear(schedule, row.Date)
-                    .Select(item => (item.Label, Due: BudgetMath.ExpectedNear(item, row.Date, row.Cents)))
-                    .Where(entry => entry.Due is not null)
-                    .OrderBy(entry => Math.Abs(entry.Due!.Value.DayNumber - row.Date.DayNumber))
-                    .Select(entry => ((string Label, DateOnly Due, string? Key)?)(entry.Label, entry.Due!.Value, null))
-                    .FirstOrDefault();
+            var match = typed ?? (expected is { } near ? (near.Label, near.Due, null) : ((string Label, DateOnly Due, string? Key)?)null);
             if (match is not { } found || (found.Key is null && DepositKnown(connection, found.Label, found.Due)))
             {
                 continue;

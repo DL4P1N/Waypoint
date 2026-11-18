@@ -87,15 +87,16 @@ public sealed partial class WaypointDatabase
         return CanReopen(connection, entry);
     }
 
+    /// <summary>Undoes a History row. What it brings back and the row saying so are one write.</summary>
     public bool ReopenEntry(HistoryEntry entry)
     {
         using var connection = Open();
-        if (entry.Source == ItemSource.List)
-        {
-            return CanReopen(connection, entry) && ReopenListEntry(connection, entry);
-        }
-
-        return CanReopen(connection, entry) && Reopen(connection, FindItem(connection, entry.Source, entry.ItemId)!, DateTime.Now);
+        using var transaction = connection.BeginTransaction();
+        var reopened = entry.Source == ItemSource.List
+            ? CanReopen(connection, entry) && ReopenListEntry(connection, entry)
+            : CanReopen(connection, entry) && Reopen(connection, FindItem(connection, entry.Source, entry.ItemId)!, DateTime.Now);
+        transaction.Commit();
+        return reopened;
     }
 
     private static bool CanReopen(SqliteConnection connection, HistoryEntry entry) => entry.Source == ItemSource.List
@@ -129,7 +130,12 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        Execute("""
+        // The rows and the flag saying they're there are one write, so a crash between can't add them twice.
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
             INSERT INTO item_history (happened_at, action, source, item_id, kind, title, due_date)
             SELECT substr(COALESCE(i.done_at, c.created_at), 1, 19), CASE i.canceled WHEN 1 THEN 'Canceled' ELSE 'Done' END, 'Capture', i.id, i.kind, i.title, i.due_date
             FROM items i JOIN captures c ON c.id = i.capture_id
@@ -137,8 +143,12 @@ public sealed partial class WaypointDatabase
             INSERT INTO item_history (happened_at, action, source, item_id, kind, title, course, due_date)
             SELECT COALESCE(done_at, due_date || 'T00:00:00'), 'Done', 'Calendar', id, 'Deadline', title, course, due_date
             FROM calendar_events WHERE done = 1;
-            """);
-        SetPreference(HistoryBackfilledKey, "1");
+            """;
+            command.ExecuteNonQuery();
+        }
+
+        WritePreference(connection, HistoryBackfilledKey, "1");
+        transaction.Commit();
     }
 
     /// <summary>Expenses are closed as soon as they're made, so they'd only bury everything else.</summary>

@@ -23,8 +23,16 @@ public sealed partial class WaypointDatabase
 
         var profiles = BankProfiles.Current;
         var account = CsvImport.IsTypeColumnExport(csv) ? profiles.RewardsCard.Name : profiles.Card.Name;
-        var result = ImportTransactions(account, CsvImport.Parse(csv));
-        AddCardPayments(account, CsvImport.ParsePayments(csv));
+        var purchases = CsvImport.Parse(csv);
+        var payments = CsvImport.ParsePayments(csv);
+        var waiting = GetWaitList().ToList();
+
+        // The purchases and the payments are one write, so a failure partway leaves neither and the file can be imported again.
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var result = ImportTransactions(connection, account, purchases, waiting);
+        AddCardPayments(connection, account, payments);
+        transaction.Commit();
         return result;
     }
 

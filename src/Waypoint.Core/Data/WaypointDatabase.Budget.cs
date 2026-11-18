@@ -132,6 +132,11 @@ public sealed partial class WaypointDatabase
     public IReadOnlyList<BudgetAccount> GetBudgetAccounts()
     {
         using var connection = Open();
+        return ReadBudgetAccounts(connection);
+    }
+
+    private static List<BudgetAccount> ReadBudgetAccounts(SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, kind, balance_cents, updated_on, limit_cents, close_day, autopay_day, alert_cents, set_at FROM budget_accounts ORDER BY position, name";
 
@@ -157,6 +162,11 @@ public sealed partial class WaypointDatabase
     public void SaveBudgetAccount(BudgetAccount account)
     {
         using var connection = Open();
+        SaveBudgetAccount(connection, account);
+    }
+
+    private static void SaveBudgetAccount(SqliteConnection connection, BudgetAccount account)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO budget_accounts (name, kind, balance_cents, updated_on, limit_cents, close_day, autopay_day, alert_cents, set_at, position)
@@ -178,41 +188,44 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Stores a checking export. Its card payments and purchases also go where they belong.</summary>
+    /// <summary>
+    /// Stores a checking export. Its card payments and purchases also go where they belong. It's all one write, so
+    /// a failure partway leaves nothing behind and the same export can simply be imported again.
+    /// </summary>
     public ImportResult ImportChecking(IReadOnlyList<CheckingRow> rows)
     {
-        var repeats = new Dictionary<string, int>();
-        using (var connection = Open())
-        using (var transaction = connection.BeginTransaction())
-        {
-            foreach (var row in rows)
-            {
-                var key = $"{row.Date:O}|{row.Description}|{row.Cents}";
-                repeats[key] = repeats.GetValueOrDefault(key) + 1;
-
-                using var command = connection.CreateCommand();
-                command.CommandText = "INSERT OR IGNORE INTO checking_activity (import_key, posted_on, description, cents) VALUES ($key, $date, $description, $cents)";
-                command.Parameters.AddWithValue("$key", $"{key}|{repeats[key]}");
-                command.Parameters.AddWithValue("$date", row.Date.ToString("O", CultureInfo.InvariantCulture));
-                command.Parameters.AddWithValue("$description", row.Description);
-                command.Parameters.AddWithValue("$cents", row.Cents);
-                command.ExecuteNonQuery();
-            }
-
-            transaction.Commit();
-        }
-
-        foreach (var payments in rows.Where(row => row.Kind == CheckingKind.CardPayment).GroupBy(row => row.Card!))
-        {
-            AddCardPayments(payments.Key, payments.Select(row => new ImportedTransaction(row.Date, row.Description, -row.Cents)).ToList());
-        }
-
         var spending = rows
             .Where(row => row.Kind == CheckingKind.Spending)
             .Select(row => new ImportedTransaction(row.Date, CheckingImport.PurchaseTitle(row.Description), -row.Cents, $"{CheckingKeyPrefix}{row.Date:O}|{row.Description}|{row.Cents}"))
             .ToList();
-        var result = ImportTransactions(CheckingImport.CheckingAccount, spending);
-        ConfirmDeposits(rows);
+        var waiting = GetWaitList().ToList();
+        var deposits = PlanDeposits(rows);
+
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var repeats = new Dictionary<string, int>();
+        foreach (var row in rows)
+        {
+            var key = $"{row.Date:O}|{row.Description}|{row.Cents}";
+            repeats[key] = repeats.GetValueOrDefault(key) + 1;
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "INSERT OR IGNORE INTO checking_activity (import_key, posted_on, description, cents) VALUES ($key, $date, $description, $cents)";
+            command.Parameters.AddWithValue("$key", $"{key}|{repeats[key]}");
+            command.Parameters.AddWithValue("$date", row.Date.ToString("O", CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$description", row.Description);
+            command.Parameters.AddWithValue("$cents", row.Cents);
+            command.ExecuteNonQuery();
+        }
+
+        foreach (var payments in rows.Where(row => row.Kind == CheckingKind.CardPayment).GroupBy(row => row.Card!))
+        {
+            AddCardPayments(connection, payments.Key, payments.Select(row => new ImportedTransaction(row.Date, row.Description, -row.Cents)).ToList());
+        }
+
+        var result = ImportTransactions(connection, CheckingImport.CheckingAccount, spending, waiting);
+        ConfirmDeposits(connection, deposits);
+        transaction.Commit();
         return result;
     }
 
@@ -220,6 +233,13 @@ public sealed partial class WaypointDatabase
     public void AddCardPayments(string account, IReadOnlyList<ImportedTransaction> payments)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        AddCardPayments(connection, account, payments);
+        transaction.Commit();
+    }
+
+    private static void AddCardPayments(SqliteConnection connection, string account, IReadOnlyList<ImportedTransaction> payments)
+    {
         var repeats = new Dictionary<string, int>();
         foreach (var payment in payments)
         {
@@ -417,15 +437,28 @@ public sealed partial class WaypointDatabase
     /// <summary>
     /// Adds a confirmed deposit to the cushion, and keeps it so a scheduled transfer can be matched to it. Transfers
     /// seen in checking up to that day are kept in the new balance, and the checking row for this one won't add it again.
+    /// The deposit and the balance are one write. With the email's id, the same email read again adds nothing, and
+    /// this returns false. A blank id is no id, so it never stands in for another email.
     /// </summary>
-    public void AddToCushion(long cents, DateOnly today)
+    public bool AddToCushion(long cents, DateOnly today, string? messageId = null)
     {
-        RecordBrokerageDeposit(cents, today);
-        if (GetBudgetAccounts().FirstOrDefault(account => account.Kind == AccountKind.Cushion) is { } cushion)
+        // The balance is read inside the write, so one saved from the Budget page meanwhile is added to, not replaced.
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var cushion = ReadBudgetAccounts(connection).FirstOrDefault(account => account.Kind == AccountKind.Cushion);
+        if (!RecordBrokerageDeposit(connection, cents, today, string.IsNullOrWhiteSpace(messageId) ? null : messageId))
         {
-            var current = today > cushion.UpdatedOn ? cushion.BalanceCents + CushionActivity(cushion.UpdatedOn, today) : cushion.BalanceCents;
-            SaveBudgetAccount(cushion with { BalanceCents = current + cents, UpdatedOn = today > cushion.UpdatedOn ? today : cushion.UpdatedOn });
+            return false;
         }
+
+        if (cushion is not null)
+        {
+            var current = today > cushion.UpdatedOn ? cushion.BalanceCents + CushionActivity(connection, cushion.UpdatedOn, today) : cushion.BalanceCents;
+            SaveBudgetAccount(connection, cushion with { BalanceCents = current + cents, UpdatedOn = today > cushion.UpdatedOn ? today : cushion.UpdatedOn });
+        }
+
+        transaction.Commit();
+        return true;
     }
 
     /// <summary>
@@ -435,6 +468,11 @@ public sealed partial class WaypointDatabase
     private long CushionActivity(DateOnly after, DateOnly through)
     {
         using var connection = Open();
+        return CushionActivity(connection, after, through);
+    }
+
+    private static long CushionActivity(SqliteConnection connection, DateOnly after, DateOnly through)
+    {
         var rows = new List<(DateOnly On, long Cents)>();
         using (var command = connection.CreateCommand())
         {
@@ -492,6 +530,11 @@ public sealed partial class WaypointDatabase
     public void SaveMerchantRule(string match, string category)
     {
         using var connection = Open();
+        SaveMerchantRule(connection, match, category);
+    }
+
+    private static void SaveMerchantRule(SqliteConnection connection, string match, string category)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO merchant_rules (match, category) VALUES ($match, $category)
@@ -652,74 +695,78 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public ImportResult ImportTransactions(string account, IReadOnlyList<ImportedTransaction> transactions)
     {
+        var waiting = GetWaitList().ToList();
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var result = ImportTransactions(connection, account, transactions, waiting);
+        transaction.Commit();
+        return result;
+    }
 
-        using (var capture = connection.CreateCommand())
+    /// <summary>The import itself, inside the caller's write. The wait list is read beforehand, so nothing else opens meanwhile.</summary>
+    private static ImportResult ImportTransactions(SqliteConnection connection, string account, IReadOnlyList<ImportedTransaction> transactions, List<WaitItem> waiting)
+    {
+        using var capture = connection.CreateCommand();
+        capture.CommandText = "INSERT INTO captures (text, created_at, sorted_at) VALUES ($text, $now, $now) RETURNING id";
+        capture.Parameters.AddWithValue("$text", $"{SpendingRow.ImportedPrefix}{account}");
+        capture.Parameters.AddWithValue("$now", DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
+        var captureId = (long)capture.ExecuteScalar()!;
+
+        var added = 0;
+        var skipped = 0;
+        var repeats = new Dictionary<string, int>();
+        var waitsResolved = 0;
+
+        var keyed = new List<(ImportedTransaction Row, string Key)>();
+        foreach (var row in transactions)
         {
-            capture.CommandText = "INSERT INTO captures (text, created_at, sorted_at) VALUES ($text, $now, $now) RETURNING id";
-            capture.Parameters.AddWithValue("$text", $"{SpendingRow.ImportedPrefix}{account}");
-            capture.Parameters.AddWithValue("$now", DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
-            var captureId = (long)capture.ExecuteScalar()!;
-
-            var added = 0;
-            var skipped = 0;
-            var repeats = new Dictionary<string, int>();
-            var waiting = GetWaitList().ToList();
-            var waitsResolved = 0;
-
-            var keyed = new List<(ImportedTransaction Row, string Key)>();
-            foreach (var row in transactions)
-            {
-                var key = $"{account}|{row.Date:O}|{row.Description}|{row.AmountCents}";
-                repeats[key] = repeats.GetValueOrDefault(key) + 1;
-                keyed.Add((row, row.Key ?? $"{key}|{repeats[key]}"));
-            }
-
-            // Every new row is kept, so a match can be let go later. One that matched a purchase already counted is
-            // kept out of the budget by its match. Merchant matches go first, so a row with only the amount in common
-            // can't take a match another row fits better.
-            var left = new List<(ImportedTransaction Row, string Key, long Id)>();
-            foreach (var (row, importKey) in keyed)
-            {
-                if (ImportExists(connection, importKey))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                var id = InsertImported(connection, captureId, row, importKey);
-                if (Absorb(connection, account, row, importKey, id, merchantOnly: true, backfill: false))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                left.Add((row, importKey, id));
-            }
-
-            foreach (var (row, importKey, id) in left)
-            {
-                if (Absorb(connection, account, row, importKey, id, merchantOnly: false, backfill: false))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                added++;
-
-                // A parked purchase isn't spending yet, so this settles the wait without adding a second expense.
-                if (WaitItem.MatchImport(waiting, row) is { } parked)
-                {
-                    SettleWait(connection, parked.Id, "bought");
-                    waiting.Remove(parked);
-                    waitsResolved++;
-                }
-            }
-
-            transaction.Commit();
-            return new ImportResult(added, skipped, waitsResolved);
+            var key = $"{account}|{row.Date:O}|{row.Description}|{row.AmountCents}";
+            repeats[key] = repeats.GetValueOrDefault(key) + 1;
+            keyed.Add((row, row.Key ?? $"{key}|{repeats[key]}"));
         }
+
+        // Every new row is kept, so a match can be let go later. One that matched a purchase already counted is
+        // kept out of the budget by its match. Merchant matches go first, so a row with only the amount in common
+        // can't take a match another row fits better.
+        var left = new List<(ImportedTransaction Row, string Key, long Id)>();
+        foreach (var (row, importKey) in keyed)
+        {
+            if (ImportExists(connection, importKey))
+            {
+                skipped++;
+                continue;
+            }
+
+            var id = InsertImported(connection, captureId, row, importKey);
+            if (Absorb(connection, account, row, importKey, id, merchantOnly: true, backfill: false))
+            {
+                skipped++;
+                continue;
+            }
+
+            left.Add((row, importKey, id));
+        }
+
+        foreach (var (row, importKey, id) in left)
+        {
+            if (Absorb(connection, account, row, importKey, id, merchantOnly: false, backfill: false))
+            {
+                skipped++;
+                continue;
+            }
+
+            added++;
+
+            // A parked purchase isn't spending yet, so this settles the wait without adding a second expense.
+            if (WaitItem.MatchImport(waiting, row) is { } parked)
+            {
+                SettleWait(connection, parked.Id, "bought");
+                waiting.Remove(parked);
+                waitsResolved++;
+            }
+        }
+
+        return new ImportResult(added, skipped, waitsResolved);
     }
 
     private static long InsertImported(SqliteConnection connection, long captureId, ImportedTransaction row, string importKey)
@@ -962,15 +1009,21 @@ public sealed partial class WaypointDatabase
 
         var clean = MerchantName.Clean(title);
         var match = title.Contains(clean, StringComparison.OrdinalIgnoreCase) ? clean : title;
-        Categorize(match, target.Name);
 
+        // The rule and the purchases it moves are one write, so a failure between can't leave a rule nothing follows.
         using (var connection = Open())
-        using (var command = connection.CreateCommand())
+        using (var transaction = connection.BeginTransaction())
         {
-            command.CommandText = "UPDATE items SET category = $category WHERE id = $id";
-            command.Parameters.AddWithValue("$category", target.Name);
-            command.Parameters.AddWithValue("$id", itemId);
-            command.ExecuteNonQuery();
+            Categorize(connection, match, target.Name);
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "UPDATE items SET category = $category WHERE id = $id";
+                command.Parameters.AddWithValue("$category", target.Name);
+                command.Parameters.AddWithValue("$id", itemId);
+                command.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
         }
 
         return new OpReply($"{clean} now counts as {target.Name}");
@@ -994,10 +1047,11 @@ public sealed partial class WaypointDatabase
         }
 
         var chosen = string.IsNullOrWhiteSpace(category) ? null : GetCategories().FirstOrDefault(found => Same(found.Name, category))?.Name;
-        var captureId = AddHandTyped(clean, now);
-        CompleteCapture(captureId, [new SortedItem(ItemKind.Expense, clean, date, cents, Category: chosen)]);
 
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var captureId = InsertHandTyped(connection, clean, now);
+        CompleteCapture(connection, captureId, [new SortedItem(ItemKind.Expense, clean, date, cents, Category: chosen)], null);
         if (chosen is not null)
         {
             using var command = connection.CreateCommand();
@@ -1010,7 +1064,9 @@ public sealed partial class WaypointDatabase
         using var find = connection.CreateCommand();
         find.CommandText = "SELECT id FROM items WHERE capture_id = $captureId AND kind = 'Expense' LIMIT 1";
         find.Parameters.AddWithValue("$captureId", captureId);
-        return new OpReply($"Added {Briefing.Money(cents.Value)} for {clean}", ItemId: find.ExecuteScalar() as long?);
+        var itemId = find.ExecuteScalar() as long?;
+        transaction.Commit();
+        return new OpReply($"Added {Briefing.Money(cents.Value)} for {clean}", ItemId: itemId);
     }
 
     /// <summary>A new category from the Budget page. A cap is optional, and a weekly one keeps its monthly amount.</summary>
@@ -1071,9 +1127,17 @@ public sealed partial class WaypointDatabase
 
     private string Categorize(string merchant, string category)
     {
-        SaveMerchantRule(merchant, category);
-
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var reply = Categorize(connection, merchant, category);
+        transaction.Commit();
+        return reply;
+    }
+
+    private static string Categorize(SqliteConnection connection, string merchant, string category)
+    {
+        SaveMerchantRule(connection, merchant, category);
+
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE items SET category = $category WHERE kind = 'Expense' AND instr(lower(title), $match) > 0";
         command.Parameters.AddWithValue("$category", category);

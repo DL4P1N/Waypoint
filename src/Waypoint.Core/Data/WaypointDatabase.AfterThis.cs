@@ -34,7 +34,9 @@ public sealed partial class WaypointDatabase
         }
 
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         Hold(connection, item.Source, item.Id, at, messageId);
+        transaction.Commit();
         return true;
     }
 
@@ -60,7 +62,9 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public int HoldUnansweredReminders(DateTime now)
     {
+        // Marking a card looked at and holding its item are one write, so a failure between can't lose the hold.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var unanswered = new List<(string Message, long Item, ItemSource Source, DateTime SentAt)>();
         using (var find = connection.CreateCommand())
         {
@@ -97,6 +101,7 @@ public sealed partial class WaypointDatabase
             held++;
         }
 
+        transaction.Commit();
         return held;
     }
 
@@ -108,6 +113,7 @@ public sealed partial class WaypointDatabase
     {
         var working = GetActiveSession(now)?.TaskRef;
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using (var expire = connection.CreateCommand())
         {
             expire.CommandText = "DELETE FROM after_this WHERE held_at < $expired";
@@ -127,6 +133,8 @@ public sealed partial class WaypointDatabase
                 using var reader = find.ExecuteReader();
                 if (!reader.Read())
                 {
+                    reader.Close();
+                    transaction.Commit();
                     return null;
                 }
 
@@ -147,10 +155,12 @@ public sealed partial class WaypointDatabase
                 }
             }
 
-            return FindItem(connection, source, itemId) is { Done: false } item && Activation.CanStart(item) && ItemRef.Format(item) != working
+            var taken = FindItem(connection, source, itemId) is { Done: false } item && Activation.CanStart(item) && ItemRef.Format(item) != working
                 && !WorkedOnSince(connection, ItemRef.Format(item), heldAt)
                 ? item
                 : null;
+            transaction.Commit();
+            return taken;
         }
     }
 

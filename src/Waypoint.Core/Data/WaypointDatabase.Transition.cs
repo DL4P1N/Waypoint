@@ -14,12 +14,14 @@ public sealed partial class WaypointDatabase
     public void FollowUpReminder(DueReminder reminder, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         ForgetAfterThis(connection, reminder.Item.Source, reminder.Item.Id);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE {ReminderTable(reminder.Item)} SET remind_at = $until, follow_up = 1 WHERE id = $id";
         command.Parameters.AddWithValue("$until", FormatReminder(TransitionAssist.FollowUpAt(now)));
         command.Parameters.AddWithValue("$id", reminder.Id);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>When the latest spot was saved, so the offer to save one isn't made twice.</summary>
@@ -39,7 +41,9 @@ public sealed partial class WaypointDatabase
             return null;
         }
 
+        // Claiming the card and doing what it says are one write, so a failure between can't use up the press.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         long itemId;
         ItemSource source;
         DateOnly? dueOn;
@@ -63,6 +67,13 @@ public sealed partial class WaypointDatabase
             return null;
         }
 
+        var reply = TransitionActionOn(connection, source, itemId, dueOn, kind, now);
+        transaction.Commit();
+        return reply;
+    }
+
+    private static string? TransitionActionOn(SqliteConnection connection, ItemSource source, long itemId, DateOnly? dueOn, AlertActionKind kind, DateTime now)
+    {
         if (FindItem(connection, source, itemId) is not { Done: false } item)
         {
             return null;
@@ -76,7 +87,7 @@ public sealed partial class WaypointDatabase
 
         if (kind == AlertActionKind.NotNowReminder)
         {
-            RecordReminderAnswer(item, ReminderAnswer.NotNow, now);
+            RecordReminderAnswer(connection, item, ReminderAnswer.NotNow, now);
             return $"Okay. {item.Title} is still on your list.";
         }
 
