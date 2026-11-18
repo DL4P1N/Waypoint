@@ -432,31 +432,55 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// A message sent while connected, or one handed over again because its work was cut off. Polling skips it
     /// while it's claimed here, and for good once whatever saves its work marks it finished.
     /// </summary>
-    private async Task HandleMessageAsync(JsonElement message, Action<DiscordMessage>? onCapture = null)
+    /// <returns>True when it was handed over, false when it's one to act on that's done or being worked on, and null when it isn't one Waypoint acts on.</returns>
+    private async Task<bool?> HandleMessageAsync(JsonElement message, Action<DiscordMessage>? onCapture = null)
     {
         if (!IsFromOwner(message) || Text(message, "id") is not { } id)
         {
-            return;
+            return null;
         }
 
         var channel = Text(message, "channel_id");
-        if (channel == settings.CaptureChannelId && ReadMessage(message) is { } read && FirstTime(id, channel))
+        if (channel == settings.CaptureChannelId && ReadMessage(message) is { } read)
         {
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
             (onCapture ?? Captured)?.Invoke(read);
+            return true;
         }
-        else if (channel == settings.AlertsChannelId && ReplyKind(Text(message, "content")) is { } kind && FirstTime(id, channel))
+
+        if (channel == settings.AlertsChannelId && ReplyKind(Text(message, "content")) is { } kind)
         {
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
             var target = message.TryGetProperty("message_reference", out var reference) ? Text(reference, "message_id") : null;
             await ActOnAlertAsync(new AlertAction(target, kind, id));
+            return true;
         }
-        else if (channel is not null && channel == PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) && ReadMessage(message) is { } sent && FirstTime(id, channel))
+
+        if (channel is not null && channel == PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) && ReadMessage(message) is { } sent)
         {
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
             NotesSent?.Invoke(sent);
+            return true;
         }
-        else if (channel is not null)
+
+        if (channel is not null)
         {
             await HandleThreadMessageAsync(channel, id, message);
         }
+
+        return null;
     }
 
     private async Task HandleReactionAsync(JsonElement reaction)
@@ -1543,7 +1567,8 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
     /// <summary>
     /// Reads again each message whose work was cut off and hands it over the same way as when it came in. One
-    /// deleted since has nothing left to do. One that can't be read right now is tried on a later poll.
+    /// deleted since, or that no longer asks for anything, such as after an edit, has nothing left to do. One that
+    /// can't be read right now counts as a try and is tried on a later poll, so it's let go in the end.
     /// </summary>
     private async Task RetryUnfinishedAsync(Action<DiscordMessage>? onCapture, CancellationToken cancellationToken)
     {
@@ -1562,16 +1587,21 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                 using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
                 if (document.RootElement.ValueKind != JsonValueKind.Object || Text(document.RootElement, "id") != id)
                 {
+                    database.CountDiscordTry(id, Clock());
                     continue;
                 }
 
                 // The claim knows the channel, which a message read back on its own may leave out.
                 var message = Text(document.RootElement, "channel_id") is null ? WithChannel(document.RootElement, channel) : document.RootElement.Clone();
-                await HandleMessageAsync(message, onCapture);
+                if (await HandleMessageAsync(message, onCapture) is null)
+                {
+                    database.FinishDiscordMessage(id, Clock());
+                }
             }
             catch (Exception exception) when (exception is HttpRequestException or JsonException || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested)
             {
                 LastError = exception.Message;
+                database.CountDiscordTry(id, Clock());
             }
         }
     }

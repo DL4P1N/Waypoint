@@ -95,6 +95,17 @@ public sealed partial class WaypointDatabase
         return unfinished;
     }
 
+    /// <summary>Counts a try at a message that couldn't be read back, so one that never can is let go in the end.</summary>
+    public void CountDiscordTry(string messageId, DateTime now)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE discord_inbox SET tries = tries + 1, claimed_at = $at WHERE message_id = $id AND done_at IS NULL";
+        command.Parameters.AddWithValue("$id", messageId);
+        command.Parameters.AddWithValue("$at", FormatReminder(now));
+        command.ExecuteNonQuery();
+    }
+
     public bool IsDiscordMessageFinished(string messageId)
     {
         using var connection = Open();

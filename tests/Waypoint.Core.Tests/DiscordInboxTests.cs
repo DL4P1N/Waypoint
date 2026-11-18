@@ -61,6 +61,9 @@ public sealed class DiscordInboxTests : IDisposable
 
         public List<string> Posted { get; } = [];
 
+        /// <summary>Messages Discord won't let the bot read back, the way a lost permission does.</summary>
+        public HashSet<string> Forbidden { get; } = [];
+
         public void Add(string id, string text, bool withFile = false) => Messages[id] = $$"""
             {"id":"{{id}}","channel_id":"capture","content":"{{text}}","author":{"id":"owner"},"timestamp":"2026-11-09T17:00:00+00:00"{{(withFile ? $$""","attachments":[{"id":"f{{id}}","filename":"made-up-list.txt","size":40,"url":"{{FileUrl}}","content_type":"text/plain"}]""" : "")}}}
             """;
@@ -88,6 +91,11 @@ public sealed class DiscordInboxTests : IDisposable
                 var after = url.Contains("after=") ? ulong.Parse(url[(url.IndexOf("after=", StringComparison.Ordinal) + 6)..]) : 0;
                 var newer = Messages.Where(message => ulong.Parse(message.Key) > after).Select(message => message.Value);
                 return Reply(HttpStatusCode.OK, $"[{string.Join(",", newer)}]");
+            }
+
+            if (request.Method == HttpMethod.Get && Forbidden.Any(id => url.EndsWith("/messages/" + id)))
+            {
+                return Reply(HttpStatusCode.Forbidden, """{"code":50001}""");
             }
 
             if (request.Method == HttpMethod.Get && url.Contains("/channels/capture/messages/"))
@@ -248,6 +256,43 @@ public sealed class DiscordInboxTests : IDisposable
 
         Assert.Empty(received);
         Assert.True(_database.IsDiscordMessageFinished("9"));
+    }
+
+    [Fact]
+    public async Task An_unfinished_message_that_no_longer_asks_for_anything_is_let_go_after_one_look()
+    {
+        // Claimed as the owner's, but read back it's one Waypoint doesn't act on, as after an edit or a settings change.
+        _database.SetPreference(DiscordBridge.LastMessageKey, "50");
+        _discord.Messages["21"] = """{"id":"21","channel_id":"capture","content":"made up","author":{"id":"someone"}}""";
+        Assert.True(_database.ClaimDiscordMessage("21", "capture", _now, DiscordBridge.UnfinishedAfter));
+        var bridge = Bridge();
+        bridge.Captured = _ => throw new InvalidOperationException("not the owner's");
+
+        for (var poll = 0; poll < 10; poll++)
+        {
+            _now = _now.AddMinutes(4);
+            await bridge.PollAsync();
+        }
+
+        Assert.Single(_discord.Asked, asked => asked.EndsWith("/channels/capture/messages/21"));
+        Assert.True(_database.IsDiscordMessageFinished("21"));
+    }
+
+    [Fact]
+    public async Task An_unfinished_message_that_cant_be_read_back_is_only_tried_a_few_times()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "50");
+        _discord.Forbidden.Add("22");
+        Assert.True(_database.ClaimDiscordMessage("22", "capture", _now, DiscordBridge.UnfinishedAfter));
+        var bridge = Bridge();
+
+        for (var poll = 0; poll < 10; poll++)
+        {
+            _now = _now.AddMinutes(4);
+            await bridge.PollAsync();
+        }
+
+        Assert.InRange(_discord.Asked.Count(asked => asked == "GET https://discord.com/api/v10/channels/capture/messages/22"), 1, 4);
     }
 
     [Fact]
