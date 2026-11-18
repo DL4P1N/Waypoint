@@ -267,6 +267,46 @@ public sealed class NoteJobsTests : IDisposable
         });
     }
 
+    [Theory]
+    [InlineData(NoteJobKind.Notes)]
+    [InlineData(NoteJobKind.Study)]
+    public async Task A_job_that_tells_its_own_stop_is_kept_as_interrupted_when_the_server_shuts_down(NoteJobKind kind)
+    {
+        var jobs = Jobs();
+
+        // As writing notes and questions do: a stop is caught and told as its own outcome, and the job returns.
+        Func<CancellationToken, Task<NoteJobState>> work = async stop =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, stop);
+                return Written();
+            }
+            catch (OperationCanceledException)
+            {
+                return kind == NoteJobKind.Notes
+                    ? new NoteJobState(Done: true, Notes: NoteJobText.NotesStopped())
+                    : new NoteJobState(Done: true, Study: NoteJobText.StudyStopped() with { NoteId = 7 });
+            }
+        };
+
+        var byPerson = jobs.Start(kind, 7, work)!.Id;
+        jobs.Stop(byPerson);
+        var stopped = await Finished(jobs, byPerson);
+        Assert.Equal(NoteJobOutcome.Succeeded, stopped.Kind());
+        Assert.Equal(
+            kind == NoteJobKind.Notes ? NoteJobText.NotesStopped().Message : NoteJobText.StudyStopped().Message,
+            stopped.Notes?.Message ?? stopped.Study?.Message);
+
+        var byShutdown = jobs.Start(kind, 7, work)!.Id;
+        jobs.StopAll();
+        var cut = await Finished(jobs, byShutdown);
+        Assert.Equal(NoteJobOutcome.Lost, cut.Kind());
+        Assert.True(cut.Interrupted);
+        Assert.Null(cut.Notes);
+        Assert.Null(cut.Study);
+    }
+
     [Fact]
     public async Task Stopping_a_job_after_it_ended_does_nothing()
     {

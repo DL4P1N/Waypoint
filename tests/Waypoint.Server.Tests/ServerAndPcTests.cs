@@ -302,7 +302,7 @@ public sealed class ServerAndPcTests : IDisposable
         Assert.Single(pc.Notes.GetNoteSources(id));
     }
 
-    [Fact(Skip = "bug: a notes job cut off by a server restart is told as \"It was stopped\" instead of the restart message. On shutdown NoteMaker turns the cancelled write into a NotesStopped outcome and returns normally, so NoteJobs keeps the job as Succeeded with that outcome rather than as lost and interrupted. Practice questions go the same way.")]
+    [Fact]
     public async Task A_note_job_cut_off_by_a_server_restart_is_told_as_the_server_restarting()
     {
         var (_, _, _, outcome) = await NotesCutOffByRestart();
