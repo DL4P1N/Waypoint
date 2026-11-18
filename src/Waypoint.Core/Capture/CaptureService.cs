@@ -353,9 +353,12 @@ public sealed class CaptureService(
     }
 
     /// <summary>Starts on an item directly, as the Start button on a reminder does.</summary>
-    public void StartOn(StoredItem item, CaptureOrigin origin = CaptureOrigin.App)
+    public void StartOn(StoredItem item, CaptureOrigin origin = CaptureOrigin.App) =>
+        Started(database.StartActivation(ItemRef.Format(item), null, null, Activation.ReminderMethod, Now), origin);
+
+    /// <summary>Says a session was started elsewhere, such as by a reminder's Start saved with the card in one write.</summary>
+    public void Started(OpReply reply, CaptureOrigin origin = CaptureOrigin.App)
     {
-        var reply = database.StartActivation(ItemRef.Format(item), null, null, Activation.ReminderMethod, Now);
         Changed?.Invoke();
         Sorted?.Invoke(new CaptureOutcome([], [], reply.Text, Origin: origin, Activation: database.GetActiveSession(Now)));
     }

@@ -1411,13 +1411,13 @@ public sealed partial class WaypointWorker
 
         if (kind == AlertActionKind.Start)
         {
-            if (_database.TakeSentReminderItem(messageId) is not { } item)
+            // The card, its answer, and the session are one write, so a failure partway leaves the card to press again.
+            if (_database.StartFromReminder(messageId, _clock()) is not { } started)
             {
                 return null;
             }
 
-            _database.RecordReminderAnswer(item, ReminderAnswer.Started, _clock());
-            Captures.StartOn(item, CaptureOrigin.Discord);
+            Captures.Started(started.Reply, CaptureOrigin.Discord);
             return "Started";
         }
 

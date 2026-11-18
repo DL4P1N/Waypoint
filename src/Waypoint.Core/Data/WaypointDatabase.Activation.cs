@@ -91,26 +91,80 @@ public sealed partial class WaypointDatabase
     /// <summary>Starts on a task, or picks one. A task with steps uses them, so the sorter's actions only fill in for a task without.</summary>
     public OpReply StartActivation(string? taskRef, string? firstAction, IReadOnlyList<string>? then, string method, DateTime now, string? note = null)
     {
-        var open = GetOpenItems();
-        var named = ItemRef.TryParse(taskRef, out var source, out var id) ? open.FirstOrDefault(item => item.Source == source && item.Id == id) : null;
-        if ((named ?? Activation.PickTask(WithoutQuietWaiting(open, DateOnly.FromDateTime(now)), note)) is not { } task)
+        if (PlanStart(taskRef, firstAction, then, now, note) is not { } plan)
         {
             return new OpReply(Activation.NothingToPick, true);
         }
 
-        PauseActive(now);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var reply = ApplyStart(connection, plan, method, now);
+        transaction.Commit();
+        return reply;
+    }
 
-        // Starting it here means it wasn't left for after this, so no card about it holds it later.
-        using (var forget = Open())
+    /// <summary>
+    /// Start on a reminder card: the card is taken, the answer is kept for the suggestion's habits, and the session
+    /// starts, all in one write, so a failure partway leaves the card to be pressed again. Null when the card was
+    /// already answered or its item is done.
+    /// </summary>
+    public (StoredItem Item, OpReply Reply)? StartFromReminder(string messageId, DateTime now)
+    {
+        StoredItem? found;
+        using (var read = Open())
+        using (var find = read.CreateCommand())
         {
-            ForgetAfterThis(forget, task.Source, task.Id);
+            find.CommandText = "SELECT item_id, source FROM sent_reminders WHERE handled = 0 AND message_id = $message";
+            find.Parameters.AddWithValue("$message", messageId);
+            using var reader = find.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            found = FindItem(read, Enum.Parse<ItemSource>(reader.GetString(1)), reader.GetInt64(0));
         }
 
+        if (found is not { Done: false } item)
+        {
+            return null;
+        }
+
+        var plan = PlanStart(ItemRef.Format(item), null, null, now, null);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+
+        // Two taps of Start at once only begin once, and an item finished meanwhile isn't started.
+        if (!ClaimSentReminder(connection, messageId) || FindItem(connection, item.Source, item.Id) is not { Done: false })
+        {
+            return null;
+        }
+
+        RecordReminderAnswer(connection, item, ReminderAnswer.Started, now);
+        var reply = plan is null ? new OpReply(Activation.NothingToPick, true) : ApplyStart(connection, plan, Activation.ReminderMethod, now);
+        transaction.Commit();
+        return (item, reply);
+    }
+
+    /// <summary>
+    /// What starting comes to, read before anything is written: the task, a paused session of its own to pick up,
+    /// or the action, steps, and link a new one opens on. A session going now is caught up first, as it always is.
+    /// </summary>
+    private sealed record StartPlan(StoredItem Task, ActivationSession? Paused, string Action, List<string> Queue, long? StepId, string? Resource, Handoff? Spot);
+
+    private StartPlan? PlanStart(string? taskRef, string? firstAction, IReadOnlyList<string>? then, DateTime now, string? note)
+    {
+        var open = GetOpenItems();
+        var named = ItemRef.TryParse(taskRef, out var source, out var id) ? open.FirstOrDefault(item => item.Source == source && item.Id == id) : null;
+        if ((named ?? Activation.PickTask(WithoutQuietWaiting(open, DateOnly.FromDateTime(now)), note)) is not { } task)
+        {
+            return null;
+        }
+
+        // Starting the task going now picks it up where it is, the same as one that was paused.
         var reference = ItemRef.Format(task);
-        if (ReadSession($"status = '{SessionStatus.Paused}' AND task_ref = '{reference}'") is { } paused)
-        {
-            return Resume(paused, now);
-        }
+        var active = GetActiveSession(now);
+        var paused = active?.TaskRef == reference ? active : ReadSession($"status = '{SessionStatus.Paused}' AND task_ref = '{reference}'");
 
         // A saved spot for this task is picked up, so starting again opens on its next action and its link.
         var spot = GetSpotFor(task, now);
@@ -120,25 +174,48 @@ public sealed partial class WaypointDatabase
         var action = step?.Title ?? spotNext ?? (!string.IsNullOrWhiteSpace(firstAction) ? firstAction.Trim() : Activation.Fallback(0));
         var queue = step is null ? (then ?? []).Where(entry => !string.IsNullOrWhiteSpace(entry)).Select(entry => entry.Trim()).ToList() : [];
         var resource = spot?.Links.Select(link => SafeResource.Check(link)).FirstOrDefault(link => link is not null);
+        return new StartPlan(task, paused, action, queue, step?.Id, resource, spot);
+    }
 
-        using var connection = Open();
+    /// <summary>Pauses whatever is going, then picks up or starts the planned session, in the caller's write.</summary>
+    private static OpReply ApplyStart(SqliteConnection connection, StartPlan plan, string method, DateTime now)
+    {
+        using (var pause = connection.CreateCommand())
+        {
+            pause.CommandText = "UPDATE activation_sessions SET status = $paused WHERE status = $active";
+            pause.Parameters.AddWithValue("$paused", SessionStatus.Paused.ToString());
+            pause.Parameters.AddWithValue("$active", SessionStatus.Active.ToString());
+            pause.ExecuteNonQuery();
+        }
+
+        // Starting it here means it wasn't left for after this, so no card about it holds it later.
+        ForgetAfterThis(connection, plan.Task.Source, plan.Task.Id);
+
         using var command = connection.CreateCommand();
+        command.Parameters.AddWithValue("$status", SessionStatus.Active.ToString());
+        command.Parameters.AddWithValue("$now", FormatReminder(now));
+        if (plan.Paused is { } paused)
+        {
+            command.CommandText = "UPDATE activation_sessions SET status = $status, prompt_at = NULL, prompt_kind = NULL, touched_at = $now WHERE id = $id";
+            command.Parameters.AddWithValue("$id", paused.Id);
+            command.ExecuteNonQuery();
+            return new OpReply(Activation.JobReply(paused.Action), true);
+        }
+
         command.CommandText = """
             INSERT INTO activation_sessions (task_ref, task_title, action, status, started_at, touched_at, method, step_id, queue, resource)
             VALUES ($ref, $title, $action, $status, $now, $now, $method, $step, $queue, $resource)
             """;
-        command.Parameters.AddWithValue("$resource", (object?)resource ?? DBNull.Value);
-        command.Parameters.AddWithValue("$ref", reference);
-        command.Parameters.AddWithValue("$title", task.Title);
-        command.Parameters.AddWithValue("$action", action);
-        command.Parameters.AddWithValue("$status", SessionStatus.Active.ToString());
-        command.Parameters.AddWithValue("$now", FormatReminder(now));
+        command.Parameters.AddWithValue("$resource", (object?)plan.Resource ?? DBNull.Value);
+        command.Parameters.AddWithValue("$ref", ItemRef.Format(plan.Task));
+        command.Parameters.AddWithValue("$title", plan.Task.Title);
+        command.Parameters.AddWithValue("$action", plan.Action);
         command.Parameters.AddWithValue("$method", method);
-        command.Parameters.AddWithValue("$step", (object?)step?.Id ?? DBNull.Value);
-        command.Parameters.AddWithValue("$queue", JsonSerializer.Serialize(queue));
+        command.Parameters.AddWithValue("$step", (object?)plan.StepId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$queue", JsonSerializer.Serialize(plan.Queue));
         command.ExecuteNonQuery();
 
-        return new OpReply(TransitionAssist.Describe(spot) is { } stopped ? $"{stopped} {Activation.JobReply(action)}" : Activation.JobReply(action), true);
+        return new OpReply(TransitionAssist.Describe(plan.Spot) is { } stopped ? $"{stopped} {Activation.JobReply(plan.Action)}" : Activation.JobReply(plan.Action), true);
     }
 
     /// <summary>Handles a short reply locally. Returns null if there's nothing for it to act on.</summary>
@@ -481,14 +558,6 @@ public sealed partial class WaypointDatabase
     {
         EndSession(session.Id, SessionStatus.Canceled, now);
         return new OpReply($"Okay, stopped. {session.TaskTitle} is still on your list.", true);
-    }
-
-    private void PauseActive(DateTime now)
-    {
-        if (GetActiveSession(now) is { } session)
-        {
-            Execute(session.Id, "status = $text", ("$text", SessionStatus.Paused.ToString()));
-        }
     }
 
     private void EndSession(long id, SessionStatus status, DateTime now) =>

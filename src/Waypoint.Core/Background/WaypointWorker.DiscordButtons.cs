@@ -83,13 +83,13 @@ public sealed partial class WaypointWorker
 
         if (press.Kind == AlertActionKind.Start)
         {
-            if (_database.TakeSentReminderItem(press.MessageId) is not { } item)
+            // The card, its answer, and the session are one write, so a failure partway leaves the card to press again.
+            if (_database.StartFromReminder(press.MessageId, _clock()) is not { } started)
             {
                 return null;
             }
 
-            _database.RecordReminderAnswer(item, ReminderAnswer.Started, _clock());
-            return new ButtonResult(StartFromDiscord(item));
+            return new ButtonResult(StartedCard(started.Reply));
         }
 
         return null;
@@ -163,13 +163,15 @@ public sealed partial class WaypointWorker
             : DiscordText.Reply(text.Length > 0 ? text : "Saved.", CardTone.Finished);
 
     /// <summary>Starts a session from Discord and hands back its first step with the session's buttons.</summary>
-    private DiscordCard StartFromDiscord(StoredItem item)
+    private DiscordCard StartFromDiscord(StoredItem item) =>
+        StartedCard(_database.StartActivation(ItemRef.Format(item), null, null, Activation.ReminderMethod, _clock()));
+
+    /// <summary>The card a start turns into: the session going now with its buttons, or why nothing started.</summary>
+    private DiscordCard StartedCard(OpReply reply)
     {
-        var now = _clock();
-        var reply = _database.StartActivation(ItemRef.Format(item), null, null, Activation.ReminderMethod, now);
         _viewsDirty = true;
         _host.Changed();
-        var session = _database.GetActiveSession(now);
+        var session = _database.GetActiveSession(_clock());
         return session is { } running
             ? DiscordText.Reply($"{running.TaskTitle}\n{reply.Text}") with { HasSessionButtons = true, CanTrial = running.CanTrial, FeedbackFeature = Feedback.Session, FeedbackRef = running.TaskRef }
             : DiscordText.Reply(reply.Text, CardTone.Attention);
