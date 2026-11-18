@@ -8,11 +8,13 @@ namespace Waypoint.Server;
 /// The worker's fallbacks on a machine with no screen. A notice that couldn't reach Discord is kept and tried
 /// again, and the PC shows it meanwhile. A reminder is let go after a pause so it's tried again while it's still due.
 /// </summary>
-public sealed class ServerHost(ILogger<ServerHost> logger) : IWorkerHost
+public sealed class ServerHost(ILogger<ServerHost> logger) : IWorkerHost, IAsyncDisposable
 {
     public static readonly TimeSpan ReminderRetryPause = TimeSpan.FromMinutes(1);
 
-    private readonly OrderedWork _work = new(exception => logger.LogError(exception, "Background work failed"));
+    private readonly OrderedWork _work = new(
+        exception => logger.LogError(exception, "Background work failed"),
+        warning => logger.LogWarning("Background work: {Warning}", warning));
     private readonly object _gate = new();
     private string? _undelivered;
 
@@ -79,6 +81,14 @@ public sealed class ServerHost(ILogger<ServerHost> logger) : IWorkerHost
     /// order it came, as it would on a window thread.
     /// </summary>
     public void Post(Action action) => _work.Post(action);
+
+    /// <summary>
+    /// Takes no more work and finishes what's queued, up to <paramref name="limit"/>. What's left, and anything
+    /// handed in afterwards, is logged as a warning. Gives the number left undone.
+    /// </summary>
+    public Task<int> StopAsync(TimeSpan limit) => _work.StopAsync(limit);
+
+    public ValueTask DisposeAsync() => _work.DisposeAsync();
 
     private void SetUndelivered(string? text)
     {

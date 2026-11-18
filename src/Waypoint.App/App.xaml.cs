@@ -547,7 +547,13 @@ public partial class App : System.Windows.Application
 
         // Finishes the file, so what was recorded is offered as notes next start.
         _recorder?.Dispose();
-        _worker?.StopDiscord();
+
+        // A capture or press read just before closing is still saved, within a few seconds. Off this thread, so
+        // nothing it finishes can wait on the window thread being free.
+        if (_worker is { } worker)
+        {
+            System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait();
+        }
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
         _worker?.ForgetLateNight();

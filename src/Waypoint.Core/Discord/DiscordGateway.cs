@@ -147,9 +147,13 @@ public sealed class GatewaySession(string token)
 /// <summary>
 /// The live connection to Discord. It carries button presses, slash commands, and new messages as they're sent,
 /// so captures don't wait for a poll. It resumes when dropped, backing off between tries, and stops if the token is rejected.
+/// Once it stops, the events already read are finished before <see cref="RunAsync"/> returns.
 /// </summary>
-public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent)
+public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent, Action<Exception>? failed = null)
 {
+    /// <summary>How long stopping waits for events already read, such as a capture being saved.</summary>
+    public static readonly TimeSpan EventDrainLimit = TimeSpan.FromSeconds(5);
+
     // A code of our own, so Discord keeps the session for a resume. 1000 would end it.
     private const WebSocketCloseStatus KeepSession = (WebSocketCloseStatus)4000;
 
@@ -158,8 +162,8 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
 
     private readonly GatewaySession _session = new(token);
 
-    // A handler that fails only loses that one event, and the next still runs.
-    private readonly OrderedWork _events = new(_ => { });
+    // A handler that fails only loses that one event, and the next still runs. The failure is logged.
+    private readonly OrderedWork _events = new(failed ?? (_ => { }));
 
     /// <summary>True from Discord's welcome until the connection drops.</summary>
     public bool IsConnected { get; private set; }
@@ -171,6 +175,19 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
 
     /// <summary>Stays connected until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await StayConnectedAsync(cancellationToken);
+        }
+        finally
+        {
+            // Events already read are captures, edits, and presses, so they're finished rather than dropped.
+            await _events.StopAsync(EventDrainLimit);
+        }
+    }
+
+    private async Task StayConnectedAsync(CancellationToken cancellationToken)
     {
         var wait = MinWait;
         while (!cancellationToken.IsCancellationRequested)
