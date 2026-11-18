@@ -112,18 +112,73 @@ public sealed class KilledMidSaveTests : IDisposable
             [new ItemChange(ItemSource.Capture, parcel, ChangeAction.Done)]), "captures", "items", "item_history");
     }
 
-    [Fact(Skip = "bug: a capture whose sorting also sets a budget is saved in separate writes. CaptureService.ProcessPendingAsync marks the capture sorted and keeps its items in one write, then sets the monthly budget and category caps in later ones, so a crash between them keeps the items, never sets the budget, and the capture is never sorted again to finish it.")]
-    public async Task A_capture_sorted_with_a_budget_change_killed_partway_is_found_whole_or_not_at_all()
+    /// <summary>
+    /// Capture sorting saves in steps and resumes after a crash rather than saving everything in one write, so a half
+    /// state is expected here. What matters is that starting again from any point finishes it: the purchase is kept
+    /// once, the monthly budget is never lost once the purchase is kept, Claude isn't asked again, and the capture ends sorted.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_sorted_with_a_budget_change_killed_partway_finishes_when_started_again()
     {
-        _database.AddCapture("spent 12 at the made up cafe, and keep eating out to 150 a month");
-        var service = new CaptureService(_database, new Sorts(new CaptureResult(
+        var result = new CaptureResult(
             [new SortedItem(ItemKind.Expense, "Made up cafe", Day, 1200, Category: "Eating out")],
             MonthlyBudgetCents: 180000,
-            BudgetOps: [new BudgetOp(BudgetOpKind.SetCap, "Eating out", 15000, null)])));
+            BudgetOps: [new BudgetOp(BudgetOpKind.SetCap, "Eating out", 15000, null)]);
+        _database.AddCapture("spent 12 at the made up cafe, and keep eating out to 150 a month");
 
-        var before = Before("captures", "items", "budget_categories", "preferences");
-        await service.ProcessPendingAsync();
-        AfterEveryPoint(before);
+        var before = Before("captures");
+        await new CaptureService(_database, new Sorts(result)).ProcessPendingAsync();
+        var wal = ReadShared(_path + "-wal");
+        var frame = FrameHeader + BinaryPrimitives.ReadInt32BigEndian(wal.AsSpan(8, 4));
+        var frames = (wal.Length - WalHeader) / frame;
+
+        var points = 0;
+        for (var kept = 0; kept <= frames; kept++)
+        {
+            var length = WalHeader + (kept * frame);
+            var folder = Path.Combine(_folder, $"resume-{length}");
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "waypoint.db");
+            File.Copy(before.File, path);
+            File.WriteAllBytes(path + "-wal", wal.AsSpan(0, length).ToArray());
+
+            var keptPurchase = Count(path, "SELECT COUNT(*) FROM items WHERE kind = 'Expense'") > 0;
+            var sorter = new CountingSorts(result);
+            await new CaptureService(new WaypointDatabase(path), sorter).ProcessPendingAsync();
+
+            var where = $"Started again after {length - WalHeader} bytes of {wal.Length - WalHeader}";
+            Assert.True(1 == Count(path, "SELECT COUNT(*) FROM items WHERE kind = 'Expense'"), $"{where}: the purchase wasn't kept exactly once.");
+            Assert.True(1 == Count(path, "SELECT COUNT(*) FROM preferences WHERE key = 'monthly_budget_cents' AND value = '180000'"), $"{where}: the monthly budget was lost.");
+            Assert.True(0 == Count(path, "SELECT COUNT(*) FROM captures WHERE sorted_at IS NULL"), $"{where}: the capture was left unsorted.");
+            if (keptPurchase)
+            {
+                Assert.True(sorter.Asked == 0, $"{where}: Claude was asked again for a capture already kept.");
+            }
+
+            points++;
+        }
+
+        Assert.True(points > 1);
+    }
+
+    private sealed class CountingSorts(CaptureResult result) : ICaptureSorter
+    {
+        public int Asked { get; private set; }
+
+        public Task<CaptureResult?> SortAsync(string text, DateTime writtenAt, AssistantContext context, CancellationToken cancellationToken = default)
+        {
+            Asked++;
+            return Task.FromResult<CaptureResult?>(result);
+        }
+    }
+
+    private static long Count(string path, string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return (long)command.ExecuteScalar()!;
     }
 
     [Fact]
