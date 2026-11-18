@@ -255,7 +255,29 @@ public partial class NotesView : UserControl
     /// <summary>Saves anything waiting, for when the page or the window goes away.</summary>
     public void Leave()
     {
-        Save();
+        // Closing: a save still on its way that the server turned down is noted in the log rather than stopping the
+        // rest of closing, and what it sent counts as not saved, so it's saved again here.
+        var finished = false;
+        if (Work.RunsNow)
+        {
+            foreach (var pending in _saves.ToList())
+            {
+                try
+                {
+                    finished |= FinishBackgroundSave(pending) == true;
+                }
+                catch (Exception problem)
+                {
+                    PlainProblem.Report(problem);
+                }
+            }
+        }
+
+        if (Flush() || finished)
+        {
+            Refresh();
+        }
+
         Bar.Clear();
         if (_hasLists)
         {

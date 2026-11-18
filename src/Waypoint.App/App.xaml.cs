@@ -591,36 +591,52 @@ public partial class App : System.Windows.Application
     {
         // A second copy exits before any of this is set up, so each part is checked before it's used. Changes still on
         // their way to the server go first, within a time limit, and any left are noted in the log.
-        if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)
+        // Each part is done on its own, so a problem with one is logged and the rest still happen.
+        static void Step(Action step)
         {
-            LogText($"Closed with {left.Count} {(left.Count == 1 ? "change" : "changes")} still on the way to the server: {string.Join(", ", left)}");
+            try
+            {
+                step();
+            }
+            catch (Exception exception)
+            {
+                LogError(exception);
+            }
         }
 
-        _itemsWindow?.SaveDrafts();
-        _itemsWindow?.SavePlace();
-        _noteSync?.Finish();
+        Step(() =>
+        {
+            if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)
+            {
+                LogText($"Closed with {left.Count} {(left.Count == 1 ? "change" : "changes")} still on the way to the server: {string.Join(", ", left)}");
+            }
+        });
+
+        Step(() => _itemsWindow?.SaveDrafts());
+        Step(() => _itemsWindow?.SavePlace());
+        Step(() => _noteSync?.Finish());
 
         // Finishes the file, so what was recorded is offered as notes next start.
-        _recorder?.Dispose();
+        Step(() => _recorder?.Dispose());
 
         // A capture or press read just before closing is still saved, within a few seconds. Off this thread, so
         // nothing it finishes can wait on the window thread being free.
         if (_worker is { } worker)
         {
-            System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait();
+            Step(() => System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait());
         }
 
         // What those events handed to this thread runs now, since the dispatcher stops once closing is done. A typed
         // capture is one: it's marked as read in Discord before it's handed over, so skipping it would lose it. Files
         // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
         // the window or reads Discord again.
-        _posted?.RunLeft();
+        Step(() => _posted?.RunLeft());
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
-        _worker?.ForgetLateNight();
-        _transcription?.Dispose();
-        _tray?.Dispose();
-        _singleInstance?.Dispose();
+        Step(() => _worker?.ForgetLateNight());
+        Step(() => _transcription?.Dispose());
+        Step(() => _tray?.Dispose());
+        Step(() => _singleInstance?.Dispose());
         base.OnExit(e);
     }
 

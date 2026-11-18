@@ -35,6 +35,9 @@ public sealed class ServerNotesClickTests
 
         public ManualResetEventSlim ChangeArrived { get; } = new();
 
+        /// <summary>The next note save is turned down, as a server does with a request it won't take.</summary>
+        public bool RefuseNextSave { get; set; }
+
         public void ChangeElsewhere(long id, string body)
         {
             lock (_gate)
@@ -67,6 +70,12 @@ public sealed class ServerNotesClickTests
 
             lock (_gate)
             {
+                if (request.Method == HttpMethod.Put && RefuseNextSave)
+                {
+                    RefuseNextSave = false;
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+                }
+
                 if (path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
                 {
                     if (request.Method == HttpMethod.Put)
@@ -305,5 +314,26 @@ public sealed class ServerNotesClickTests
         Assert.Equal("radish, kale, beets", server.Body(7));
         Assert.Equal(0, server.NotesMade);
         Assert.Equal("radish, kale, beets", body.Text);
+    });
+
+    [Fact]
+    public void Closing_after_a_note_save_the_server_turned_down_still_saves_what_was_typed() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+
+        Type(body, "radish, kale");
+        server.ReleaseChanges.Reset();
+        server.RefuseNextSave = true;
+        UiTest.Call(view, "SaveSoon");
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        server.ReleaseChanges.Set();
+        Assert.Empty(work.Finish(TimeSpan.FromSeconds(5)));
+
+        // The turned down save doesn't stop closing, and what it sent is saved again.
+        view.Leave();
+        Assert.Equal(["save 7 radish, kale"], server.Changes);
+        Assert.Equal("radish, kale", server.Body(7));
+        ui.Pump();
     });
 }
