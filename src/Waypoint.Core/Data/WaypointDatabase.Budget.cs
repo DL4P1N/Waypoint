@@ -433,7 +433,7 @@ public sealed partial class WaypointDatabase
     /// Adds a confirmed deposit to the cushion, and keeps it so a scheduled transfer can be matched to it. Transfers
     /// seen in checking up to that day are kept in the new balance, and the checking row for this one won't add it again.
     /// The deposit and the balance are one write. With the email's id, the same email read again adds nothing, and
-    /// this returns false.
+    /// this returns false. A blank id is no id, so it never stands in for another email.
     /// </summary>
     public bool AddToCushion(long cents, DateOnly today, string? messageId = null)
     {
@@ -441,7 +441,7 @@ public sealed partial class WaypointDatabase
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        if (!RecordBrokerageDeposit(connection, cents, today, messageId))
+        if (!RecordBrokerageDeposit(connection, cents, today, string.IsNullOrWhiteSpace(messageId) ? null : messageId))
         {
             return false;
         }

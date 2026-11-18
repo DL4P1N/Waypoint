@@ -193,6 +193,22 @@ public sealed class AtomicWriteTests : IDisposable
         Assert.Equal(0, Count("captures"));
     }
 
+    [Fact]
+    public void Deposits_with_no_email_id_or_a_blank_one_each_count()
+    {
+        _database.SaveBudgetAccount(new BudgetAccount("Made Up Cushion", AccountKind.Cushion, 40000, Day));
+
+        Assert.True(_database.AddToCushion(100, Day));
+        Assert.True(_database.AddToCushion(100, Day));
+        Assert.True(_database.AddToCushion(100, Day, ""));
+        Assert.True(_database.AddToCushion(100, Day, ""));
+        Assert.True(_database.AddToCushion(100, Day, "   "));
+
+        Assert.Equal(5, Count("brokerage_deposits"));
+        Assert.Equal(0, Count("brokerage_deposits", "message_id IS NOT NULL"));
+        Assert.Equal(40500, _database.GetBudgetAccounts().Single().BalanceCents);
+    }
+
     private StoredItem AddTask(string title)
     {
         _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(ItemKind.Task, title, null, null)]);
@@ -213,6 +229,29 @@ public sealed class AtomicWriteTests : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Runs <paramref name="call"/> while this test holds the write, then makes <paramref name="change"/> and lets go,
+    /// the way a save from another page lands between what the call reads and what it writes.
+    /// </summary>
+    private void WhileAnotherWriteIsOpen(Action call, string change)
+    {
+        Task running;
+        using (var held = _database.Open())
+        using (var transaction = held.BeginTransaction())
+        {
+            running = Task.Run(call);
+
+            // Long enough for the call to read and reach its write, which waits here.
+            Thread.Sleep(TimeSpan.FromSeconds(1));
+            using var command = held.CreateCommand();
+            command.CommandText = change;
+            command.ExecuteNonQuery();
+            transaction.Commit();
+        }
+
+        Assert.True(running.Wait(TimeSpan.FromSeconds(60)));
     }
 
     /// <summary>Makes any write the trigger names fail, the way a constraint on that step would.</summary>
