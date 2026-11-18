@@ -48,8 +48,11 @@ public enum AlertActionKind
 /// <summary>How one send went. A channel that's turned off counts as sent, since nothing was meant to go there.</summary>
 public sealed record DiscordDelivery(string? MessageId, bool Sent);
 
-/// <summary>What the owner did to an alert. No message ID means the latest reminder.</summary>
-public sealed record AlertAction(string? MessageId, AlertActionKind Kind);
+/// <summary>
+/// What the owner did to an alert. No message ID means the latest reminder. SentAs is the owner's own typed reply,
+/// when it came as one, so it's marked as dealt with in the same write as what it did.
+/// </summary>
+public sealed record AlertAction(string? MessageId, AlertActionKind Kind, string? SentAs = null);
 
 /// <summary>A file on a message. Url is Discord's own download link. DurationSeconds is set on a voice message.</summary>
 public sealed record DiscordAttachment(string Id, string FileName, long Size, string Url, string? ContentType, double? DurationSeconds = null);
@@ -114,8 +117,6 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 {
     private const string ApiBase = "https://discord.com/api/v10";
     public const string LastMessageKey = "discord_last_message";
-    private const string SeenKey = "discord_seen";
-    private const int MaxSeen = 200;
     private const int MaxFetched = 50;
     private const int MaxAlertsRead = 25;
     private const string DoneButton = "waypoint:done";
@@ -211,7 +212,6 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private const string UserAgent = "DiscordBot (waypoint, 1.0)";
 
     private readonly SemaphoreSlim _polling = new(1, 1);
-    private readonly object _seenLock = new();
     private bool _commandsRegistered;
 
     public string? LastError { get; private set; }
@@ -227,6 +227,21 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
     /// <summary>How long to wait out a rate limit. Swapped in tests so they don't sleep.</summary>
     public Func<TimeSpan, CancellationToken, Task> Delay { get; set; } = Task.Delay;
+
+    /// <summary>
+    /// A message handed over is finished by whatever saves its work. One not finished in this long is taken to have
+    /// been cut off, such as by a crash or a close, and is handed over again on the next poll.
+    /// </summary>
+    public static readonly TimeSpan UnfinishedAfter = TimeSpan.FromMinutes(3);
+
+    /// <summary>The time claims on messages are kept by. Tests swap it to move past <see cref="UnfinishedAfter"/>.</summary>
+    public Func<DateTime> Clock { get; init; } = () => DateTime.Now;
+
+    /// <summary>
+    /// Whether a message's work is still running here, such as a slow file. One that is isn't handed over again
+    /// however long it takes, and its claim is kept fresh instead.
+    /// </summary>
+    public Func<string, bool>? StillWorking { get; set; }
 
     /// <summary>The owner's new messages in the capture channel, live or polled.</summary>
     public Action<DiscordMessage>? Captured { get; set; }
@@ -419,32 +434,59 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         }
     }
 
-    /// <summary>A message sent while connected. Polling skips it later, since it's marked as seen here.</summary>
-    private async Task HandleMessageAsync(JsonElement message)
+    /// <summary>
+    /// A message sent while connected, or one handed over again because its work was cut off. Polling skips it
+    /// while it's claimed here, and for good once whatever saves its work marks it finished.
+    /// </summary>
+    /// <returns>True when it was handed over, false when it's one to act on that's done or being worked on, and null when it isn't one Waypoint acts on.</returns>
+    private async Task<bool?> HandleMessageAsync(JsonElement message, Action<DiscordMessage>? onCapture = null)
     {
         if (!IsFromOwner(message) || Text(message, "id") is not { } id)
         {
-            return;
+            return null;
         }
 
         var channel = Text(message, "channel_id");
-        if (channel == settings.CaptureChannelId && ReadMessage(message) is { } read && FirstTime(id))
+        if (channel == settings.CaptureChannelId && ReadMessage(message) is { } read)
         {
-            Captured?.Invoke(read);
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
+            (onCapture ?? Captured)?.Invoke(read);
+            return true;
         }
-        else if (channel == settings.AlertsChannelId && ReplyKind(Text(message, "content")) is { } kind && FirstTime(id))
+
+        if (channel == settings.AlertsChannelId && ReplyKind(Text(message, "content")) is { } kind)
         {
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
             var target = message.TryGetProperty("message_reference", out var reference) ? Text(reference, "message_id") : null;
-            await ActOnAlertAsync(new AlertAction(target, kind));
+            await ActOnAlertAsync(new AlertAction(target, kind, id));
+            return true;
         }
-        else if (channel is not null && channel == PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) && ReadMessage(message) is { } sent && FirstTime(id))
+
+        if (channel is not null && channel == PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) && ReadMessage(message) is { } sent)
         {
+            if (!FirstTime(id, channel))
+            {
+                return false;
+            }
+
             NotesSent?.Invoke(sent);
+            return true;
         }
-        else if (channel is not null)
+
+        if (channel is not null)
         {
             await HandleThreadMessageAsync(channel, id, message);
         }
+
+        return null;
     }
 
     private async Task HandleReactionAsync(JsonElement reaction)
@@ -466,12 +508,20 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     public async Task ActOnAlertAsync(AlertAction action)
     {
         // An answer with no card in mind is about the newest reminder, so that's the card that turns gray.
-        if (action.MessageId is null && database.LatestSentReminderMessage() is { } latest)
+        if (action.MessageId is null && database.LatestSentReminderMessage(action.SentAs) is { } latest)
         {
             action = action with { MessageId = latest };
         }
 
-        if (AlertActed?.Invoke(action) is not { } outcome)
+        var outcome = AlertActed?.Invoke(action);
+
+        // Answered, or there was nothing for it to do, so a typed reply isn't handed over again.
+        if (action.SentAs is { } typed && AlertActed is not null)
+        {
+            database.FinishDiscordMessage(typed, Clock());
+        }
+
+        if (outcome is null)
         {
             return;
         }
@@ -1321,10 +1371,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                 var id = message.GetProperty("id").GetString()!;
                 actions.AddRange(Reactions(message).Select(kind => new AlertAction(id, kind)));
 
-                if (last is not null && ulong.Parse(id) > ulong.Parse(last) && IsFromOwner(message) && ReplyKind(Text(message, "content")) is { } kind && FirstTime(id))
+                if (last is not null && ulong.Parse(id) > ulong.Parse(last) && IsFromOwner(message) && ReplyKind(Text(message, "content")) is { } kind && FirstTime(id, channel))
                 {
                     var target = message.TryGetProperty("message_reference", out var reference) ? Text(reference, "message_id") : null;
-                    actions.Add(new AlertAction(target, kind));
+                    actions.Add(new AlertAction(target, kind, id));
                 }
             }
 
@@ -1372,6 +1422,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// <summary>
     /// Hands over the owner's new messages, oldest first. The first run only marks where to start. Messages the
     /// live connection already handed over are skipped. A poll still running keeps the next one from reading the same messages.
+    /// Messages handed over before whose work was cut off are read again first, from whichever channel they came in.
     /// </summary>
     public async Task PollAsync(Action<DiscordMessage>? onMessage = null, CancellationToken cancellationToken = default)
     {
@@ -1383,6 +1434,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
         try
         {
+            await RetryUnfinishedAsync(onMessage, cancellationToken);
             var last = database.GetPreference(LastMessageKey);
             var query = last is null ? "limit=1" : $"limit={MaxFetched}&after={last}";
 
@@ -1403,7 +1455,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             foreach (var message in messages)
             {
                 var id = message.GetProperty("id").GetString()!;
-                if (last is not null && IsFromOwner(message) && ReadMessage(message) is { } read && FirstTime(id))
+                if (last is not null && IsFromOwner(message) && ReadMessage(message) is { } read && FirstTime(id, channel))
                 {
                     onMessage?.Invoke(read);
                 }
@@ -1513,21 +1565,74 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private static bool IsDiscordFile(Uri url) =>
         url.IsAbsoluteUri && url.Scheme == Uri.UriSchemeHttps && DownloadHosts.Contains(url.Host, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>True the first time a message is seen, from either the live connection or a poll.</summary>
-    private bool FirstTime(string id)
+    /// <summary>
+    /// True the first time a message is seen, from either the live connection or a poll, and again once its work
+    /// has gone <see cref="UnfinishedAfter"/> without being finished. The claim is saved before it's handed over.
+    /// </summary>
+    private bool FirstTime(string id, string? channel) => database.ClaimDiscordMessage(id, channel ?? "", Clock(), UnfinishedAfter);
+
+    /// <summary>
+    /// Reads again each message whose work was cut off and hands it over the same way as when it came in. One
+    /// deleted since, or that no longer asks for anything, such as after an edit, has nothing left to do. One that
+    /// can't be read right now counts as a try and is tried on a later poll, so it's let go in the end.
+    /// </summary>
+    private async Task RetryUnfinishedAsync(Action<DiscordMessage>? onCapture, CancellationToken cancellationToken)
     {
-        lock (_seenLock)
+        foreach (var (id, channel) in database.GetUnfinishedDiscordMessages(Clock(), UnfinishedAfter))
         {
-            var seen = (database.GetPreference(SeenKey) ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
-            if (seen.Contains(id))
+            if (StillWorking?.Invoke(id) == true)
             {
-                return false;
+                database.KeepDiscordClaim(id, Clock());
+                continue;
             }
 
-            seen.Add(id);
-            database.SetPreference(SeenKey, string.Join(' ', seen.TakeLast(MaxSeen)));
-            return true;
+            try
+            {
+                using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages/{id}"), cancellationToken);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    database.FinishDiscordMessage(id, Clock());
+                    continue;
+                }
+
+                response.EnsureSuccessStatusCode();
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+                if (document.RootElement.ValueKind != JsonValueKind.Object || Text(document.RootElement, "id") != id)
+                {
+                    database.CountDiscordTry(id, Clock());
+                    continue;
+                }
+
+                // The claim knows the channel, which a message read back on its own may leave out.
+                var message = Text(document.RootElement, "channel_id") is null ? WithChannel(document.RootElement, channel) : document.RootElement.Clone();
+                if (await HandleMessageAsync(message, onCapture) is null)
+                {
+                    database.FinishDiscordMessage(id, Clock());
+                }
+            }
+            catch (Exception exception) when (exception is HttpRequestException or JsonException || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                LastError = exception.Message;
+                database.CountDiscordTry(id, Clock());
+            }
         }
+
+        // Tried as many times as it may be, so the owner is told under it, once, rather than it going quiet.
+        foreach (var (id, channel) in database.GetGivenUpDiscordMessages(Clock(), UnfinishedAfter))
+        {
+            await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id);
+            database.FinishDiscordMessage(id, Clock());
+        }
+    }
+
+    /// <summary>Said under a message whose work never finished however many times it was tried.</summary>
+    public const string GaveUp = "Couldn't finish this, so send it again.";
+
+    private static JsonElement WithChannel(JsonElement message, string channel)
+    {
+        var fields = message.EnumerateObject().ToDictionary(field => field.Name, field => (object)field.Value.Clone());
+        fields["channel_id"] = channel;
+        return JsonSerializer.SerializeToElement(fields);
     }
 
     private static DiscordMessage? ReadMessage(JsonElement message)

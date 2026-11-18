@@ -78,6 +78,13 @@ public sealed partial class DiscordPhoneTests
         Assert.True(condition());
     }
 
+    /// <summary>
+    /// What's kept for good. Saying a voice note is waiting rewrites its details through a short-lived .part file,
+    /// which can still be there for a moment after the reply is seen.
+    /// </summary>
+    private List<string> KeptFiles() =>
+        Directory.EnumerateFiles(VoiceFolder).Where(path => !path.EndsWith(".part", StringComparison.Ordinal)).ToList();
+
     private bool NothingKept => !Directory.Exists(VoiceFolder) || !Directory.EnumerateFileSystemEntries(VoiceFolder).Any();
 
     [Fact]
@@ -141,7 +148,7 @@ public sealed partial class DiscordPhoneTests
         Assert.Empty(voice.Read);
 
         // Kept in the data folder, not the temp folder, with which message it answers.
-        Assert.Equal(2, Directory.EnumerateFiles(VoiceFolder).Count());
+        Assert.Equal(2, KeptFiles().Count);
 
         // Its words are captured during the read, and the reply showing them is sent in the background after.
         var heard = Replied("v3", 2);
@@ -264,7 +271,7 @@ public sealed partial class DiscordPhoneTests
         worker.OnDiscordMessage(new DiscordMessage("v10", "", SentFromPhone, [new DiscordAttachment("../a10", "..\\..\\memo", 2048, "https://cdn.discordapp.com/attachments/1/2/memo", "audio/ogg")]));
         await Eventually(() => RepliesTo("v10").Count == 1);
 
-        var kept = Directory.EnumerateFiles(VoiceFolder).ToList();
+        var kept = KeptFiles();
         Assert.Equal(2, kept.Count);
         Assert.All(kept, path => Assert.Equal(VoiceFolder, Path.GetDirectoryName(path)));
         Assert.Contains(kept, path => path.EndsWith(".audio", StringComparison.Ordinal));

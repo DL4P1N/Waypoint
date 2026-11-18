@@ -23,8 +23,11 @@ public sealed partial class WaypointWorker
 
     private string VoiceFolder => Path.Combine(_dataDirectory, VoiceNotes.FolderName);
 
-    /// <summary>Which message a kept voice note answers, when it was sent, and whether it was already told it's waiting.</summary>
-    private sealed record HeldVoiceNote(string? MessageId, DateTimeOffset SentAt, string Name, bool Told);
+    /// <summary>
+    /// Which message a kept voice note answers, when it was sent, whether it was already told it's waiting, and which
+    /// of the message's files it is. Notes kept before the file was saved with them have none.
+    /// </summary>
+    private sealed record HeldVoiceNote(string? MessageId, DateTimeOffset SentAt, string Name, bool Told, string? AttachmentId = null);
 
     /// <summary>Tries every kept voice note again, oldest first. The PC calls this once speech to text is set up.</summary>
     public async Task ReadHeldVoiceNotesAsync()
@@ -78,13 +81,21 @@ public sealed partial class WaypointWorker
 
     /// <summary>
     /// Keeps a voice note sent from the phone, then reads it. One Discord already says is over the limit is a
-    /// recording and isn't downloaded at all.
+    /// recording and isn't downloaded at all. Once it's kept, or answered, <paramref name="dealtWith"/> is called,
+    /// since a kept voice note is read later whatever happens. One already captured isn't kept again.
     /// </summary>
-    private async Task ReadVoiceNoteAsync(DiscordBridge discord, DiscordMessage message, DiscordAttachment attachment)
+    private async Task ReadVoiceNoteAsync(DiscordBridge discord, DiscordMessage message, DiscordAttachment attachment, Action dealtWith)
     {
+        if (_database.HasCaptureClientId(DiscordClientId(message.Id, attachment.Id)))
+        {
+            dealtWith();
+            return;
+        }
+
         if (attachment.DurationSeconds is { } seconds && TimeSpan.FromSeconds(seconds) > VoiceNotes.MaxLength)
         {
             await discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName, tooLong: true));
+            dealtWith();
             return;
         }
 
@@ -98,11 +109,12 @@ public sealed partial class WaypointWorker
                 if (await discord.DownloadAsync(attachment, part, FileReader.MaxBytes) is { } problem)
                 {
                     await discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", problem, CardTone.Attention));
+                    dealtWith();
                     return;
                 }
 
                 // Its details are saved first, so kept audio always knows which message it answers.
-                SaveHeld(audio, new HeldVoiceNote(message.Id, message.SentAt, attachment.FileName, Told: false));
+                SaveHeld(audio, new HeldVoiceNote(message.Id, message.SentAt, attachment.FileName, Told: false, attachment.Id));
                 File.Move(part, audio, overwrite: true);
             }
         }
@@ -110,6 +122,7 @@ public sealed partial class WaypointWorker
         {
             PlainProblem.Report(exception);
             await discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", $"Couldn't save {attachment.FileName}. Try sending it again.", CardTone.Attention));
+            dealtWith();
             return;
         }
         finally
@@ -117,6 +130,7 @@ public sealed partial class WaypointWorker
             DeleteQuietly(part);
         }
 
+        dealtWith();
         await ReadHeldVoiceNotesAsync();
     }
 
@@ -140,8 +154,12 @@ public sealed partial class WaypointWorker
         switch (heard.Outcome)
         {
             case VoiceOutcome.Heard:
-                // Captured first, exactly as typed words would be, and only then let go of.
-                if (Captures.Capture(heard.Text, note.SentAt, CaptureOrigin.Discord) is { } id && note.MessageId is { } messageId)
+                // Captured first, exactly as typed words would be, and only then let go of. It's saved under its
+                // message and file, so the same voice note handed over again after a crash isn't captured twice.
+                var captured = note is { MessageId: { } sentIn, AttachmentId: { } file }
+                    ? Captures.CaptureOnce(DiscordClientId(sentIn, file), heard.Text, note.SentAt, CaptureOrigin.Discord)
+                    : Captures.Capture(heard.Text, note.SentAt, CaptureOrigin.Discord);
+                if (captured is { } id && note.MessageId is { } messageId)
                 {
                     _discordReplies[id] = new DiscordReplyTo(messageId, Heard: heard.Text);
                 }

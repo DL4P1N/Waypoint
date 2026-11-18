@@ -6,9 +6,10 @@ namespace Waypoint.App;
 
 /// <summary>
 /// Work the worker hands to the window thread from a background one, run in the order it came. Some of it saves
-/// data: a Discord capture is marked as read before it's handed over, and only saved once its work runs, so work the
-/// window thread never got to would lose it for good. Closing waits on Discord with the window thread busy, and the
-/// dispatcher stops once closing is done, so anything still waiting is run by <see cref="RunLeft"/> before that.
+/// data: a Discord capture is only saved once its work runs. A message whose work never ran is handed over again a few
+/// minutes into the next start, but running it here saves its words straight away. Closing waits on Discord with the
+/// window thread busy, and the dispatcher stops once closing is done, so anything still waiting is run by
+/// <see cref="RunLeft"/> before that.
 /// </summary>
 internal sealed class PostedWork(Dispatcher dispatcher, Action<Exception> failed)
 {

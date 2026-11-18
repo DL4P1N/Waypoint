@@ -209,7 +209,7 @@ public sealed partial class DiscordPhoneTests
         Assert.Equal(5, buttons.Count);
         Assert.Equal(["Trader Joes, Nov 8, $20.00 left", "Chipotle, Nov 7, $30.00 left", "Thai Place, Nov 6, $40.00 left", "Panera, Nov 5, $15.00 left"], buttons.Take(4).Select(button => button.Label));
         Assert.All(buttons.Take(4), button => Assert.StartsWith(DiscordBridge.ActionPrefix + WaypointWorker.PaymentAppPick, button.Id));
-        Assert.Equal((CardLabels.NotARepayment, DiscordBridge.ActionPrefix + WaypointWorker.PaymentAppNone), (buttons[4].Label, buttons[4].Id));
+        Assert.Equal((CardLabels.NotARepayment, DiscordBridge.ActionPrefix + WaypointWorker.PaymentAppNone + ":" + Waypoint.Core.Data.WaypointDatabase.RepaymentKey("email-1")), (buttons[4].Label, buttons[4].Id));
         Assert.NotNull(_database.FindRepaymentForCard(card));
     }
 
