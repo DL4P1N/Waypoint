@@ -104,6 +104,15 @@ public partial class TodayView : UserControl
 
     public TodayView() => InitializeComponent();
 
+    /// <summary>How the page reads and changes its data: straight away on this PC, or without holding the window in server mode.</summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
+
+    /// <summary>
+    /// What a box was last clicked to, while that change is on its way, by item. A second click on the same row before
+    /// the first is saved compares with this, not the row's saved state, so it isn't mistaken for the row filling in.
+    /// </summary>
+    private readonly Dictionary<string, (StoredItem Item, bool Done)> _doneWanted = new(StringComparer.Ordinal);
+
     /// <summary>Raised for "Study for this exam", so the window can open Notes and make practice questions there.</summary>
     public event Action<StoredItem>? StudyRequested;
 
@@ -122,8 +131,15 @@ public partial class TodayView : UserControl
             _classes = value;
             if (_database is not null)
             {
-                ShowItems(force: true);
-                ShowSuggestion();
+                Work.Show(() =>
+                {
+                    ShowItems(force: true);
+                    ShowSuggestion();
+                }, () =>
+                {
+                    ShowItems();
+                    ShowSuggestion();
+                });
             }
         }
     }
@@ -169,26 +185,31 @@ public partial class TodayView : UserControl
         _changed = changed;
 
         _showingHideFinished = true;
-        HideFinished.IsChecked = database.GetPreference(HideFinishedKey) == "1";
+        HideFinished.IsChecked = Work.Peek(() => database.GetPreference(HideFinishedKey)) == "1";
         _showingHideFinished = false;
-        Column.Connect(database, FilterKey);
+        Column.Work = Work;
+        Work.Peek(() => Column.Connect(database, FilterKey));
         Column.AddChoices = AddChoices;
         Column.QuickAdd = AddChoices[0];
         Column.QuickAddIn = new Dictionary<string, ColumnAddChoice> { [WaitingKey] = AddChoices.Single(choice => choice.Key == WaitingKey) };
         Column.ExtraMenu = FilterMenu;
-        Column.SelectionChanged += _ => ShowItems(force: true, toTop: true);
-        Column.SearchChanged += _ => ShowItems(force: true, toTop: true);
+        Column.SelectionChanged += _ => Work.Show(() => ShowItems(force: true, toTop: true), () => ShowItems());
+        Column.SearchChanged += _ => Work.Show(() => ShowItems(force: true, toTop: true), () => ShowItems());
         Column.AddChosen += OnAddChosen;
-        Column.Reordered += (_, keys) => _database.SetToDoFilterOrder(keys.Select(FilterId).OfType<long>().ToList());
+        Column.Reordered += (_, keys) =>
+        {
+            var ids = keys.Select(FilterId).OfType<long>().ToList();
+            Work.Fire(() => _database.SetToDoFilterOrder(ids));
+        };
         Column.RenameRequested += OnFilterRenamed;
         SuggestionFeedback.Kept = () => FeedbackData!.AddFeedback(Feedback.Suggestion, _suggested is { } shown ? ItemRef.Format(shown) : null, DateTime.Now);
         SuggestionFeedback.Noted = (id, note) => FeedbackData!.NoteFeedback(id, note);
         RowFeedback.Noted = (id, note) => FeedbackData!.NoteFeedback(id, note);
 
-        DecideSetupCard();
-        _weekShown = database.GetPreference(ViewKey) == WeekValue;
+        Work.Fire(DecideSetupCard);
+        _weekShown = Work.Peek(() => database.GetPreference(ViewKey)) == WeekValue;
         WeekPage.Connect(OpenItemMenu);
-        WeekPage.WeekChanged += () => ShowItems(force: true);
+        WeekPage.WeekChanged += () => Work.Show(() => ShowItems(force: true), () => ShowItems());
         WeekPage.UndatedClicked += ShowUndated;
         ShowView();
     }
@@ -196,18 +217,25 @@ public partial class TodayView : UserControl
     private void OnViewToggleClicked(object sender, RoutedEventArgs e)
     {
         _weekShown = !_weekShown;
-        _database.SetPreference(ViewKey, _weekShown ? WeekValue : ListValue);
+        SaveView();
         ShowView();
-        ShowItems(force: true);
+        Work.Show(() => ShowItems(force: true), () => ShowItems());
+    }
+
+    /// <summary>Remembers the list or the week, whichever is showing now.</summary>
+    private void SaveView()
+    {
+        var view = _weekShown ? WeekValue : ListValue;
+        Work.Fire(() => _database.SetPreference(ViewKey, view));
     }
 
     /// <summary>Switches to the list and scrolls to its No date group, which is where the week leaves those items.</summary>
     private void ShowUndated()
     {
         _weekShown = false;
-        _database.SetPreference(ViewKey, ListValue);
+        SaveView();
         ShowView();
-        ShowItems(force: true);
+        Work.Show(() => ShowItems(force: true), () => ShowItems());
 
         // Queued after ShowItems puts the old place back, so this one wins.
         Dispatcher.InvokeAsync(() =>
@@ -242,20 +270,20 @@ public partial class TodayView : UserControl
         if (item.DueDate is { } date && (item.Kind == ItemKind.Event || ItemGroups.IsScheduled(item)))
         {
             _weekShown = true;
-            _database.SetPreference(ViewKey, WeekValue);
+            SaveView();
             ShowView();
             WeekPage.ShowWeekOf(date);
-            ShowItems(force: true);
+            Work.Show(() => ShowItems(force: true), () => ShowItems());
             return;
         }
 
         _weekShown = false;
-        _database.SetPreference(ViewKey, ListValue);
+        SaveView();
         ShowView();
         _selected.Clear();
         _selected.Add(key);
         _anchor = key;
-        ShowItems(force: true);
+        Work.Show(() => ShowItems(force: true), () => ShowItems());
 
         // Queued after ShowItems puts the old place back, so this one wins.
         Dispatcher.InvokeAsync(() =>
@@ -337,7 +365,7 @@ public partial class TodayView : UserControl
         var steps = _database.GetPreference(SetupKey) == SetupShowing ? SetupStepsLeft() : [];
         if (steps.Count == 0 && _database.GetPreference(SetupKey) == SetupShowing)
         {
-            _database.SetPreference(SetupKey, SetupDone);
+            Work.Fire(() => _database.SetPreference(SetupKey, SetupDone));
         }
 
         SetupCard.Visibility = steps.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -389,7 +417,7 @@ public partial class TodayView : UserControl
         return steps;
     }
 
-    private void OnSetupStepClicked(object sender, RoutedEventArgs e)
+    private async void OnSetupStepClicked(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is not SetupStep step)
         {
@@ -399,14 +427,32 @@ public partial class TodayView : UserControl
         if (step.Key == "task")
         {
             AddItem(ItemKind.Task);
-            ShowSetup();
+            Work.Show(ShowSetup);
             return;
         }
 
         // Opening its page is enough for the line to go. Nothing checks whether it was finished there.
-        var opened = _database.GetPreference(SetupOpenedKey);
-        _database.SetPreference(SetupOpenedKey, string.IsNullOrEmpty(opened) ? step.Key : $"{opened},{step.Key}");
-        ShowSetup();
+        var saving = Work.Run(() =>
+        {
+            var opened = _database.GetPreference(SetupOpenedKey);
+            _database.SetPreference(SetupOpenedKey, string.IsNullOrEmpty(opened) ? step.Key : $"{opened},{step.Key}");
+        });
+        if (saving.IsCompleted)
+        {
+            await saving;
+            ShowSetup();
+        }
+
+        OpenSetupStep(step);
+        if (!saving.IsCompleted)
+        {
+            await saving;
+            Work.ShowAfterChanges(nameof(ShowSetup), ShowSetup);
+        }
+    }
+
+    private void OpenSetupStep(SetupStep step)
+    {
         if (step.Key == "pay")
         {
             if (PayScheduleRequested is { } openPay)
@@ -424,10 +470,11 @@ public partial class TodayView : UserControl
         }
     }
 
-    private void OnSetupHideClicked(object sender, RoutedEventArgs e)
+    private async void OnSetupHideClicked(object sender, RoutedEventArgs e)
     {
-        _database.SetPreference(SetupKey, SetupDone);
-        ShowSetup();
+        SetupCard.Visibility = Visibility.Collapsed;
+        await Work.Run(() => _database.SetPreference(SetupKey, SetupDone));
+        Work.ShowAfterChanges(nameof(ShowSetup), ShowSetup);
     }
 
     /// <summary>One study window, worked out fresh from what's already known. It's gone during the wind-down.</summary>
@@ -489,29 +536,40 @@ public partial class TodayView : UserControl
             ? [new RowMenuEntry("Remove filter", () => RemoveFilter(filter))]
             : [];
 
-    private void RemoveFilter(ToDoFilter filter)
+    private async void RemoveFilter(ToDoFilter filter)
     {
-        if (!_database.RemoveToDoFilter(filter.Id, DateTime.Now))
+        if (!await Work.Run(() => _database.RemoveToDoFilter(filter.Id, DateTime.Now)))
         {
             return;
         }
 
-        Bar.Show($"Removed {filter.Name}. Its items are under {Personal.Name} now.", () =>
+        Bar.Show($"Removed {filter.Name}. Its items are under {Personal.Name} now.", async () =>
         {
-            _database.RestoreToDoFilter(filter.Id);
+            await Work.Run(() => _database.RestoreToDoFilter(filter.Id));
             FiltersChanged();
         });
         FiltersChanged();
     }
 
-    private void OnFilterRenamed(object? sender, ColumnRenameEventArgs e)
+    /// <summary>A rename done at once says its problem to the column as it asks. One on its way to the server says it once it's back.</summary>
+    private async void OnFilterRenamed(object? sender, ColumnRenameEventArgs e)
     {
         if (FilterId(e.Entry.Key) is not { } id)
         {
             return;
         }
 
-        e.Problem = _database.RenameToDoFilter(id, e.NewName).Problem;
+        var name = e.NewName;
+        var renaming = Work.Run(() => _database.RenameToDoFilter(id, name));
+        if (renaming.IsCompletedSuccessfully)
+        {
+            e.Problem = renaming.Result.Problem;
+            FiltersChanged();
+            return;
+        }
+
+        var renamed = await renaming;
+        Column.ShowProblem(renamed.Problem);
         FiltersChanged();
     }
 
@@ -531,7 +589,7 @@ public partial class TodayView : UserControl
         }
     }
 
-    private void NewFilter()
+    private async void NewFilter()
     {
         var name = new RenameWindow(Window.GetWindow(this), "", "Add", "Filter name, such as Work", "New filter");
         if (name.ShowDialog() != true)
@@ -539,7 +597,8 @@ public partial class TodayView : UserControl
             return;
         }
 
-        var made = _database.CreateToDoFilter(name.NewName);
+        var newName = name.NewName;
+        var made = await Work.Run(() => _database.CreateToDoFilter(newName));
         Column.ShowProblem(made.Problem);
         if (made.Filter is { } filter)
         {
@@ -559,9 +618,9 @@ public partial class TodayView : UserControl
             .ToList();
         var place = SelectedFilter is { } selected ? places.FirstOrDefault(found => found.Label == selected.Name) : null;
 
-        var form = new AddItemWindow(Window.GetWindow(this), kind, DateOnly.FromDateTime(DateTime.Now), places, place ?? personal, item =>
+        var form = AddItemWindow.Saving(Window.GetWindow(this), kind, DateOnly.FromDateTime(DateTime.Now), places, place ?? personal, async item =>
         {
-            var added = _database.AddByHand(item, DateTime.Now);
+            var added = await Work.Run(() => _database.AddByHand(item, DateTime.Now));
             if (added.Item is { } stored)
             {
                 Bar.Show($"Added {stored.Title}", about: About(stored));
@@ -577,11 +636,15 @@ public partial class TodayView : UserControl
         }
     }
 
-    private void FiltersChanged()
+    private void FiltersChanged() => Work.ShowAfterChanges(nameof(FiltersChanged), () =>
     {
         ShowFilters(force: true);
         ShowItems(force: true);
-    }
+    }, () =>
+    {
+        ShowFilters();
+        ShowItems();
+    });
 
     /// <summary>On any change, so a screen reader's toggle saves too. Showing the saved choice isn't a change.</summary>
     private void OnHideFinishedClicked(object sender, RoutedEventArgs e)
@@ -591,8 +654,9 @@ public partial class TodayView : UserControl
             return;
         }
 
-        _database.SetPreference(HideFinishedKey, HideFinished.IsChecked == true ? "1" : "0");
-        ShowItems(force: true);
+        var hide = HideFinished.IsChecked == true ? "1" : "0";
+        Work.Fire(() => _database.SetPreference(HideFinishedKey, hide));
+        Work.Show(() => ShowItems(force: true), () => ShowItems());
     }
 
     /// <summary>"Hide 2 finished", counting the finished rows this filter and search would show, so it's clear what the box hides.</summary>
@@ -606,7 +670,7 @@ public partial class TodayView : UserControl
 
     /// <summary>Rows wait while one has focus, so they catch up here.</summary>
     private void OnRowsLeft(object sender, KeyboardFocusChangedEventArgs e) =>
-        Dispatcher.BeginInvoke(() => ShowItems(), DispatcherPriority.Background);
+        Dispatcher.BeginInvoke(() => Work.Show(() => ShowItems()), DispatcherPriority.Background);
 
     /// <summary>
     /// The money line on To do, or null when there's no budget set up or nothing is left today. A $0.00 isn't a thing
@@ -796,12 +860,14 @@ public partial class TodayView : UserControl
     }
 
     /// <summary>Starts a session on the suggestion, the same as a reminder's Start, so its own steps come first.</summary>
-    private void OnSuggestionStartClicked(object sender, RoutedEventArgs e)
+    private async void OnSuggestionStartClicked(object sender, RoutedEventArgs e)
     {
         if (_suggestedStudy is { } study)
         {
             // A study window starts on its target with one concrete first action.
-            _reply(_database.StartActivation(ItemRef.Format(study.Target), Activation.StudyMethod, DateTime.Now, study.FirstAction).Text);
+            var target = ItemRef.Format(study.Target);
+            var first = study.FirstAction;
+            _reply((await Work.Run(() => _database.StartActivation(target, Activation.StudyMethod, DateTime.Now, first))).Text);
             Acted();
             return;
         }
@@ -811,12 +877,13 @@ public partial class TodayView : UserControl
             return;
         }
 
-        _reply(_database.StartActivation(ItemRef.Format(item), SuggestedMethod, DateTime.Now).Text);
+        var reference = ItemRef.Format(item);
+        _reply((await Work.Run(() => _database.StartActivation(reference, SuggestedMethod, DateTime.Now))).Text);
         Acted();
     }
 
     /// <summary>Passes on this one for the rest of today, and shows the next suggestion if there is one.</summary>
-    private void OnSuggestionSkipClicked(object sender, RoutedEventArgs e)
+    private async void OnSuggestionSkipClicked(object sender, RoutedEventArgs e)
     {
         if (_suggested is not { } item)
         {
@@ -824,8 +891,9 @@ public partial class TodayView : UserControl
         }
 
         var today = DateOnly.FromDateTime(DateTime.Now);
-        _database.SetPreference(SkippedKey, NextAction.AddSkipped(_database.GetPreference(SkippedKey), today, ItemRef.Format(item)));
-        ShowSuggestion();
+        var reference = ItemRef.Format(item);
+        await Work.Run(() => _database.SetPreference(SkippedKey, NextAction.AddSkipped(_database.GetPreference(SkippedKey), today, reference)));
+        Work.ShowAfterChanges(nameof(ShowSuggestion), ShowSuggestion);
     }
 
     /// <summary>Only there during the wind-down. A step is only ever checked here by hand.</summary>
@@ -848,16 +916,32 @@ public partial class TodayView : UserControl
         ShowRowActions();
     }
 
-    private void OnRoutineStepClicked(object sender, RoutedEventArgs e)
+    private async void OnRoutineStepClicked(object sender, RoutedEventArgs e)
     {
         var box = (CheckBox)sender;
         var label = ((RoutineStep)box.DataContext).Label;
         var done = box.IsChecked == true;
         if (_tonight is not null && Sessions is { } sessions && _marks.GetValueOrDefault(label) != done)
         {
-            // The same as typing "done" and the step's name: it checks the step is on tonight's list and says what's left.
-            var reply = sessions.MarkRoutineStep(label, done, DateTime.Now);
+            // The same as typing "done" and the step's name: it checks the step is on tonight's list and says what's
+            // left. Marked as asked straight away, so a second click before it's saved is told apart from the first.
+            var before = _marks.GetValueOrDefault(label);
             _marks[label] = done;
+            OpReply reply;
+            try
+            {
+                reply = await Work.Run(() => sessions.MarkRoutineStep(label, done, DateTime.Now));
+            }
+            catch
+            {
+                if (_marks.GetValueOrDefault(label) == done)
+                {
+                    _marks[label] = before;
+                }
+
+                throw;
+            }
+
             _reply(reply.Text);
         }
     }
@@ -867,11 +951,11 @@ public partial class TodayView : UserControl
 
     private void OnBedtimeSkipClicked(object sender, RoutedEventArgs e) => Tonight(sessions => sessions.SkipBedtime(DateTime.Now));
 
-    private void Tonight(Func<ISessionData, OpReply> change)
+    private async void Tonight(Func<ISessionData, OpReply> change)
     {
         if (Sessions is { } sessions)
         {
-            _reply(change(sessions).Text);
+            _reply((await Work.Run(() => change(sessions))).Text);
             _changed();
         }
     }
@@ -884,9 +968,9 @@ public partial class TodayView : UserControl
             return [];
         }
 
-        return [new RowMenuEntry("Pick up where I left off", () =>
+        return [new RowMenuEntry("Pick up where I left off", async () =>
         {
-            _reply(sessions.ResumeSession().Text);
+            _reply((await Work.Run(sessions.ResumeSession)).Text);
             Acted();
         })];
     }
@@ -897,8 +981,11 @@ public partial class TodayView : UserControl
     /// <summary>The Save my spot form, from the page's button or the tray. It saves without sorting, so it works offline.</summary>
     public void OpenSaveSpot()
     {
-        var form = new SaveSpotWindow(Window.GetWindow(this), _database.GetActiveTaskTitle(DateTime.Now), spot =>
-            _database.SaveSpotByHand(spot.Project, spot.Stopped, spot.Next, spot.Links, spot.Thoughts, DateTime.Now));
+        var form = SaveSpotWindow.Saving(Window.GetWindow(this), Work.Peek(() => _database.GetActiveTaskTitle(DateTime.Now)), spot =>
+        {
+            var (project, stopped, next, links, thoughts) = (spot.Project, spot.Stopped, spot.Next, spot.Links, spot.Thoughts);
+            return Work.Run(() => _database.SaveSpotByHand(project, stopped, next, links, thoughts, DateTime.Now));
+        });
         if (form.ShowDialog() == true && form.Reply is { } reply)
         {
             _reply(reply);
@@ -907,9 +994,9 @@ public partial class TodayView : UserControl
     }
 
     /// <summary>The "I can't start" path with no sorter: the most pressing item, its own steps or a fixed tiny action.</summary>
-    private void OnStartClicked(object sender, RoutedEventArgs e)
+    private async void OnStartClicked(object sender, RoutedEventArgs e)
     {
-        var started = _database.StartActivation(null, StartMethod, DateTime.Now);
+        var started = await Work.Run(() => _database.StartActivation(null, StartMethod, DateTime.Now));
         if (started.Text == Activation.NothingToPick)
         {
             ReplyNothing();
@@ -946,16 +1033,26 @@ public partial class TodayView : UserControl
     /// Picked locally from dates and sizes, then started like Start, so the session card in Ask opens on it with Did it,
     /// Make it smaller and Not now. The reply only says why this one, since the card already shows the first action.
     /// </summary>
-    private void PickForEnergy(EnergyLevel level, string heading)
+    private async void PickForEnergy(EnergyLevel level, string heading)
     {
-        var now = DateTime.Now;
-        if (EnergyPicks.Pick(_database.WithoutQuietWaiting(_database.GetOpenItems(), DateOnly.FromDateTime(now)), level, DateOnly.FromDateTime(now), Declined(now)) is not { } pick)
+        // Picked from what's open now, read where the change is made, so it never starts on something already gone.
+        var pick = await Work.Run(() =>
+        {
+            var now = DateTime.Now;
+            if (EnergyPicks.Pick(_database.WithoutQuietWaiting(_database.GetOpenItems(), DateOnly.FromDateTime(now)), level, DateOnly.FromDateTime(now), Declined(now)) is not { } found)
+            {
+                return null;
+            }
+
+            _database.StartActivation(ItemRef.Format(found.Item), EnergyMethod, now);
+            return found;
+        });
+        if (pick is null)
         {
             ReplyNothing();
             return;
         }
 
-        _database.StartActivation(ItemRef.Format(pick.Item), EnergyMethod, now);
         Say($"{heading}: {pick.Item.Title}. {pick.Reason}");
         Acted();
     }
@@ -971,22 +1068,46 @@ public partial class TodayView : UserControl
 
     private void OnMoneyClicked(object sender, RoutedEventArgs e) => _openMoney();
 
-    private void OnItemChecked(object sender, RoutedEventArgs e)
+    private async void OnItemChecked(object sender, RoutedEventArgs e)
     {
         var box = (CheckBox)sender;
         var item = ((ItemRow)box.DataContext).Item;
+        var key = ItemRef.Format(item);
+        var done = box.IsChecked == true;
 
-        // Rows fill their boxes from the saved state, which isn't a change to save.
-        if (box.IsChecked == true == item.Done)
+        // Rows fill their boxes from the saved state, which isn't a change to save. A row clicked again before its
+        // last click was saved goes by that click instead.
+        var shown = _doneWanted.TryGetValue(key, out var wanted) && ReferenceEquals(wanted.Item, item) ? wanted.Done : item.Done;
+        if (done == shown)
         {
             return;
         }
 
-        _database.SetDone(item, box.IsChecked == true);
+        _doneWanted[key] = (item, done);
+        try
+        {
+            await Work.Run(() => _database.SetDone(item, done));
+        }
+        finally
+        {
+            if (_doneWanted.TryGetValue(key, out var last) && last.Done == done && ReferenceEquals(last.Item, item))
+            {
+                _doneWanted.Remove(key);
+            }
+        }
+
         Bar.Forget(About(item));
-        ShowFilters();
-        ShowItems(force: true);
-        ShowSuggestion();
+        Work.ShowAfterChanges(nameof(OnItemChecked), () =>
+        {
+            ShowFilters();
+            ShowItems(force: true);
+            ShowSuggestion();
+        }, () =>
+        {
+            ShowFilters();
+            ShowItems();
+            ShowSuggestion();
+        });
     }
 
     private void OnRowMenuOpening(object sender, ContextMenuEventArgs e)
@@ -1007,11 +1128,32 @@ public partial class TodayView : UserControl
     }
 
     /// <summary>A row's menu, also used by the week view's blocks so both act the same way.</summary>
-    private void OpenItemMenu(FrameworkElement box, PlacementMode placement, StoredItem item)
+    private async void OpenItemMenu(FrameworkElement box, PlacementMode placement, StoredItem item)
+    {
+        // Only a calendar item can have been moved from its feed date, and that's asked of the server, so in server
+        // mode its menu opens once the answer comes, unless another menu was asked for meanwhile.
+        // On this PC's database the answer is there at once, and the menu opens on the row as before.
+        var asked = ++_menusAsked;
+        var reading = item.Source == ItemSource.Calendar ? Work.Read(() => _database.IsMovedFromFeed(item)) : System.Threading.Tasks.Task.FromResult(false);
+        var waited = !reading.IsCompleted;
+        var moved = await reading;
+        if (waited && (asked != _menusAsked || PresentationSource.FromVisual(box) is null))
+        {
+            return;
+        }
+
+        var entries = Work.Peek(() => ItemMenu(item, moved));
+        _menuOpen = true;
+        RowMenu.Open(box, placement, entries, MenuClosed);
+    }
+
+    private int _menusAsked;
+
+    private IEnumerable<RowMenuEntry> ItemMenu(StoredItem item, bool moved)
     {
         var today = DateOnly.FromDateTime(DateTime.Now);
         var canFile = item.Source == ItemSource.Capture && ToDoFilters.CourseOf(item, Placement(item)) is null && _filters.Any(filter => filter.Source == FilterSource.Custom);
-        var actions = RowActions.For(item, today, _database.IsMovedFromFeed(item), canFile);
+        var actions = RowActions.For(item, today, moved, canFile);
         IEnumerable<RowMenuEntry> Part(RowActionGroup group) => actions.Where(action => RowActions.GroupOf(action) == group).Select(action => Entry(action, item, today));
         var waiting = WaitingMenu(item, today).ToList();
         // "Waiting on someone..." is one more way to change it. A wait's own follow-up lines get a part of their own.
@@ -1019,10 +1161,7 @@ public partial class TodayView : UserControl
         List<RowMenuEntry> followUp = waiting.Count == 1 ? [] : waiting;
 
         // Doing it, changing it, following up a wait, copying, and Delete apart at the bottom.
-        var entries = RowMenuEntry.Parts(ResumeMenu(item).Concat(Part(RowActionGroup.Do)), Part(RowActionGroup.Change).Concat(markWaiting), followUp, FullTextMenu(item).Concat(Part(RowActionGroup.Copy)), FeedbackMenu(item), Part(RowActionGroup.Remove));
-
-        _menuOpen = true;
-        RowMenu.Open(box, placement, entries, MenuClosed);
+        return RowMenuEntry.Parts(ResumeMenu(item).Concat(Part(RowActionGroup.Do)), Part(RowActionGroup.Change).Concat(markWaiting), followUp, FullTextMenu(item).Concat(Part(RowActionGroup.Copy)), FeedbackMenu(item), Part(RowActionGroup.Remove)).ToList();
     }
 
     /// <summary>The words on the row menu's This didn't help, which opens a line to add a note.</summary>
@@ -1036,11 +1175,12 @@ public partial class TodayView : UserControl
             return [];
         }
 
-        return [new RowMenuEntry(FeedbackMenuLabel, () =>
+        return [new RowMenuEntry(FeedbackMenuLabel, async () =>
         {
             try
             {
-                RowFeedback.Open(feedback.AddFeedback(Feedback.Row, ItemRef.Format(item), DateTime.Now), item.Title);
+                var reference = ItemRef.Format(item);
+                RowFeedback.Open(await Work.Run(() => feedback.AddFeedback(Feedback.Row, reference, DateTime.Now)), item.Title);
             }
             catch (Exception exception) when (exception is ServerUnavailableException or ServerTimedOutException or InvalidOperationException)
             {
@@ -1056,7 +1196,7 @@ public partial class TodayView : UserControl
         if (_rebuildWaiting)
         {
             _rebuildWaiting = false;
-            ShowItems(force: true);
+            Work.Show(() => ShowItems(force: true), () => ShowItems());
         }
     }
 
@@ -1205,7 +1345,7 @@ public partial class TodayView : UserControl
         var count = items.Count;
         var entries = RowActions.ForSeveral(items, today).Select(action => action switch
         {
-            RowAction.Done => new RowMenuEntry($"Mark {count} done", () => Several(SeveralRows.Finish(_database, items), $"Marked {count} done.")),
+            RowAction.Done => new RowMenuEntry($"Mark {count} done", async () => Several(await Work.Run(() => SeveralRows.Finish(_database, items)), $"Marked {count} done.")),
             RowAction.Reschedule => new RowMenuEntry($"Reschedule {count}", Children:
             [
                 new("Today", () => MoveSeveral(items, today)),
@@ -1213,7 +1353,7 @@ public partial class TodayView : UserControl
                 new("Next week", () => MoveSeveral(items, today.AddDays(7))),
                 new("Pick a date...", () => PickDateForSeveral(items, today)),
             ]),
-            _ => new RowMenuEntry($"Delete {count}", () => Several(SeveralRows.Remove(_database, items, DateTime.Now), $"Deleted {count}.")),
+            _ => new RowMenuEntry($"Delete {count}", async () => Several(await Work.Run(() => SeveralRows.Remove(_database, items, DateTime.Now)), $"Deleted {count}.")),
         }).ToList();
 
         if (entries.Count == 0)
@@ -1238,9 +1378,9 @@ public partial class TodayView : UserControl
         }
     }
 
-    private void MoveSeveral(IReadOnlyList<StoredItem> items, DateOnly date)
+    private async void MoveSeveral(IReadOnlyList<StoredItem> items, DateOnly date)
     {
-        var result = SeveralRows.Move(_database, items, date, DateTime.Now);
+        var result = await Work.Run(() => SeveralRows.Move(_database, items, date, DateTime.Now));
         var day = date.ToString("dddd, MMM d", CultureInfo.CurrentCulture);
         Several(result, result.Undo is null
             ? $"Moved {result.Changed} to {day}. Undo isn't available, because some had no date before."
@@ -1250,9 +1390,9 @@ public partial class TodayView : UserControl
     private void Several(SeveralChanged result, string message)
     {
         ClearSelection();
-        Bar.Show(message, result.Undo is { } undo ? () =>
+        Bar.Show(message, result.Undo is { } undo ? async () =>
         {
-            undo();
+            await Work.Run(undo);
             Acted();
         } : null);
         Acted();
@@ -1284,35 +1424,35 @@ public partial class TodayView : UserControl
     };
 
     /// <summary>An open item's Delete. It's kept in History as canceled, and the bar's Undo reopens it.</summary>
-    private void Remove(StoredItem item)
+    private async void Remove(StoredItem item)
     {
         Bar.Forget(About(item));
-        var applied = _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.Cancel), DateTime.Now);
+        var applied = await Work.Run(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.Cancel), DateTime.Now));
         if (!applied.Applied)
         {
             Report(applied);
             return;
         }
 
-        Bar.Show($"Deleted {item.Title}", () =>
+        Bar.Show($"Deleted {item.Title}", async () =>
         {
-            _database.SetDone(item, false);
+            await Work.Run(() => _database.SetDone(item, false));
             Acted();
         });
         Acted();
     }
 
     /// <summary>A finished item's Delete, which takes it out of History too.</summary>
-    private void Delete(StoredItem item)
+    private async void Delete(StoredItem item)
     {
-        if (_database.DeleteItem(item, DateTime.Now) is not { } deleted)
+        if (await Work.Run(() => _database.DeleteItem(item, DateTime.Now)) is not { } deleted)
         {
             return;
         }
 
-        Bar.Show($"Deleted {item.Title}", () =>
+        Bar.Show($"Deleted {item.Title}", async () =>
         {
-            _database.UndoDelete(deleted, DateTime.Now);
+            await Work.Run(() => _database.UndoDelete(deleted, DateTime.Now));
             Acted();
         });
         Acted();
@@ -1328,9 +1468,9 @@ public partial class TodayView : UserControl
             .Select(filter => new RowMenuEntry(filter.Name, () => File(item, filter.Source == FilterSource.Personal ? null : filter)));
     }
 
-    private void File(StoredItem item, ToDoFilter? filter)
+    private async void File(StoredItem item, ToDoFilter? filter)
     {
-        if (_database.AssignToFilter(item, filter?.Id))
+        if (await Work.Run(() => _database.AssignToFilter(item, filter?.Id)))
         {
             Bar.Show($"Moved {item.Title} to {filter?.Name ?? Personal.Name}");
         }
@@ -1338,24 +1478,24 @@ public partial class TodayView : UserControl
         FiltersChanged();
     }
 
-    private void SetDone(StoredItem item, bool done)
+    private async void SetDone(StoredItem item, bool done)
     {
-        _database.SetDone(item, done);
+        await Work.Run(() => _database.SetDone(item, done));
         Bar.Forget(About(item));
         Acted();
     }
 
     /// <summary>A dose's Took it. It's kept once for its day, so a second one says when it was already marked.</summary>
-    private void TookIt(StoredItem item)
+    private async void TookIt(StoredItem item)
     {
         Bar.Forget(About(item));
-        _reply(_database.TakeDose(item, DateTime.Now).Text);
+        _reply((await Work.Run(() => _database.TakeDose(item, DateTime.Now))).Text);
         Acted();
     }
 
-    private void MarkDose(StoredItem item, bool dose)
+    private async void MarkDose(StoredItem item, bool dose)
     {
-        _reply(_database.SetDose(item, dose)
+        _reply(await Work.Run(() => _database.SetDose(item, dose))
             ? dose ? $"{item.Title} is now a dose. Its reminder says {CardLabels.TookIt}." : $"{item.Title} is a plain reminder again."
             : "Only a repeating reminder can be a dose.");
         Acted();
@@ -1364,20 +1504,21 @@ public partial class TodayView : UserControl
     /// <summary>What a message about this item is tied to, so finishing or changing it clears that message.</summary>
     private static object About(StoredItem item) => (item.Source, item.Id);
 
-    private void Start(StoredItem item)
+    private async void Start(StoredItem item)
     {
-        _reply(_database.StartActivation(ItemRef.Format(item), StartMethod, DateTime.Now).Text);
+        var reference = ItemRef.Format(item);
+        _reply((await Work.Run(() => _database.StartActivation(reference, StartMethod, DateTime.Now))).Text);
         Acted();
     }
 
     /// <summary>Uses the fixed actions, so it works offline and never waits on the sorter.</summary>
-    private void StartSmaller(StoredItem item)
+    private async void StartSmaller(StoredItem item)
     {
-        _reply(_database.StartSmaller(item, StartMethod, DateTime.Now).Text);
+        _reply((await Work.Run(() => _database.StartSmaller(item, StartMethod, DateTime.Now))).Text);
         Acted();
     }
 
-    private void Move(StoredItem item, DateOnly date, TimeOnly? time) => Report(_database.RescheduleItem(item, date, time, DateTime.Now));
+    private async void Move(StoredItem item, DateOnly date, TimeOnly? time) => Report(await Work.Run(() => _database.RescheduleItem(item, date, time, DateTime.Now)));
 
     private void PickDate(StoredItem item, DateOnly today)
     {
@@ -1398,10 +1539,10 @@ public partial class TodayView : UserControl
         }
     }
 
-    private void Change(StoredItem item, ChangeAction action, string? title = null)
+    private async void Change(StoredItem item, ChangeAction action, string? title = null)
     {
         Bar.Forget(About(item));
-        Report(_database.ChangeItem(new ItemChange(item.Source, item.Id, action, title), DateTime.Now));
+        Report(await Work.Run(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, action, title), DateTime.Now)));
     }
 
     private void Report(AppliedChange applied)
@@ -1415,9 +1556,17 @@ public partial class TodayView : UserControl
         // An earlier message's Undo may no longer hold once something else has changed.
         _lastSaid = null;
         Bar.Changed();
-        ShowFilters();
-        ShowItems(force: true);
-        ShowSuggestion();
+        Work.ShowAfterChanges(nameof(Acted), () =>
+        {
+            ShowFilters();
+            ShowItems(force: true);
+            ShowSuggestion();
+        }, () =>
+        {
+            ShowFilters();
+            ShowItems();
+            ShowSuggestion();
+        });
         _changed();
     }
 

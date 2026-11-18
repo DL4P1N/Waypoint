@@ -52,9 +52,10 @@ public sealed class CaptureQueue(string path)
     /// <summary>A plain text copy of what was turned down, for opening in a text editor.</summary>
     public const string RefusedCopyName = "Typed but not saved on the server.txt";
 
-    private readonly List<string> _setAside = [];
-
-    /// <summary>The files of captures found damaged and set aside since the app started, so the person can be told.</summary>
+    /// <summary>
+    /// The files of captures found damaged and set aside, then or before a restart, that haven't been opened or had
+    /// their notice closed, so the person can be told.
+    /// </summary>
     public IReadOnlyList<string> SetAsideFiles
     {
         get
@@ -64,10 +65,14 @@ public sealed class CaptureQueue(string path)
                 // Read first, so a damaged file is found as soon as the status line is shown.
                 Read();
                 Read(RefusedPath);
-                return _setAside.ToList();
             }
+
+            return KeptCopy.SetAsideOf([path, RefusedPath], seen: false);
         }
     }
+
+    /// <summary>Opened or closed: the files set aside so far aren't told about again. One set aside later is.</summary>
+    public void MarkSetAsideSeen() => KeptCopy.MarkSeen(SetAsideFiles);
 
     /// <summary>
     /// What to show while any capture has been turned down, or a file of them was found damaged and set aside. Null
@@ -101,12 +106,13 @@ public sealed class CaptureQueue(string path)
     public string? WriteRefusedCopy()
     {
         List<CaptureRequest> refused;
-        List<string> aside;
         lock (_gate)
         {
             refused = Read(RefusedPath);
-            aside = _setAside.ToList();
         }
+
+        // Every one still on this PC, opened before or not, so the copy shows all that's kept.
+        var aside = KeptCopy.SetAsideOf([path, RefusedPath]);
 
         if (refused.Count == 0 && aside.Count == 0)
         {
@@ -201,14 +207,14 @@ public sealed class CaptureQueue(string path)
         }
         catch (JsonException)
         {
-            _setAside.Add(KeptCopy.SetAside(file));
+            KeptCopy.SetAside(file);
             return [];
         }
 
         var good = entries.OfType<CaptureRequest>().Where(capture => capture is { Id: not null, Text: not null }).ToList();
         if (good.Count != entries.Count)
         {
-            _setAside.Add(KeptCopy.SetAside(file));
+            KeptCopy.SetAside(file);
             if (good.Count > 0)
             {
                 Write(file, good);

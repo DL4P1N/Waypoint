@@ -41,6 +41,7 @@ public partial class ItemsWindow : Window
     private bool _choosingPage;
     private bool _draftsDiscarded;
     private Action? _openKept;
+    private Action? _dismissKept;
     private string? _noticeKey;
     private string? _choice;
     private string? _dismissedNotice;
@@ -83,7 +84,8 @@ public partial class ItemsWindow : Window
     /// and <paramref name="lists"/> are the Notes page's data, since the lists sit in its column, the server's in
     /// server mode.
     /// </summary>
-    public ItemsWindow(WaypointDatabase database, Action<string> submitted, Action importCsv, Action<string[]> filesDropped, IToDoData? toDo = null, IBudgetData? budget = null, ISessionData? sessions = null, IListsData? lists = null, IHistoryData? history = null, INotesData? notes = null, IFeedbackData? feedback = null)
+    /// <param name="server">The server in server mode, so clicks and page switches don't wait on it. See <see cref="PageWork"/>.</param>
+    public ItemsWindow(WaypointDatabase database, Action<string> submitted, Action importCsv, Action<string[]> filesDropped, IToDoData? toDo = null, IBudgetData? budget = null, ISessionData? sessions = null, IListsData? lists = null, IHistoryData? history = null, INotesData? notes = null, IFeedbackData? feedback = null, ServerClient? server = null)
     {
         _localSessions = sessions is null;
         _sessions = sessions ?? new LocalSessionData(database);
@@ -93,6 +95,12 @@ public partial class ItemsWindow : Window
         InitializeComponent();
         WindowStyling.Apply(this);
         RestorePlace();
+        TodayPage.Work = PageWorkFor(server);
+        NotesPage.Work = PageWorkFor(server);
+        SettingsPage.Work = PageWorkFor(server);
+        _askWork = PageWorkFor(server);
+        PageWork.SavingChanged += ShowSaving;
+        Closed += (_, _) => PageWork.SavingChanged -= ShowSaving;
         Chat.ItemsSource = _chat;
         Examples.ItemsSource = AskExamples;
         toDo ??= new LocalToDoData(database);
@@ -143,8 +151,10 @@ public partial class ItemsWindow : Window
             ShowReply(text);
             OnDataChanged();
         };
+        MoneyPage.Work = PageWorkFor(server);
         MoneyPage.Connect(budget, importCsv);
-        HistoryPage.Connect(history, () => TodayPage.Refresh(_tonight));
+        HistoryPage.Work = PageWorkFor(server);
+        HistoryPage.Connect(history, () => TodayPage.Work.Show(() => TodayPage.Refresh(_tonight)));
         FindPage.Connect(new FindSources(toDo, lists, notes, history, budget));
         FindPage.Chosen += ShowFound;
         FindPage.Closed += CloseFind;
@@ -204,9 +214,12 @@ public partial class ItemsWindow : Window
 
     public void ConnectNotesFolder(Func<string> current, Action<string> move) => SettingsPage.ConnectNotesFolder(current, move);
 
+    /// <summary>For the cards above Ask, which read the session after a page changed something.</summary>
+    private readonly PageWork _askWork;
+
     private void OnDataChanged()
     {
-        ShowSession();
+        _askWork.Show(ShowSession);
         DataChanged?.Invoke();
     }
 
@@ -252,6 +265,51 @@ public partial class ItemsWindow : Window
 
     /// <summary>Shows the running class schedule again after it changed in place, such as from the server.</summary>
     public void ClassesChanged() => TodayPage.Classes = TodayPage.Classes;
+
+    private readonly List<PageWork> _works = [];
+
+    private PageWork PageWorkFor(ServerClient? server)
+    {
+        if (server is null)
+        {
+            return PageWork.Local;
+        }
+
+        var work = new PageWork(server);
+        _works.Add(work);
+        return work;
+    }
+
+    /// <summary>
+    /// For closing: waits up to <paramref name="limit"/> in all for changes still on their way to the server, and
+    /// returns those that didn't finish.
+    /// </summary>
+    public IReadOnlyList<string> FinishWork(TimeSpan limit) => PageWork.FinishAll(_works, limit);
+
+    /// <summary>A quiet Saving... under the date while a change is on its way to a slow server, after a moment so a quick one shows nothing.</summary>
+    private void ShowSaving()
+    {
+        if (!PageWork.Saving)
+        {
+            _savingDelay?.Stop();
+            SavingLabel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (_savingDelay is null)
+        {
+            _savingDelay = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _savingDelay.Tick += (_, _) =>
+            {
+                _savingDelay.Stop();
+                SavingLabel.Visibility = PageWork.Saving ? Visibility.Visible : Visibility.Collapsed;
+            };
+        }
+
+        _savingDelay.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _savingDelay;
 
     /// <summary>Saves anything half typed, for when the window closes or the app exits.</summary>
     public void SaveDrafts()
@@ -316,7 +374,7 @@ public partial class ItemsWindow : Window
         RefreshPage();
         if (page == Page.Settings)
         {
-            SettingsPage.Load();
+            SettingsPage.LoadSoon();
         }
 
         Visibility PageVisibility(Page shown) => shown == page ? Visibility.Visible : Visibility.Collapsed;
@@ -327,25 +385,48 @@ public partial class ItemsWindow : Window
     private void FitAsk() =>
         AskWidth.Width = new GridLength(AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown));
 
-    /// <summary>Only the page on screen refreshes. The others catch up when they're opened.</summary>
-    private void RefreshPage()
+    /// <summary>
+    /// Only the page on screen refreshes. The others catch up when they're opened. A refresh every so often leaves a
+    /// page alone while a change from it is still on its way, so it can't show what was there before the change.
+    /// </summary>
+    private void RefreshPage(bool every = false)
     {
         switch (_page)
         {
             case Page.ToDo:
-                TodayPage.Refresh(_tonight);
+                if (!every || !TodayPage.Work.IsBusy)
+                {
+                    TodayPage.Work.Show(() => TodayPage.Refresh(_tonight));
+                }
+
                 break;
             case Page.Notes:
-                NotesPage.Refresh();
+                if (!every || !NotesPage.Work.IsBusy)
+                {
+                    NotesPage.Work.Show(() => NotesPage.Refresh(), () => NotesPage.Refresh());
+                }
+
                 break;
             case Page.Budget:
-                MoneyPage.Refresh();
+                if (!every || !MoneyPage.Work.IsBusy)
+                {
+                    MoneyPage.Work.Show(MoneyPage.Refresh);
+                }
+
                 break;
             case Page.Settings:
-                SettingsPage.Refresh();
+                if (!every || !SettingsPage.Work.IsBusy)
+                {
+                    SettingsPage.Work.Show(SettingsPage.Refresh);
+                }
+
                 break;
             default:
-                HistoryPage.Refresh();
+                if (!every || !HistoryPage.Work.IsBusy)
+                {
+                    HistoryPage.Work.Show(HistoryPage.Refresh);
+                }
+
                 break;
         }
     }
@@ -641,6 +722,8 @@ public partial class ItemsWindow : Window
 
     private void OnStatusOpenClicked(object sender, RoutedEventArgs e) => _openKept?.Invoke();
 
+    private void OnStatusDismissClicked(object sender, RoutedEventArgs e) => _dismissKept?.Invoke();
+
     private void OnChatLinkClicked(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is ChatLink link)
@@ -665,14 +748,16 @@ public partial class ItemsWindow : Window
     }
 
     /// <param name="openKept">Shows what the server couldn't save, when there's any, through an Open link beside the status.</param>
-    public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null)
+    public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null, Action? dismissKept = null)
     {
         _openKept = openKept;
+        _dismissKept = dismissKept;
         StatusOpen.Visibility = openKept is null ? Visibility.Collapsed : Visibility.Visible;
+        StatusDismiss.Visibility = dismissKept is null ? Visibility.Collapsed : Visibility.Visible;
         TodayLabel.Text = DateTime.Now.ToString("dddd, MMMM d", CultureInfo.InvariantCulture);
         ShowNextClass(nextClass);
         _tonight = tonight;
-        RefreshPage();
+        RefreshPage(every: true);
         ShowSession();
         ShowPayProposal();
 

@@ -99,6 +99,9 @@ public sealed class ServerNotesData : INotesData
     /// </summary>
     public string? WriteUnsavedCopy() => _offline?.WriteUnsavedCopy();
 
+    /// <summary>The notes files set aside so far were opened, or their notice closed, so it isn't shown again.</summary>
+    public void MarkSetAsideSeen() => _offline?.MarkSetAsideSeen();
+
     private static string Text(string? value) => Uri.EscapeDataString(value ?? "");
 
     /// <summary>Unfiled is no folder at all, so it's left out of the address rather than sent empty.</summary>

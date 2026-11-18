@@ -174,7 +174,7 @@ public partial class App : System.Windows.Application
             _worker.NoteFiles = notes;
         }
 
-        _itemsWindow = new ItemsWindow(_database, OnCaptureSubmitted, ImportCsv, OnFilesDropped, _server?.Data, _server?.Budget, _server?.Sessions, _server?.Lists, _server?.History, notes, _server?.Feedback)
+        _itemsWindow = new ItemsWindow(_database, OnCaptureSubmitted, ImportCsv, OnFilesDropped, _server?.Data, _server?.Budget, _server?.Sessions, _server?.Lists, _server?.History, notes, _server?.Feedback, _server?.Client)
         {
             Classes = _schedule,
             CardUpFor = item => _cardsUp.Contains(ItemRef.Format(item)),
@@ -256,7 +256,18 @@ public partial class App : System.Windows.Application
         });
         _later.Add(_noteSync.Start);
 
-        _itemsWindow.DataChanged += RefreshStatus;
+        // In server mode what a change touched is read again off the window's thread before the status is shown.
+        _itemsWindow.DataChanged += () =>
+        {
+            if (_server is null)
+            {
+                RefreshStatus();
+            }
+            else
+            {
+                _ = RefreshStatusAheadAsync();
+            }
+        };
         _captures.Changed += () => Dispatcher.BeginInvoke(RefreshStatus);
         _captures.Sorted += outcome => Dispatcher.BeginInvoke(() => ShowOutcome(outcome));
 
@@ -509,6 +520,16 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        // A click's change goes to the server off the window's thread, so a slow answer lands here. It's said the same
+        // way, and kept in the log.
+        if (e.Exception is ServerTimedOutException slow && _started)
+        {
+            LogError(slow);
+            _itemsWindow?.ShowReply(slow.Message);
+            e.Handled = true;
+            return;
+        }
+
         LogError(e.Exception);
         e.Handled = _started;
     }
@@ -563,34 +584,59 @@ public partial class App : System.Windows.Application
         }
     }
 
+    /// <summary>How long closing waits for changes still on their way to the server, a few slow answers' worth.</summary>
+    private static readonly TimeSpan PageWorkLimit = TimeSpan.FromSeconds(10);
+
     protected override void OnExit(ExitEventArgs e)
     {
-        // A second copy exits before any of this is set up, so each part is checked before it's used.
-        _itemsWindow?.SaveDrafts();
-        _itemsWindow?.SavePlace();
-        _noteSync?.Finish();
+        // A second copy exits before any of this is set up, so each part is checked before it's used. Changes still on
+        // their way to the server go first, within a time limit, and any left are noted in the log.
+        // Each part is done on its own, so a problem with one is logged and the rest still happen.
+        static void Step(Action step)
+        {
+            try
+            {
+                step();
+            }
+            catch (Exception exception)
+            {
+                LogError(exception);
+            }
+        }
+
+        Step(() =>
+        {
+            if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)
+            {
+                LogText($"Closed with {left.Count} {(left.Count == 1 ? "change" : "changes")} still on the way to the server: {string.Join(", ", left)}");
+            }
+        });
+
+        Step(() => _itemsWindow?.SaveDrafts());
+        Step(() => _itemsWindow?.SavePlace());
+        Step(() => _noteSync?.Finish());
 
         // Finishes the file, so what was recorded is offered as notes next start.
-        _recorder?.Dispose();
+        Step(() => _recorder?.Dispose());
 
         // A capture or press read just before closing is still saved, within a few seconds. Off this thread, so
         // nothing it finishes can wait on the window thread being free.
         if (_worker is { } worker)
         {
-            System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait();
+            Step(() => System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait());
         }
 
         // What those events handed to this thread runs now, since the dispatcher stops once closing is done. A typed
         // capture is one: it's marked as read in Discord before it's handed over, so skipping it would lose it. Files
         // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
         // the window or reads Discord again.
-        _posted?.RunLeft();
+        Step(() => _posted?.RunLeft());
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
-        _worker?.ForgetLateNight();
-        _transcription?.Dispose();
-        _tray?.Dispose();
-        _singleInstance?.Dispose();
+        Step(() => _worker?.ForgetLateNight());
+        Step(() => _transcription?.Dispose());
+        Step(() => _tray?.Dispose());
+        Step(() => _singleInstance?.Dispose());
         base.OnExit(e);
     }
 
@@ -1337,13 +1383,15 @@ public partial class App : System.Windows.Application
     /// Opens a plain text copy of what the server couldn't save, in the PC's text editor, so it can be copied back
     /// in. The kept file stays as it is, so opening it never loses anything.
     /// </summary>
-    private void OpenKept(Func<string?> write)
+    /// <returns>Whether it opened.</returns>
+    private bool OpenKept(Func<string?> write)
     {
         try
         {
             if (write() is { } copy)
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(copy) { UseShellExecute = true });
+                return true;
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -1351,6 +1399,28 @@ public partial class App : System.Windows.Application
             _itemsWindow.ShowReply($"Couldn't open what's kept on this PC. {exception.Message}");
             _itemsWindow.ShowList();
         }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Files found damaged and set aside are told about on the status line, after a restart too, until they're opened
+    /// or the notice is dismissed. Each file is remembered by name, so one set aside later is told about again.
+    /// </summary>
+    private void SetAsideSeen(ServerConnection server)
+    {
+        try
+        {
+            server.Queue.MarkSetAsideSeen();
+            server.Notes.MarkSetAsideSeen();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Not remembered, so the notice comes back next time, which loses nothing.
+            LogError(exception);
+        }
+
+        RefreshStatus();
     }
 
     /// <summary>The same as a local reply, with notifications assumed to go out from the server through Discord.</summary>
@@ -1458,6 +1528,7 @@ public partial class App : System.Windows.Application
         // Anything typed here that the server turned down, or that was found damaged, is told with a way to open it.
         var refused = server.Queue.Refused;
         var unreadable = server.Notes.Unreadable;
+        var setAside = unreadable is not null || server.Queue.SetAsideFiles.Count > 0;
 
         _tray!.Text = Trial.TrayTip(text, MaxTrayTextLength);
         ApplyTheme();
@@ -1474,16 +1545,18 @@ public partial class App : System.Windows.Application
                 string.Join("\n", new[] { problem, refused, unreadable }.OfType<string>()) is { Length: > 0 } notice ? notice : null,
                 refused is null && unreadable is null ? null : () =>
                 {
-                    if (refused is not null)
-                    {
-                        OpenKept(server.Queue.WriteRefusedCopy);
-                    }
-
+                    var opened = refused is null || OpenKept(server.Queue.WriteRefusedCopy);
                     if (unreadable is not null)
                     {
-                        OpenKept(server.Notes.WriteUnsavedCopy);
+                        opened &= OpenKept(server.Notes.WriteUnsavedCopy);
                     }
-                });
+
+                    if (opened && setAside)
+                    {
+                        SetAsideSeen(server);
+                    }
+                },
+                setAside ? () => SetAsideSeen(server) : null);
         }
         catch (ServerUnavailableException)
         {

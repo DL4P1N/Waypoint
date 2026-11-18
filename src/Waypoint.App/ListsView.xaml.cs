@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -20,7 +21,8 @@ namespace Waypoint.App;
 /// Rows only rebuild when something changed and nobody is working in them, and an entry being edited changes in
 /// place, so a refresh can't take the text or the focus away.
 /// In server mode the lists are on the server. While it's away the page shows what it last had, and a change says
-/// it can't be made yet and leaves what was typed where it was.
+/// it can't be made yet and leaves what was typed where it was. A change goes to the server through
+/// <see cref="Work"/>, so a slow server never holds the window, and the page's changes reach it in the order made.
 /// </summary>
 public partial class ListsView : UserControl
 {
@@ -31,6 +33,16 @@ public partial class ListsView : UserControl
     private EntryRow? _editing;
 
     public ListsView() => InitializeComponent();
+
+    /// <summary>How the page changes its data: straight away on this PC, or in order without holding the window in server mode.</summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
+
+    /// <summary>
+    /// What a box was last clicked to, while that change is on its way, by entry, with the row's entry it was clicked
+    /// on. A second click on the same row before the first is saved compares with this, not the row's saved state, so
+    /// it isn't mistaken for the row filling in. A row drawn again since goes by its own state.
+    /// </summary>
+    private readonly Dictionary<long, (ListEntry Entry, bool Done)> _doneWanted = [];
 
     /// <summary>Something changed the lists' names, order, or counts, so the column that shows them should catch up.</summary>
     public event Action? ListsChanged;
@@ -149,11 +161,15 @@ public partial class ListsView : UserControl
     }
 
     /// <summary>After this page changed something: the entries redraw, and so does the column, since counts and names may have moved.</summary>
-    private void Redraw()
+    private void Redraw() => Work.ShowAfterChanges(nameof(Redraw), () =>
     {
         Refresh(force: true);
         ListsChanged?.Invoke();
-    }
+    }, () =>
+    {
+        Refresh();
+        ListsChanged?.Invoke();
+    });
 
     /// <summary>Opens another list from here and tells the column, so it picks the same one.</summary>
     private void Pick(string name)
@@ -196,9 +212,10 @@ public partial class ListsView : UserControl
     /// New list from the Notes page's +. Gives the name it was made with, or says why it wasn't, such as a list
     /// that already has that name or the server being away.
     /// </summary>
-    public (string? Name, string? Problem) MakeList(string name)
+    public async Task<(string? Name, string? Problem)> MakeList(string name)
     {
-        if (Try(() => _lists.CreateList(name, DateTime.Now), out var made) is { } away)
+        var (away, made) = await Try(() => _lists.CreateList(name, DateTime.Now));
+        if (away is not null)
         {
             return (null, away);
         }
@@ -218,13 +235,13 @@ public partial class ListsView : UserControl
     }
 
     /// <summary>Saves the lists' new order from the column, which already shows it. Gives why it couldn't, such as the server being away.</summary>
-    public string? OrderLists(IReadOnlyList<string> names)
+    public async Task<string?> OrderLists(IReadOnlyList<string> names)
     {
-        var problem = Try(() =>
+        var (problem, _) = await Try(() =>
         {
             _lists.OrderLists(names);
             return true;
-        }, out _);
+        });
         if (problem is not null)
         {
             // The column goes back to the order that was saved.
@@ -235,9 +252,10 @@ public partial class ListsView : UserControl
     }
 
     /// <summary>Rename from the column's right-click menu or F2, as on the other pages. Gives why it didn't happen, for the column to say.</summary>
-    public string? RenameList(string name, string newName)
+    public async Task<string?> RenameList(string name, string newName)
     {
-        if (Try(() => _lists.RenameList(name, newName, DateTime.Now), out var renamed) is { } away)
+        var (away, renamed) = await Try(() => _lists.RenameList(name, newName, DateTime.Now));
+        if (away is not null)
         {
             return away;
         }
@@ -256,7 +274,7 @@ public partial class ListsView : UserControl
         return null;
     }
 
-    private void OnAddItemKey(object sender, KeyEventArgs e)
+    private async void OnAddItemKey(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter)
         {
@@ -264,40 +282,84 @@ public partial class ListsView : UserControl
         }
 
         e.Handled = true;
-        if (!Change(() => _lists.AddListEntry(_selected, AddItem.Text, DateTime.Now)))
+
+        // Cleared at once, so the next entry can be typed while this one is on its way. If it can't be added, what was
+        // typed goes back, unless more was typed meanwhile.
+        var (list, text) = (_selected, AddItem.Text);
+        var saving = Change(() => _lists.AddListEntry(list, text, DateTime.Now));
+        if (saving.IsCompleted)
         {
-            return;
+            // On this PC's database: kept in the box when it can't be added, as before.
+            if (!await saving)
+            {
+                return;
+            }
+
+            AddItem.Clear();
+        }
+        else
+        {
+            AddItem.Clear();
+            if (!await saving)
+            {
+                if (AddItem.Text.Length == 0)
+                {
+                    AddItem.Text = text;
+                    AddItem.CaretIndex = text.Length;
+                }
+
+                return;
+            }
         }
 
-        AddItem.Clear();
         Bar.Clear();
         Redraw();
     }
 
-    private void OnEntryClicked(object sender, RoutedEventArgs e)
+    private async void OnEntryClicked(object sender, RoutedEventArgs e)
     {
         var box = (CheckBox)sender;
         var entry = ((EntryRow)box.DataContext).Entry;
         var done = box.IsChecked == true;
 
-        // Rows fill their boxes from the saved state, and putting a box back isn't a change either.
-        if (done == entry.Done)
+        // Rows fill their boxes from the saved state, and putting a box back isn't a change either. A row clicked
+        // again before its last click was saved goes by that click instead.
+        var shown = _doneWanted.TryGetValue(entry.Id, out var wanted) && ReferenceEquals(wanted.Entry, entry) ? wanted.Done : entry.Done;
+        if (done == shown)
         {
             return;
         }
 
-        if (!Change(() => _lists.SetEntryDone(entry, done, DateTime.Now)))
+        _doneWanted[entry.Id] = (entry, done);
+        bool changed;
+        try
         {
-            box.IsChecked = entry.Done;
+            changed = await Change(() => _lists.SetEntryDone(entry, done, DateTime.Now));
+        }
+        finally
+        {
+            if (_doneWanted.TryGetValue(entry.Id, out var last) && last.Done == done && ReferenceEquals(last.Entry, entry))
+            {
+                _doneWanted.Remove(entry.Id);
+            }
+        }
+
+        if (!changed)
+        {
+            if (!_doneWanted.ContainsKey(entry.Id))
+            {
+                box.IsChecked = entry.Done;
+            }
+
             return;
         }
 
         // A checked shopping entry leaves the list, so it needs a way back.
         if (done && entry.List == WaypointDatabase.ShoppingList)
         {
-            Bar.Show($"Checked off {entry.Text}", () =>
+            Bar.Show($"Checked off {entry.Text}", async () =>
             {
-                if (Change(() => _lists.SetEntryDone(entry, false, DateTime.Now)))
+                if (await Change(() => _lists.SetEntryDone(entry, false, DateTime.Now)))
                 {
                     Redraw();
                 }
@@ -310,16 +372,16 @@ public partial class ListsView : UserControl
     private void OnDeleteEntryClicked(object sender, RoutedEventArgs e) =>
         DeleteEntry(((EntryRow)((FrameworkElement)sender).DataContext).Entry);
 
-    private void DeleteEntry(ListEntry entry)
+    private async void DeleteEntry(ListEntry entry)
     {
-        if (!Change(() => _lists.DeleteEntry(entry, DateTime.Now)))
+        if (!await Change(() => _lists.DeleteEntry(entry, DateTime.Now)))
         {
             return;
         }
 
-        Bar.Show($"Deleted {entry.Text}", () =>
+        Bar.Show($"Deleted {entry.Text}", async () =>
         {
-            if (Change(() => _lists.RestoreEntry(entry, DateTime.Now)))
+            if (await Change(() => _lists.RestoreEntry(entry, DateTime.Now)))
             {
                 Redraw();
             }
@@ -403,7 +465,7 @@ public partial class ListsView : UserControl
     /// Changes the row in place instead of rebuilding, since this can run in the middle of a click
     /// on the row beside it. A refresh picks up the stored text afterwards.
     /// </summary>
-    private void Commit(EntryRow row)
+    private async void Commit(EntryRow row)
     {
         if (!row.Editing)
         {
@@ -413,14 +475,22 @@ public partial class ListsView : UserControl
         row.Editing = false;
         _editing = null;
         var text = row.Draft.Trim();
-        if (text.Length > 0 && text != row.Text && Change(() => _lists.EditEntry(row.Entry, text)))
+        if (text.Length == 0 || text == row.Text)
         {
-            row.Text = text;
+            return;
+        }
+
+        // Shown at once. If it can't be saved, the row goes back to what it showed.
+        var before = row.Text;
+        row.Text = text;
+        if (!await Change(() => _lists.EditEntry(row.Entry, text)) && row.Text == text)
+        {
+            row.Text = before;
         }
     }
 
     /// <summary>Start over unchecks the whole list, the same as typing "start my morning routine", and says where to begin.</summary>
-    private void OnStartOverClicked(object sender, RoutedEventArgs e)
+    private async void OnStartOverClicked(object sender, RoutedEventArgs e)
     {
         if (_editing is { } editing)
         {
@@ -428,7 +498,8 @@ public partial class ListsView : UserControl
         }
 
         var name = _selected;
-        if (!Change(() => _lists.StartList(name), out var said))
+        var (ok, said) = await Change(() => _lists.StartList(name), Bar);
+        if (!ok)
         {
             return;
         }
@@ -497,7 +568,7 @@ public partial class ListsView : UserControl
     /// Saves a rename typed over the title. This can run as focus leaves the box, in the middle of a click, so the
     /// column catches up afterwards rather than now.
     /// </summary>
-    private void FinishRename()
+    private async void FinishRename()
     {
         if (RenameBox.Visibility != Visibility.Visible)
         {
@@ -512,7 +583,8 @@ public partial class ListsView : UserControl
         }
 
         var name = _selected;
-        if (!Change(() => _lists.RenameList(name, text, DateTime.Now), out var renamed))
+        var (ok, renamed) = await Change(() => _lists.RenameList(name, text, DateTime.Now), Bar);
+        if (!ok)
         {
             return;
         }
@@ -542,21 +614,21 @@ public partial class ListsView : UserControl
     }
 
     /// <summary>Removes a list, the open one or another from the column, with Undo to bring it back and open it.</summary>
-    private void DeleteList(string name, UndoBar bar)
+    private async void DeleteList(string name, UndoBar bar)
     {
         if (_editing is { } editing)
         {
             Commit(editing);
         }
 
-        if (!Change(() => _lists.DeleteList(name, DateTime.Now), bar))
+        if (!(await Change(() => _lists.DeleteList(name, DateTime.Now), bar)).Ok)
         {
             return;
         }
 
-        bar.Show($"Removed {name}", () =>
+        bar.Show($"Removed {name}", async () =>
         {
-            if (Change(() => _lists.CreateList(name, DateTime.Now), bar))
+            if ((await Change(() => _lists.CreateList(name, DateTime.Now), bar)).Ok)
             {
                 Pick(name);
                 Redraw();
@@ -571,45 +643,55 @@ public partial class ListsView : UserControl
     }
 
     /// <summary>
-    /// Runs a change, which takes away an earlier message's Undo. If the server is away, the page says so and nothing
-    /// else happens. <paramref name="bar"/> is where that's said, this page's own bar unless another is given.
+    /// Runs a change, which takes away an earlier message's Undo. If the server is away, or too slow to answer, the
+    /// page says so and nothing else happens. <paramref name="bar"/> is where that's said, this page's own bar unless
+    /// another is given. On this PC's database it's done before this returns, as it always was.
     /// </summary>
-    private bool Change(Action change, UndoBar? bar = null) => Change(() =>
+    private async Task<bool> Change(Action change, UndoBar? bar = null) => (await Change(() =>
     {
         change();
         return true;
-    }, out _, bar);
+    }, bar)).Ok;
 
-    private bool Change<T>(Func<T> change, out T result, UndoBar? bar = null)
+    private async Task<(bool Ok, T Result)> Change<T>(Func<T> change, UndoBar? bar)
     {
         bar ??= Bar;
-        try
+        var (problem, result) = await Attempt(change);
+        if (problem is not null)
         {
-            result = change();
-            bar.Changed();
-            return true;
+            bar.Show(problem);
+            return (false, result);
         }
-        catch (ServerUnavailableException away)
-        {
-            result = default!;
-            bar.Show(PageMessages.CantChange(away));
-            return false;
-        }
+
+        bar.Changed();
+        return (true, result);
     }
 
     /// <summary>A change asked for from the column, which says itself why it didn't happen. Gives that reason, or null once it's made.</summary>
-    private string? Try<T>(Func<T> change, out T result)
+    private async Task<(string? Problem, T Result)> Try<T>(Func<T> change)
+    {
+        var tried = await Attempt(change);
+        if (tried.Problem is null)
+        {
+            Bar.Changed();
+        }
+
+        return tried;
+    }
+
+    private async Task<(string? Problem, T Result)> Attempt<T>(Func<T> change)
     {
         try
         {
-            result = change();
-            Bar.Changed();
-            return null;
+            return (null, await Work.Run(change));
         }
         catch (ServerUnavailableException away)
         {
-            result = default!;
-            return PageMessages.CantChange(away);
+            return (PageMessages.CantChange(away), default!);
+        }
+        catch (ServerTimedOutException slow)
+        {
+            return (slow.Message, default!);
         }
     }
 

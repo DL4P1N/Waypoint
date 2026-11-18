@@ -36,6 +36,12 @@
                                FontSize="18"
                                FontWeight="SemiBold"
                                Foreground="{StaticResource PrimaryText}" />
+                    <!-- While a change is on its way to a slow server. The window carries on meanwhile. -->
+                    <TextBlock x:Name="SavingLabel"
+                               FontSize="12"
+                               Text="Saving..."
+                               Foreground="{DynamicResource SecondaryText}"
+                               Visibility="Collapsed" />
                 </StackPanel>
                 <StackPanel x:Name="NextClassPanel"
                             Margin="0,0,64,0"
@@ -115,6 +121,18 @@
                 Visibility="Collapsed">
             <!-- One line, so a long message doesn't push every page down. The whole of it is in the tip. -->
             <DockPanel>
+                <!-- Only for a file found damaged and set aside, so its notice can go once it's been seen. -->
+                <Button x:Name="StatusDismiss"
+                        DockPanel.Dock="Right"
+                        Margin="12,0,0,0"
+                        VerticalAlignment="Top"
+                        Style="{StaticResource LinkButton}"
+                        Cursor="Hand"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Dismiss the notice about files that couldn't be read"
+                        Click="OnStatusDismissClicked">
+                    <TextBlock FontSize="12" TextDecorations="Underline" Text="Dismiss" Foreground="{DynamicResource Accent}" />
+                </Button>
                 <Button x:Name="StatusOpen"
                         DockPanel.Dock="Right"
                         Margin="12,0,0,0"

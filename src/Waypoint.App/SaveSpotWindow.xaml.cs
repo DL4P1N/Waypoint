@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using Waypoint.Core.Capture;
 
@@ -12,11 +13,19 @@ namespace Waypoint.App;
 /// </summary>
 public partial class SaveSpotWindow : Window
 {
-    private readonly Func<SaveSpotWindow, OpReply> _save;
+    private readonly Func<SaveSpotWindow, Task<OpReply>> _save;
 
     /// <param name="project">Filled in to start with, such as the task being worked on.</param>
     /// <param name="save">Saves the form and gives back the reply. A reply that asks something keeps the form open.</param>
     public SaveSpotWindow(Window owner, string? project, Func<SaveSpotWindow, OpReply> save)
+        : this(owner, project, form => Task.FromResult(save(form)))
+    {
+    }
+
+    /// <summary>The same form with a save that may be on its way to the server for a moment. See <see cref="FormSaving"/>.</summary>
+    public static SaveSpotWindow Saving(Window owner, string? project, Func<SaveSpotWindow, Task<OpReply>> save) => new(owner, project, save);
+
+    private SaveSpotWindow(Window owner, string? project, Func<SaveSpotWindow, Task<OpReply>> save)
     {
         InitializeComponent();
         WindowStyling.Apply(this);
@@ -49,8 +58,11 @@ public partial class SaveSpotWindow : Window
             return;
         }
 
-        Reply = _save(this).Text;
-        DialogResult = true;
+        FormSaving.Then(this, Save, _save(this), reply =>
+        {
+            Reply = reply.Text;
+            DialogResult = true;
+        });
     }
 
     private static IReadOnlyList<string> Lines(string text) =>

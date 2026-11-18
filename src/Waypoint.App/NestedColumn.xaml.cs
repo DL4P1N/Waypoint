@@ -331,13 +331,22 @@ public partial class NestedColumn : UserControl
         }
     }
 
-    private void Choose(string key)
+    /// <summary>How the page this column is on saves its data. Picking an entry never waits on a slow server.</summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
+
+    private async void Choose(string key)
     {
         _selectedKey = key;
         ShowAddTip();
+        if (_database is not { } database)
+        {
+            return;
+        }
+
+        var preferenceKey = _preferenceKey;
         try
         {
-            _database?.SetPreference(_preferenceKey, key);
+            await Work.Run(() => database.SetPreference(preferenceKey, key));
         }
         catch (Waypoint.Core.Remote.ServerUnavailableException)
         {

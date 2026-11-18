@@ -29,7 +29,14 @@ public sealed partial class ServerClient
     // Counts up as each change starts and again as it ends, so a read made while one was on its way isn't reused.
     private long _changes;
 
-    private readonly record struct ReadStamp(DateTime At, long Changes);
+    /// <summary>When a kept answer was read, the changes counted then, and the order its read started in.</summary>
+    private readonly record struct ReadStamp(DateTime At, long Changes, long Started);
+
+    /// <summary>
+    /// Called under the gate when a kept answer is changed here rather than read. It never counts as recent, and a read
+    /// already on its way when it was changed doesn't replace it.
+    /// </summary>
+    private void SetByHand(string path) => _readAt[path] = new ReadStamp(DateTime.MinValue, -1, Interlocked.Increment(ref _readStarts));
 
     /// <summary>The clock for how old reads are. Tests move it on.</summary>
     internal Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
@@ -141,6 +148,7 @@ public sealed partial class ServerClient
     {
         var changes = Interlocked.Read(ref _changes);
         var at = UtcNow();
+        var started = Interlocked.Increment(ref _readStarts);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
@@ -153,8 +161,13 @@ public sealed partial class ServerClient
             var json = ReadText(response);
             lock (_gate)
             {
-                Remember(path, json);
-                _readAt[path] = new ReadStamp(at, changes);
+                // A slow answer to an earlier read, landing after a later one, is still this caller's answer, but
+                // the later one stays kept.
+                if (!_readAt.TryGetValue(path, out var kept) || kept.Started < started)
+                {
+                    Remember(path, json);
+                    _readAt[path] = new ReadStamp(at, changes, started);
+                }
             }
 
             return json;
