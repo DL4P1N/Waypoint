@@ -24,7 +24,10 @@ public static partial class FileReader
     /// <summary>Text recognition takes a second or two a page, so a long scan stops here rather than tying the app up.</summary>
     public const int MaxScannedPages = 60;
 
-    /// <summary>The most time spent recognizing scanned pages in one file. Pages after it are left blank.</summary>
+    /// <summary>
+    /// The most time spent recognizing scanned pages in one file, counted from the first scanned page, so reading
+    /// the pages before it never uses it up. Pages after it are left blank.
+    /// </summary>
     public static readonly TimeSpan ScanBudget = TimeSpan.FromMinutes(5);
 
     private const long MaxUnpackedBytes = 50 * 1024 * 1024;
@@ -106,12 +109,14 @@ public static partial class FileReader
         using var document = PdfDocument.Open(path);
         var pages = new List<string>();
         var scanned = 0;
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+        System.Diagnostics.Stopwatch? clock = null;
         foreach (var page in document.GetPages())
         {
             var text = ContentOrderTextExtractor.GetText(page);
-            if (string.IsNullOrWhiteSpace(text) && readScannedPage is not null && scanned < MaxScannedPages && clock.Elapsed < budget)
+            if (string.IsNullOrWhiteSpace(text) && readScannedPage is not null && scanned < MaxScannedPages && (clock is null || clock.Elapsed < budget))
             {
+                // The budget starts at the first page that needs recognizing, so a slow start never skips them all.
+                clock ??= System.Diagnostics.Stopwatch.StartNew();
                 scanned++;
                 text = ReadScanned(readScannedPage, path, page.Number - 1);
             }
