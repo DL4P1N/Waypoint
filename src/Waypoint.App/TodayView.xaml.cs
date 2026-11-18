@@ -1132,9 +1132,12 @@ public partial class TodayView : UserControl
     {
         // Only a calendar item can have been moved from its feed date, and that's asked of the server, so in server
         // mode its menu opens once the answer comes, unless another menu was asked for meanwhile.
+        // On this PC's database the answer is there at once, and the menu opens on the row as before.
         var asked = ++_menusAsked;
-        var moved = item.Source == ItemSource.Calendar && await Work.Read(() => _database.IsMovedFromFeed(item));
-        if (asked != _menusAsked || !box.IsLoaded)
+        var reading = item.Source == ItemSource.Calendar ? Work.Read(() => _database.IsMovedFromFeed(item)) : System.Threading.Tasks.Task.FromResult(false);
+        var waited = !reading.IsCompleted;
+        var moved = await reading;
+        if (waited && (asked != _menusAsked || PresentationSource.FromVisual(box) is null))
         {
             return;
         }
