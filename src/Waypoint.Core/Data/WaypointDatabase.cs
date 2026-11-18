@@ -179,6 +179,7 @@ public sealed partial class WaypointDatabase
         CreateUndeliveredTables();
         CreateFeedbackTables();
         CreateDiscordThreadTables();
+        CreateNoteJobTables();
         AddColumnIfMissing("sent_reminders", "source", "TEXT NOT NULL DEFAULT 'Capture'");
         AddColumnIfMissing("sent_reminders", "start_only", "INTEGER NOT NULL DEFAULT 0");
         CreateAfterThisTables();

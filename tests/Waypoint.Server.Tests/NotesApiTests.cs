@@ -320,6 +320,59 @@ public sealed class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_restart_a_finished_job_is_still_told_and_a_running_one_is_interrupted()
+    {
+        INotesData notes = Pc().Notes;
+        var finishedNote = notes.StartFromFile(new FileText("week 1.txt", "Cells."), null, false, DateTime.Now).NoteId;
+        var heldNote = notes.StartFromFile(new FileText("week 2.txt", "Tissues."), null, false, DateTime.Now).NoteId;
+        var client = Paired();
+        var body = new WriteNotesRequest(null, true, null);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        var finished = (await (await client.PostAsJsonAsync($"/api/notes/{finishedNote}/write", body, RemoteJson.Options))
+            .Content.ReadFromJsonAsync<NoteJobStarted>(RemoteJson.Options))!.Id;
+        NoteJobState state;
+        do
+        {
+            await Task.Delay(20);
+            state = (await client.GetFromJsonAsync<NoteJobState>($"/api/notes/jobs/{finished}", RemoteJson.Options))!;
+        }
+        while (state.Kind() == NoteJobOutcome.Running && DateTime.UtcNow < deadline);
+
+        _haiku.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = (await (await client.PostAsJsonAsync($"/api/notes/{heldNote}/write", body, RemoteJson.Options))
+            .Content.ReadFromJsonAsync<NoteJobStarted>(RemoteJson.Options))!.Id;
+        while (_haiku.Inputs.Count < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        // A new ServerNotes over the same database is the server after a restart: nothing kept in memory.
+        var restarted = ActivatorUtilities.CreateInstance<ServerNotes>(_factory.Services);
+
+        var told = restarted.State(finished);
+        Assert.Equal(NoteJobOutcome.Succeeded, told.Kind());
+        Assert.Equal(NoteWriteStatus.Written, told.Notes!.Status);
+        var cut = restarted.State(held);
+        Assert.Equal(NoteJobOutcome.Lost, cut.Kind());
+        Assert.True(cut.Interrupted);
+        Assert.Equal(NoteJobOutcome.Lost, restarted.State("made-up-job").Kind());
+        Assert.False(restarted.State("made-up-job").Interrupted);
+
+        // The run from before the restart ends here, and its job stays told as interrupted.
+        _haiku.Hold.SetResult();
+        _haiku.Hold = null;
+        do
+        {
+            await Task.Delay(20);
+            state = (await client.GetFromJsonAsync<NoteJobState>($"/api/notes/jobs/{held}", RemoteJson.Options))!;
+        }
+        while (state.Kind() == NoteJobOutcome.Running && DateTime.UtcNow < deadline);
+
+        Assert.True(state.Interrupted);
+    }
+
+    [Fact]
     public void A_recordings_transcript_goes_to_the_server_as_note_text()
     {
         INotesData notes = Pc().Notes;

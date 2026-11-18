@@ -1,37 +1,56 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Waypoint.Core;
+using Waypoint.Core.Data;
+using Waypoint.Core.Notes;
 using Waypoint.Core.Remote;
 
 namespace Waypoint.Server;
 
 /// <summary>
-/// Notes and practice questions being written, each a job the PC checks on. Jobs live in memory: after a restart the
-/// PC hears the job is lost, and whatever was saved by then stays saved. A job that breaks off is logged here and
-/// reported as failed, with a plain reason, so the PC can tell it apart from a lost one.
+/// Notes and practice questions being written, each a job the PC checks on. A running job lives in memory, and every
+/// job is also kept in the database, so how one ended is still known after a restart, for an hour. A job the restart
+/// cut off is told to the PC as interrupted, and isn't run again on its own. Whatever was saved by then stays saved.
+/// A job that breaks off is logged here and reported as failed, with a plain reason, so the PC can tell it apart.
 /// </summary>
 public sealed class NoteJobs
 {
     private static readonly TimeSpan KeepFinished = TimeSpan.FromHours(1);
 
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
+    private readonly WaypointDatabase _store;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _running;
     private readonly Func<DateTime> _utcNow;
     private readonly Func<CancellationTokenSource> _newStop;
+    private bool _shuttingDown;
 
+    /// <param name="store">Where each job and how it ended is kept. Jobs it has as running were cut off by a restart.</param>
     /// <param name="maxRunning">How many are written at once. Each is a claude -p, which is slow and heavy.</param>
-    /// <param name="utcNow">The clock for forgetting finished jobs, so tests can move it.</param>
+    /// <param name="utcNow">The clock for job times and forgetting finished jobs, so tests can move it.</param>
     /// <param name="newStop">Makes each job's stop switch, so tests can see it's let go of.</param>
-    public NoteJobs(ILogger logger, int maxRunning = 2, Func<DateTime>? utcNow = null, Func<CancellationTokenSource>? newStop = null)
+    public NoteJobs(ILogger logger, WaypointDatabase store, int maxRunning = 2, Func<DateTime>? utcNow = null, Func<CancellationTokenSource>? newStop = null)
     {
         _logger = logger;
+        _store = store;
         _running = new SemaphoreSlim(maxRunning, maxRunning);
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
         _newStop = newStop ?? (() => new CancellationTokenSource());
+
+        var cut = _store.InterruptRunningNoteJobs(_utcNow());
+        if (cut > 0)
+        {
+            _logger.LogWarning("{Count} notes job(s) were running when the server stopped. They're marked as interrupted and aren't run again.", cut);
+        }
+
+        Sweep();
     }
 
-    /// <summary>Starts a job, or returns null when as many as allowed are already running, so the PC can try later.</summary>
-    public NoteJobStarted? Start(Func<CancellationToken, Task<NoteJobState>> work)
+    /// <summary>
+    /// Starts a job, or returns null when as many as allowed are already running, so the PC can try later.
+    /// <paramref name="noteId"/> is the note it writes, when that's known at the start.
+    /// </summary>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work)
     {
         Sweep();
         if (!_running.Wait(0))
@@ -39,12 +58,22 @@ public sealed class NoteJobs
             return null;
         }
 
-        var stop = _newStop();
-        var token = stop.Token;
-        var task = Task.Run(() => work(token), CancellationToken.None);
-        var job = new Job(stop, task);
         var id = Guid.NewGuid().ToString("N");
+        try
+        {
+            _store.AddNoteJob(id, kind, noteId, _utcNow());
+        }
+        catch
+        {
+            _running.Release();
+            throw;
+        }
+
+        // Known as running before it starts, so a job that ends at once is never missed while it's kept.
+        var job = new Job(id, _newStop());
         _jobs[id] = job;
+        var token = job.Token;
+        var task = Task.Run(() => work(token), CancellationToken.None);
 
         // The one place a job's end is handled, however it ended and whoever looks at it. It runs on its own
         // thread, never inline on one that's stopping the job, so the switch isn't let go of while in use.
@@ -52,27 +81,20 @@ public sealed class NoteJobs
         return new NoteJobStarted(id);
     }
 
+    /// <summary>
+    /// How a job stands. One that ended is answered from the database, as often as asked, until it's swept an hour
+    /// after it ended. One the server doesn't know is lost.
+    /// </summary>
     public NoteJobState State(string id)
     {
         Sweep();
-        if (!_jobs.TryGetValue(id, out var job))
+        if (_jobs.ContainsKey(id))
         {
-            return NoteJobState.Lost();
-        }
-
-        var task = job.Task;
-        if (!task.IsCompleted)
-        {
+            // Still running, or ended a moment ago and not kept yet, so the PC asks again.
             return NoteJobState.Running();
         }
 
-        _jobs.TryRemove(id, out _);
-        if (task.IsCompletedSuccessfully)
-        {
-            return task.Result with { Done = true, Gone = false, Outcome = NoteJobOutcome.Succeeded, Problem = null };
-        }
-
-        return IsStopped(task) ? NoteJobState.Cancelled() : NoteJobState.Failed(Reason(task.Exception));
+        return _store.GetNoteJob(id) is { } kept ? FromStore(kept) : NoteJobState.Lost();
     }
 
     /// <summary>Stops a job. A job that already ended, or one that isn't known, is left as it is.</summary>
@@ -84,9 +106,13 @@ public sealed class NoteJobs
         }
     }
 
-    /// <summary>Stops every job, as the server shuts down. Each lets go of its switch once it has ended.</summary>
+    /// <summary>
+    /// Stops every job, as the server shuts down. Each lets go of its switch once it has ended, and one stopped this
+    /// way is kept as interrupted by the restart, not as stopped by the person.
+    /// </summary>
     public void StopAll()
     {
+        Volatile.Write(ref _shuttingDown, true);
         foreach (var job in _jobs.Values)
         {
             job.Cancel();
@@ -100,6 +126,45 @@ public sealed class NoteJobs
     private static bool IsStopped(Task task) =>
         task.IsCanceled || task.Exception?.GetBaseException() is OperationCanceledException;
 
+    /// <summary>
+    /// What the PC is told from a kept job. A job that ran to the end is told with what came of it. A job cut off by a
+    /// restart is lost and marked interrupted, which every PC tells as the server restarting while writing them.
+    /// </summary>
+    private static NoteJobState FromStore(NoteJobRecord kept)
+    {
+        switch (kept.Outcome)
+        {
+            case NoteJobOutcome.Running:
+                return NoteJobState.Running();
+            case NoteJobOutcome.Succeeded:
+                var result = Result(kept.Result);
+                return new NoteJobState(Done: true, Notes: result?.Notes, Study: result?.Study, Outcome: NoteJobOutcome.Succeeded);
+            case NoteJobOutcome.Failed:
+                return NoteJobState.Failed(kept.Problem ?? NoteJobText.NoReason);
+            case NoteJobOutcome.Cancelled:
+                return NoteJobState.Cancelled();
+            default:
+                return kept.Interrupted ? NoteJobState.InterruptedByRestart() : NoteJobState.Lost();
+        }
+    }
+
+    private static NoteJobState? Result(string? json)
+    {
+        if (json is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<NoteJobState>(json, RemoteJson.Options);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private void Ended(Job job, Task<NoteJobState> task)
     {
         try
@@ -109,51 +174,61 @@ public sealed class NoteJobs
                 var exception = task.Exception!.GetBaseException();
                 _logger.LogError(exception, "Writing notes failed: {Reason} The files stay saved in Sources, so it can be tried again.", Reason(task.Exception));
             }
+
+            Keep(job.Id, task);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // The job is then told as lost. What it saved to the note stays saved.
+            _logger.LogError(exception, "How a notes job ended couldn't be kept.");
         }
         finally
         {
-            job.FinishedAt = _utcNow();
+            _jobs.TryRemove(job.Id, out _);
             job.Release();
             _running.Release();
         }
     }
 
-    /// <summary>Forgets finished jobs nobody came back for within the hour. Their switches were let go of as they ended.</summary>
-    private void Sweep()
+    /// <summary>
+    /// Keeps how a job ended. Only what the PC needs to be told is kept: the result of one that ran to the end, or the
+    /// plain reason of one that failed. Never the prompt, paths, or the exception's own text.
+    /// </summary>
+    private void Keep(string id, Task<NoteJobState> task)
     {
         var now = _utcNow();
-        foreach (var old in _jobs.Where(entry => entry.Value.FinishedAt is { } at && now - at > KeepFinished).ToList())
+        if (task.IsCompletedSuccessfully)
         {
-            _jobs.TryRemove(old.Key, out _);
+            var state = task.Result;
+            var result = JsonSerializer.Serialize(new NoteJobState(Done: true, Notes: state.Notes, Study: state.Study), RemoteJson.Options);
+            _store.FinishNoteJob(id, NoteJobOutcome.Succeeded, now, problem: null, result, state.Study?.NoteId);
+        }
+        else if (IsStopped(task) && Volatile.Read(ref _shuttingDown))
+        {
+            _store.FinishNoteJob(id, NoteJobOutcome.Lost, now, problem: null, result: null, interrupted: true);
+        }
+        else if (IsStopped(task))
+        {
+            _store.FinishNoteJob(id, NoteJobOutcome.Cancelled, now, problem: null, result: null);
+        }
+        else
+        {
+            _store.FinishNoteJob(id, NoteJobOutcome.Failed, now, Reason(task.Exception), result: null);
         }
     }
 
-    private sealed class Job(CancellationTokenSource stop, Task<NoteJobState> task)
+    /// <summary>Forgets finished jobs nobody came back for within the hour. Their switches were let go of as they ended.</summary>
+    private void Sweep() => _store.PruneNoteJobs(_utcNow() - KeepFinished);
+
+    private sealed class Job(string id, CancellationTokenSource stop)
     {
         private readonly Lock _gate = new();
         private CancellationTokenSource? _stop = stop;
-        private DateTime? _finishedAt;
 
-        public Task<NoteJobState> Task { get; } = task;
+        public string Id { get; } = id;
 
-        public DateTime? FinishedAt
-        {
-            get
-            {
-                lock (_gate)
-                {
-                    return _finishedAt;
-                }
-            }
-
-            set
-            {
-                lock (_gate)
-                {
-                    _finishedAt = value;
-                }
-            }
-        }
+        /// <summary>Taken before the job starts, while the switch is surely still held.</summary>
+        public CancellationToken Token { get; } = stop.Token;
 
         /// <summary>Stops the job, unless it ended and its switch was let go of already.</summary>
         public void Cancel()

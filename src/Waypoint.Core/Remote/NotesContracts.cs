@@ -52,10 +52,10 @@ public enum NoteJobOutcome
     /// <summary>It broke off partway, with a plain reason in <see cref="NoteJobState.Problem"/>.</summary>
     Failed,
 
-    /// <summary>It was stopped, by the PC or by the server shutting down.</summary>
+    /// <summary>It was stopped by the PC. One stopped by the server shutting down is told as lost and interrupted.</summary>
     Cancelled,
 
-    /// <summary>The server doesn't know the job, such as after a restart, so how it ended is unknown.</summary>
+    /// <summary>The server doesn't know how the job ended, such as one cut off by a restart. See <see cref="NoteJobState.Interrupted"/>.</summary>
     Lost,
 }
 
@@ -63,6 +63,8 @@ public enum NoteJobOutcome
 /// Where a job is. Outcome says how it stands, and Problem why a failed one failed, in plain words for the person.
 /// Done and Gone are what PCs from before Outcome read: Gone is set only for a lost job, and Done for every job
 /// that ended, so those PCs stop checking either way. From a server from before Outcome, it's worked out from them.
+/// Interrupted marks a lost job the server knows was cut off by a restart while it ran. It's sent as Lost, so every
+/// PC tells the person the server restarted while writing them, and a PC from before Interrupted reads it the same.
 /// </summary>
 public sealed record NoteJobState(
     bool Done,
@@ -70,11 +72,15 @@ public sealed record NoteJobState(
     NoteWriteOutcome? Notes = null,
     StudyOutcome? Study = null,
     NoteJobOutcome? Outcome = null,
-    string? Problem = null)
+    string? Problem = null,
+    bool Interrupted = false)
 {
     public static NoteJobState Running() => new(Done: false, Outcome: NoteJobOutcome.Running);
 
     public static NoteJobState Lost() => new(Done: false, Gone: true, Outcome: NoteJobOutcome.Lost);
+
+    /// <summary>A job that was running when the server restarted. It isn't run again on its own.</summary>
+    public static NoteJobState InterruptedByRestart() => Lost() with { Interrupted = true };
 
     public static NoteJobState Failed(string problem) => new(Done: true, Outcome: NoteJobOutcome.Failed, Problem: problem);
 
