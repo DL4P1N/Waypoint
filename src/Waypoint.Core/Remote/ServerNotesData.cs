@@ -296,6 +296,28 @@ public sealed class ServerNotesData : INotesData
     public bool MoveNoteFolder(long id, long? parentId, int position) =>
         _server.Send<FlagValue>(Put, $"api/notes/folders/{id}/place", new MoveFolderRequest(parentId, position)).Value;
 
+    /// <summary>
+    /// One request, so the server puts them all in order or none. A server from before that can't, so there they're
+    /// moved one at a time as they used to be.
+    /// </summary>
+    public bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids)
+    {
+        try
+        {
+            return _server.Send<FlagValue>(Put, "api/notes/folders/order", new FolderOrderRequest(parentId, ids)).Value;
+        }
+        catch (ServerRefusedException refused) when (refused.Status is 404 or 405)
+        {
+            var moved = true;
+            for (var position = 0; position < ids.Count; position++)
+            {
+                moved &= MoveNoteFolder(ids[position], parentId, position);
+            }
+
+            return moved;
+        }
+    }
+
     public FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes) =>
         _server.Send<Found<FolderDeleteResult>>(Delete, $"api/notes/folders/{id}?notes={notes}").Value;
 

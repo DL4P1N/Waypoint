@@ -493,10 +493,9 @@ public partial class NotesView : UserControl
 
         long? parent = group == "top" ? null : long.Parse(group[2..], CultureInfo.InvariantCulture);
         var ids = keys.Select(FolderId).OfType<long>().ToList();
-        for (var position = 0; position < ids.Count; position++)
-        {
-            _notes.MoveNoteFolder(ids[position], parent, position);
-        }
+
+        // All at once, so a failure partway never leaves half of the new order. The redraw shows the order kept.
+        Column.ShowProblem(_notes.ReorderNoteFolders(parent, ids) ? null : "Those folders couldn't be put in that order.");
 
         var hadFocus = Column.ListHasFocus;
         Dispatcher.BeginInvoke(() => FoldersChanged(hadFocus), DispatcherPriority.Background);

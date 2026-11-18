@@ -113,6 +113,7 @@ public static class NotesRoutes
         group.MapPost("/folders", (NewFolderRequest request) => notes.Value.Data.CreateNoteFolder(request.Name, request.ParentId, DateTime.Now));
         group.MapPut("/folders/{id:long}/name", (long id, NameRequest request) => notes.Value.Data.RenameNoteFolder(id, request.Name));
         group.MapPut("/folders/{id:long}/place", (long id, MoveFolderRequest request) => new FlagValue(notes.Value.Data.MoveNoteFolder(id, request.ParentId, request.Position)));
+        group.MapPut("/folders/order", (FolderOrderRequest request) => new FlagValue(notes.Value.Data.ReorderNoteFolders(request.ParentId, request.Ids ?? [])));
         group.MapDelete("/folders/{id:long}", (long id, [Microsoft.AspNetCore.Mvc.FromQuery(Name = "notes")] string? inside) =>
             Enum.TryParse<NotesInFolder>(inside ?? nameof(NotesInFolder.Refuse), out var keep)
                 ? Results.Ok(new Found<FolderDeleteResult>(notes.Value.Data.DeleteNoteFolder(id, keep)))

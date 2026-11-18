@@ -76,6 +76,12 @@ public interface INotesData : INoteFileStore, IPreferences
 
     bool MoveNoteFolder(long id, long? parentId, int position);
 
+    /// <summary>
+    /// Puts the folders in that order inside <paramref name="parentId"/> all at once, so a failure partway never
+    /// leaves half of the new order. False, with nothing changed, if any of them can't go there.
+    /// </summary>
+    bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids);
+
     FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes);
 
     long? FindClassFolder(string course);
@@ -220,6 +226,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public FolderEdit RenameNoteFolder(long id, string name) => database.RenameNoteFolder(id, name);
 
     public bool MoveNoteFolder(long id, long? parentId, int position) => database.MoveNoteFolder(id, parentId, position);
+
+    public bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids) => database.ReorderNoteFolders(parentId, ids);
 
     public FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes) => database.DeleteNoteFolder(id, notes);
 

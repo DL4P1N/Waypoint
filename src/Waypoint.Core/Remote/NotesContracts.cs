@@ -16,6 +16,9 @@ public sealed record NewFolderRequest(string Name, long? ParentId);
 
 public sealed record MoveFolderRequest(long? ParentId, int Position);
 
+/// <summary>Folders to put in this order inside ParentId, all at once.</summary>
+public sealed record FolderOrderRequest(long? ParentId, IReadOnlyList<long> Ids);
+
 public sealed record MoveNoteRequest(long? FolderId);
 
 public sealed record CourseRequest(string Course);
