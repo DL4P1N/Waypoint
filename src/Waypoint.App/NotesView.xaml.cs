@@ -685,7 +685,7 @@ public partial class NotesView : UserControl
                 return;
             }
 
-            Open(note);
+            Open(WithPendingSave(note));
             if (pickRow)
             {
                 PickOpenRow();
@@ -738,7 +738,7 @@ public partial class NotesView : UserControl
             return;
         }
 
-        if (_notes.GetNote(id) is { } stored && _draft.ShouldReload(stored, Editor.IsKeyboardFocusWithin))
+        if (WithPendingSave(_notes.GetNote(id)) is { } stored && _draft.ShouldReload(stored, Editor.IsKeyboardFocusWithin))
         {
             Open(stored, keepMode: true);
         }
@@ -746,6 +746,21 @@ public partial class NotesView : UserControl
         {
             ShowNoteExtras();
         }
+    }
+
+    /// <summary>
+    /// The note as it will be once the saves still on their way for it are done, so a note opened again while its
+    /// save is held shows what was typed, and goes on from that text rather than taking it for a change made elsewhere.
+    /// </summary>
+    private NoteDetail? WithPendingSave(NoteDetail? note)
+    {
+        if (note is null)
+        {
+            return null;
+        }
+
+        var last = _saves.LastOrDefault(save => save.Id == note.Id || (_madeAgain.TryGetValue(save.Id, out var again) && again == note.Id));
+        return last is null ? note : note with { Title = last.Title, Body = last.Body };
     }
 
     /// <summary>Picks the open note's row in the list, as clicking it would, when it was opened from elsewhere.</summary>

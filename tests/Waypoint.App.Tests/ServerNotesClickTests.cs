@@ -276,4 +276,34 @@ public sealed class ServerNotesClickTests
         Assert.False(Box("eggs").IsChecked);
         Assert.True(Box("oat milk").IsChecked);
     });
+
+    [Fact]
+    public void Switching_back_to_a_note_whose_save_is_held_shows_what_was_typed_and_loses_nothing() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+
+        Type(body, "radish, kale");
+        server.ReleaseChanges.Reset();
+        UiTest.Call(view, "SaveSoon");
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+
+        // Away to the other note and straight back while the save is still held.
+        Pick(view, 8);
+        ui.Pump();
+        Pick(view, 7);
+        ui.Pump();
+        Assert.Equal("radish, kale", body.Text);
+
+        // Typing goes on from what the editor shows, and saves over what the held save sends.
+        Type(body, body.Text + ", beets");
+        UiTest.Call(view, "SaveSoon");
+
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 2, "the saves");
+        Assert.Equal(["save 7 radish, kale", "save 7 radish, kale, beets"], server.Changes);
+        Assert.Equal("radish, kale, beets", server.Body(7));
+        Assert.Equal(0, server.NotesMade);
+        Assert.Equal("radish, kale, beets", body.Text);
+    });
 }
