@@ -99,7 +99,7 @@ public partial class NotesView : UserControl
     {
         InitializeComponent();
         Toolbar.Attach(BodyBox);
-        _saveTimer.Tick += (_, _) => Save();
+        _saveTimer.Tick += (_, _) => SaveSoon();
         _clock.Tick += (_, _) => ShowStatus();
     }
 
@@ -1015,13 +1015,118 @@ public partial class NotesView : UserControl
         }
     }
 
+    /// <summary>
+    /// A save to the server made once typing stops. It's sent off the window's thread, so a slow server never holds up
+    /// typing. Anything else that saves, such as opening another note or closing, first waits for it to finish.
+    /// </summary>
+    private sealed record BackgroundSave(long Id, string Title, string Body, Task<bool> Saving);
+
+    private BackgroundSave? _backgroundSave;
+
+    /// <summary>
+    /// Once typing stops. In server mode an existing note is saved off the window's thread, and the rows are then
+    /// shown from reads made off it too. A new note, or one being placed in a class folder, saves as before.
+    /// </summary>
+    private async void SaveSoon()
+    {
+        _saveTimer.Stop();
+        if (_backgroundSave is not null)
+        {
+            // One at a time, so saves reach the server in the order they were typed. This one goes next.
+            _saveTimer.Start();
+            return;
+        }
+
+        if (_notes is not Waypoint.Core.Remote.ServerNotesData server || _draft.Id is not { } id || _draftPlacement is not null || !_draft.ShouldSave)
+        {
+            Save();
+            return;
+        }
+
+        var notes = _notes;
+        var title = _draft.Title;
+        var body = _draft.Body;
+        var movedOn = _draft.StoredMovedOnNow();
+        var now = DateTime.Now;
+        var save = new BackgroundSave(id, title, body, Task.Run(() =>
+        {
+            // As in Flush: a version changed elsewhere while this editor held the note is kept as its own note first.
+            if (notes.GetNote(id) is { } stored && movedOn(stored))
+            {
+                notes.CreateNote(stored.Title + NoteDraft.ElsewhereSuffix, stored.Body, now, stored.FolderId);
+            }
+
+            return notes.SaveNote(id, title, body, now);
+        }));
+        _backgroundSave = save;
+        try
+        {
+            await save.Saving;
+        }
+        catch (Exception)
+        {
+            // Thrown again below, on this thread, the way a save made here would.
+        }
+
+        switch (FinishBackgroundSave(save))
+        {
+            case null:
+                return;
+            case false:
+                Save();
+                return;
+        }
+
+        await server.RefreshReadsAsync();
+        using (server.UseRecentReads())
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
+    /// Waits for a save sent off the window's thread, if it hasn't finished, and marks what it sent as saved. True if
+    /// that's done now, and null if it was done already. False if the note was gone from the server: nothing is
+    /// marked saved, so the next save makes it again as a new note, as a save made here does.
+    /// </summary>
+    private bool? FinishBackgroundSave(BackgroundSave save)
+    {
+        if (!ReferenceEquals(_backgroundSave, save))
+        {
+            return null;
+        }
+
+        _backgroundSave = null;
+        if (!save.Saving.GetAwaiter().GetResult())
+        {
+            return false;
+        }
+
+        // The editor may be on another note by now, such as the copy kept when the server changed this one too.
+        if (_draft.Id == save.Id)
+        {
+            _draft.MarkSaved(save.Id, save.Title, save.Body);
+        }
+
+        Bar.Changed();
+        if (!_draft.IsDirty)
+        {
+            SavedLabel.Text = _notes is Waypoint.Core.Remote.ServerNotesData { WaitingToSave: > 0 } ? "Saved on this PC" : "Saved";
+        }
+
+        return true;
+    }
+
     /// <summary>Writes the draft without touching the rows, so it's safe in the middle of a click.</summary>
     private bool Flush()
     {
         _saveTimer.Stop();
+
+        // A save still on its way finishes first, so this one can't be overtaken by it or mistake it for a change made elsewhere.
+        var finished = _backgroundSave is { } pending && FinishBackgroundSave(pending) == true;
         if (!_draft.ShouldSave)
         {
-            return false;
+            return finished;
         }
 
         var now = DateTime.Now;

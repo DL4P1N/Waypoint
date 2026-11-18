@@ -66,6 +66,12 @@ public sealed class ServerNotesData : INotesData
     /// </summary>
     public ServerNotesData ForSync() => new(_server, null, _marks, fresh: true);
 
+    /// <summary>Reads what the page asked for lately again, off the calling thread. See <see cref="ServerClient.RefreshReadsAsync"/>.</summary>
+    public Task RefreshReadsAsync() => _server.RefreshReadsAsync();
+
+    /// <summary>Answers the page's reads from those just made. See <see cref="ServerClient.UseRecentReads"/>.</summary>
+    public IDisposable UseRecentReads() => _server.UseRecentReads();
+
     public bool CanMakeNotes => true;
 
     public bool CanStudy => true;

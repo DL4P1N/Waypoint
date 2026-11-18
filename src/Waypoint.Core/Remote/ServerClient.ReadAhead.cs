@@ -24,6 +24,7 @@ public sealed partial class ServerClient
     private readonly Dictionary<string, ReadStamp> _readAt = [];
     private readonly ThreadLocal<int> _recentDepth = new();
     private Task? _readingAhead;
+    private long _readingAheadFrom;
 
     // Counts up as each change starts and again as it ends, so a read made while one was on its way isn't reused.
     private long _changes;
@@ -37,16 +38,25 @@ public sealed partial class ServerClient
     /// Reads again, off the calling thread, what was asked for lately, so a refresh inside
     /// <see cref="UseRecentReads"/> has it ready. One round at a time: asking during one gives that one. It stops at
     /// the first sign the server is away, and never throws, since a page reading for itself reports any problem.
+    /// A round asked for after a change from here, while one from before it is on its way, follows that one.
     /// </summary>
     public Task RefreshReadsAsync()
     {
         lock (_gate)
         {
+            var changes = Interlocked.Read(ref _changes);
             if (_readingAhead is { IsCompleted: false } running)
             {
-                return running;
+                if (_readingAheadFrom == changes)
+                {
+                    return running;
+                }
+
+                _readingAheadFrom = changes;
+                return _readingAhead = running.ContinueWith(_ => ReadAhead(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
             }
 
+            _readingAheadFrom = changes;
             return _readingAhead = Task.Run(ReadAhead);
         }
     }
