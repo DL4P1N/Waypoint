@@ -46,7 +46,7 @@ public partial class NotesView : UserControl
     private const string ListsGroup = "lists";
     private const string NotesSearchHint = "Search notes";
     private const string ListSearchHint = "Search this list";
-    private const string AudioFilter = "Recordings|*.mp3;*.m4a;*.mp4;*.wav;*.wma;*.aac;*.flac;*.m4v;*.mov;*.wmv;*.3gp|All files|*.*";
+    private const string AudioFilter = "Recordings|*.mp3;*.m4a;*.mp4;*.wav;*.wma;*.aac;*.flac;*.m4v;*.mov;*.wmv;*.3gp;*.ogg;*.opus|All files|*.*";
     private const string NothingOpenText = "Pick a note, or start a new one with +. Drop a PDF, slides, or a recording here to make notes from them.";
     private const string TitleHint = "Title";
     private const string FileFilter = "PDFs, slides, and documents|*.pdf;*.pptx;*.docx;*.txt;*.md|All files|*.*";

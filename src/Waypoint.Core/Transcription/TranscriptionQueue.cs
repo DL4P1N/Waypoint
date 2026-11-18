@@ -16,10 +16,10 @@ public sealed class TranscriptionQueue : IDisposable
 {
     public const string ConsentPreference = "whisper_download_agreed";
 
-    /// <summary>What Windows Media Foundation can read without anything else installed.</summary>
+    /// <summary>What Windows Media Foundation can read without anything else installed, and Ogg Opus, which is moved into WebM for it.</summary>
     public static readonly IReadOnlySet<string> AudioExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        ".mp3", ".m4a", ".mp4", ".wav", ".wma", ".aac", ".flac", ".m4v", ".mov", ".wmv", ".3gp",
+        ".mp3", ".m4a", ".mp4", ".wav", ".wma", ".aac", ".flac", ".m4v", ".mov", ".wmv", ".3gp", ".ogg", ".opus",
     };
 
     private readonly WaypointDatabase _database;

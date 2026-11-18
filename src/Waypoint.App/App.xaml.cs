@@ -136,6 +136,11 @@ public partial class App : System.Windows.Application
 
         PcMode.Started(_database, run, DateTimeOffset.Now);
 
+        // Whisper, set up once for lectures, also turns voice notes sent in Discord's capture channel into text.
+        var whisper = new Waypoint.Core.Transcription.WhisperSetup(dataDirectory, new Waypoint.Core.Transcription.HttpFileDownloader(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+        var audio = new MediaFoundationAudio();
+        var voice = new Waypoint.Core.Transcription.WhisperVoiceTranscriber(_database, whisper, audio, new Waypoint.Core.Transcription.ChildProcessRunner(), dataDirectory);
+
         // The reminders, alerts, Discord, calendar, and email live in Core, so a server can run the same logic.
         _worker = new WaypointWorker(
             _database,
@@ -143,7 +148,7 @@ public partial class App : System.Windows.Application
             dataDirectory,
             new WindowHost(this),
             LogError,
-            new WorkerParts(path => new ProtectedTokenStore(path), TextRecognizer: ImageText.Recognizer, Runner: DiscordRunner.Pc, Idle: PcIdle))
+            new WorkerParts(path => new ProtectedTokenStore(path), TextRecognizer: ImageText.Recognizer, Runner: DiscordRunner.Pc, Idle: PcIdle, Voice: voice))
         {
             HoldsConnections = !_sends,
         };
@@ -180,12 +185,23 @@ public partial class App : System.Windows.Application
         _transcription = new Waypoint.Core.Transcription.TranscriptionQueue(
             _database,
             noteMaker,
-            new Waypoint.Core.Transcription.WhisperSetup(dataDirectory, new Waypoint.Core.Transcription.HttpFileDownloader(new HttpClient { Timeout = Timeout.InfiniteTimeSpan })),
-            new MediaFoundationAudio(),
+            whisper,
+            audio,
             new Waypoint.Core.Transcription.ChildProcessRunner(),
             dataDirectory,
             notes: notes);
         _itemsWindow.NotesPage.ConnectTranscription(_transcription);
+
+        // Voice notes kept from Discord while speech to text wasn't set up are read as soon as it is.
+        var voiceReady = voice.IsReady;
+        _transcription.Changed += change =>
+        {
+            if (!voiceReady && voice.IsReady)
+            {
+                voiceReady = true;
+                _ = _worker.ReadHeldVoiceNotesAsync();
+            }
+        };
         _later.Add(_transcription.Start);
 
         // Lectures record only when the user asks, from + on Notes, the tray, or the optional class start card.

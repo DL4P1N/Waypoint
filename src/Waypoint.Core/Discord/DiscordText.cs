@@ -77,6 +77,12 @@ public static partial class DiscordText
     /// <summary>Keeps names like "Streamco*Online" from turning into formatting.</summary>
     public static string Escape(string text) => Markup().Replace(text, @"\$0");
 
+    /// <summary>Longest a voice note's words are shown under its reply. Enough to spot a mis-hearing.</summary>
+    public const int MaxHeard = 300;
+
+    /// <summary>"Heard: ..." under the reply to a voice note, so a mis-hearing is easy to spot.</summary>
+    public static CardField HeardField(string text) => new("Heard", Escape(Shorten(text, MaxHeard)), false);
+
     /// <summary>"Earlier you meant to: X" as the labeled field a briefing or heads-up shows it as, for a card built another way.</summary>
     public static CardField HeldField(string line)
     {

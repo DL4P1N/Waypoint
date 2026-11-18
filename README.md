@@ -194,7 +194,7 @@ Choose **Start recording** in the tray, or **Record lecture...** under + on Note
 - Press **Ctrl+Alt+M**, or **Mark** at the top of Waypoint, to flag a moment that matters.
 - Keep the lid open. Waypoint keeps the PC awake, but closing the lid still sleeps it.
 
-When you stop, the recording is transcribed on this PC with Whisper, and only the text goes to Claude to write the note. **Import audio...** under +, or dropping a recording onto Notes, does the same for a file you already have. The first time, Waypoint asks before downloading Whisper and its model (about 1.6 GB) into the data folder.
+When you stop, the recording is transcribed on this PC with Whisper, and only the text goes to Claude to write the note. **Import audio...** under +, or dropping a recording onto Notes, does the same for a file you already have, including Ogg Opus files such as a saved Discord voice message. The first time, Waypoint asks before downloading Whisper and its model (about 1.6 GB) into the data folder.
 
 **Keep the audio** saves a copy with the note for playback. Otherwise the audio is let go once the transcript is saved and covers most of the recording (at least 75%). If it doesn't, the audio is kept with the note and Waypoint says so. Your own imported file is never changed.
 
@@ -292,6 +292,8 @@ Keep the token private. A token typed in Settings is kept encrypted on the PC. A
 ### Capture channel
 
 Anything you type there arrives right away while the PC is on and gets its answer as a reply. Questions like "what do I do now?" or "can I spend $40?" work too. Messages sent while the PC was off are picked up when it's back. Pictures, PDFs, Office files, and text files up to 10 MB are read like a dropped file, and a bank CSV goes through the import.
+
+A voice message, or an audio file up to 5 minutes, is turned into text on the PC with the same Whisper used for lectures, then taken exactly as if you'd typed it. The reply shows what was heard, so a mis-hearing is easy to spot. Until speech to text is set up (the first **Import audio...** on Notes asks), or if it doesn't work that time, the voice note is kept in the data folder and read later on its own, and the reply says so once. The audio is deleted once its words are saved. Anything over 5 minutes is a recording: add it on the Notes page on the PC.
 
 ### Slash commands
 
@@ -559,7 +561,7 @@ The PC's Discord starts within about 7 minutes, once the server's pinned note go
 ### 5. Sign in again on the server
 
 - **Alert email**: the PC's sign-in is encrypted to your Windows user, so choose **Connect alert email** in the tray. The PC shows the code and opens Microsoft's page, and the server finishes the sign-in.
-- **Discord**: IDs move with the database, but re-enter the bot token in Settings and choose **Save**. It goes to `/var/lib/waypoint/discord.token`, readable only by the service user, and is never sent back. `discord.botToken` in the server's `settings.json` works too. Pictures and scanned PDFs sent to the capture channel are read with `tesseract` and `pdftoppm`.
+- **Discord**: IDs move with the database, but re-enter the bot token in Settings and choose **Save**. It goes to `/var/lib/waypoint/discord.token`, readable only by the service user, and is never sent back. `discord.botToken` in the server's `settings.json` works too. Pictures and scanned PDFs sent to the capture channel are read with `tesseract` and `pdftoppm`. Whisper doesn't run on the server, so voice notes sent there are kept unread in `/var/lib/waypoint/voice-notes`, and the reply says so.
 
 ### How server mode works
 

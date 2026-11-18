@@ -11,7 +11,8 @@ namespace Waypoint.App;
 
 /// <summary>
 /// Reads audio and video with Windows Media Foundation, which plays mp3, m4a, mp4, wav, and wma with nothing else
-/// installed, and writes the 16 kHz mono 16-bit WAV whisper-cli needs. Every channel is mixed down to one.
+/// installed, and writes the 16 kHz mono 16-bit WAV whisper-cli needs. Every channel is mixed down to one. Ogg Opus,
+/// such as a Discord voice message, is moved into WebM first (<see cref="OggOpus"/>), which Windows' own Opus decoder reads.
 /// </summary>
 public sealed class MediaFoundationAudio : IAudioConverter
 {
@@ -22,6 +23,26 @@ public sealed class MediaFoundationAudio : IAudioConverter
         Task.Run(() => Convert(inputPath, wavPath, cancellationToken), cancellationToken);
 
     public static TimeSpan Convert(string inputPath, string wavPath, CancellationToken cancellationToken)
+    {
+        // Windows reads Opus only from WebM, so a Discord voice message's Ogg is repackaged first, beside the WAV.
+        if (!OggOpus.IsOggOpus(inputPath))
+        {
+            return ConvertReadable(inputPath, wavPath, cancellationToken);
+        }
+
+        var webm = wavPath + ".webm";
+        try
+        {
+            OggOpus.ToWebm(inputPath, webm);
+            return ConvertReadable(webm, wavPath, cancellationToken);
+        }
+        finally
+        {
+            File.Delete(webm);
+        }
+    }
+
+    private static TimeSpan ConvertReadable(string inputPath, string wavPath, CancellationToken cancellationToken)
     {
         using var reader = new MediaFoundationReader(inputPath, new MediaFoundationReader.MediaFoundationReaderSettings { RequestFloatOutput = true });
         ISampleProvider samples = new MonoMix(reader.ToSampleProvider());

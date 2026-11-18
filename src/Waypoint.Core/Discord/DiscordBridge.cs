@@ -51,8 +51,8 @@ public sealed record DiscordDelivery(string? MessageId, bool Sent);
 /// <summary>What the owner did to an alert. No message ID means the latest reminder.</summary>
 public sealed record AlertAction(string? MessageId, AlertActionKind Kind);
 
-/// <summary>A file on a message. Url is Discord's own download link.</summary>
-public sealed record DiscordAttachment(string Id, string FileName, long Size, string Url, string? ContentType);
+/// <summary>A file on a message. Url is Discord's own download link. DurationSeconds is set on a voice message.</summary>
+public sealed record DiscordAttachment(string Id, string FileName, long Size, string Url, string? ContentType, double? DurationSeconds = null);
 
 /// <summary>
 /// One of the owner's messages in the capture channel. Text can be empty when it only carries files. ReplyTo is the
@@ -1540,7 +1540,8 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                 if (Text(file, "id") is { } id && Text(file, "filename") is { } name && Text(file, "url") is { } url)
                 {
                     var size = file.TryGetProperty("size", out var bytes) && bytes.ValueKind == JsonValueKind.Number ? bytes.GetInt64() : 0;
-                    attachments.Add(new DiscordAttachment(id, name, size, url, Text(file, "content_type")));
+                    var seconds = file.TryGetProperty("duration_secs", out var duration) && duration.ValueKind == JsonValueKind.Number ? duration.GetDouble() : (double?)null;
+                    attachments.Add(new DiscordAttachment(id, name, size, url, Text(file, "content_type"), seconds));
                 }
             }
         }

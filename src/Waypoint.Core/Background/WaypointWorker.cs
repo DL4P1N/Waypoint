@@ -14,7 +14,8 @@ namespace Waypoint.Core.Background;
 /// What the worker is built from. Tests swap the clock, the web client, and the sorter. TextRecognizer reads
 /// pictures and scanned pages in files sent from Discord, and ReadFile, when given, replaces the reading altogether.
 /// Runner, when given, turns on the check that only one copy uses the bot at a time (see <see cref="DiscordClaim"/>),
-/// with HostName as this machine's name in it.
+/// with HostName as this machine's name in it. Voice turns voice notes sent from the phone into text; without one,
+/// as on the server, they're kept unread.
 /// </summary>
 public sealed record WorkerParts(
     Func<string, ITokenStore> TokenStore,
@@ -27,7 +28,8 @@ public sealed record WorkerParts(
     ITextRecognizer? TextRecognizer = null,
     DiscordRunner? Runner = null,
     string? HostName = null,
-    IUserIdle? Idle = null);
+    IUserIdle? Idle = null,
+    Transcription.IVoiceTranscriber? Voice = null);
 
 /// <summary>
 /// Reminders, class alerts, the wind-down, briefings, Discord, the calendar feed, alert email, and backups.
@@ -113,6 +115,7 @@ public sealed partial class WaypointWorker
         _connectGateway = parts.ConnectGateway;
         _runner = parts.Runner;
         _hostName = parts.HostName ?? Environment.MachineName;
+        _voice = parts.Voice;
 
         // Classes saved on the Settings page sit on top of settings.json's, and saving there changes this one in place.
         FileSchedule = settings.Schedule;
@@ -454,6 +457,9 @@ public sealed partial class WaypointWorker
         }
 
         _ = PollDiscordAsync(force: true);
+
+        // Voice notes kept from before, such as while speech to text wasn't set up, are tried again now that replies can go out.
+        _ = ReadHeldVoiceNotesAsync();
     }
 
     public void StopDiscord()
@@ -487,6 +493,7 @@ public sealed partial class WaypointWorker
     private void Disconnect()
     {
         _discordStop?.Cancel();
+        StopVoiceNotes();
         Discord = null;
         _gateway = null;
         _discordStop = null;
@@ -998,9 +1005,16 @@ public sealed partial class WaypointWorker
             return;
         }
 
+        // A voice note is captured as its words. A video stays a recording, which goes in on the PC.
+        if (Transcription.VoiceNotes.IsVoiceNote(attachment.FileName, attachment.ContentType))
+        {
+            await ReadVoiceNoteAsync(discord, message, attachment);
+            return;
+        }
+
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
-            await discord.ReplyAsync(message.Id, DiscordText.Notice("Recording not read", $"Recordings can't be sent from Discord yet, so {attachment.FileName} wasn't read. Add it on the Notes page on the PC."));
+            await discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName));
             return;
         }
 
@@ -1071,7 +1085,8 @@ public sealed partial class WaypointWorker
 
             _discordReplies[id] = target with { ToldWaiting = true };
             // The error itself is for the log and the PC's status line, and can be long or hold paths.
-            await discord.ReplyAsync(target.MessageId, DiscordText.Notice("Saved", "Sorting isn't working right now, so this is kept and will be sorted once it is.", CardTone.Attention));
+            var notice = DiscordText.Notice("Saved", "Sorting isn't working right now, so this is kept and will be sorted once it is.", CardTone.Attention);
+            await discord.ReplyAsync(target.MessageId, target.Heard is { } heard ? notice with { Fields = [.. notice.Fields, DiscordText.HeardField(heard)] } : notice);
         }
     }
 
@@ -1223,8 +1238,15 @@ public sealed partial class WaypointWorker
 
         var card = DiscordText.Reply(reply.Length > 0 ? reply : "Saved.");
         card = outcome.Activation is { } running ? card with { HasSessionButtons = true, CanTrial = running.CanTrial } : card;
-        var replyTo = outcome.CaptureId is { } captureId && _discordReplies.TryRemove(captureId, out var target) ? target.MessageId : null;
-        _ = Discord?.ReplyAsync(replyTo, card);
+        var target = outcome.CaptureId is { } captureId && _discordReplies.TryRemove(captureId, out var found) ? found : null;
+
+        // A voice note's reply shows what was heard, so a mis-hearing can be spotted.
+        if (target?.Heard is { } heard)
+        {
+            card = card with { Fields = [.. card.Fields, DiscordText.HeardField(heard)] };
+        }
+
+        _ = Discord?.ReplyAsync(target?.MessageId, card);
     }
 
     /// <summary>
@@ -1341,5 +1363,8 @@ public sealed partial class WaypointWorker
     }
 }
 
-/// <summary>Where a Discord capture's answer goes, and whether it was already told sorting is waiting.</summary>
-internal sealed record DiscordReplyTo(string MessageId, bool ToldWaiting = false);
+/// <summary>
+/// Where a Discord capture's answer goes, and whether it was already told sorting is waiting. Heard is a voice
+/// note's words, shown with the answer.
+/// </summary>
+internal sealed record DiscordReplyTo(string MessageId, bool ToldWaiting = false, string? Heard = null);
