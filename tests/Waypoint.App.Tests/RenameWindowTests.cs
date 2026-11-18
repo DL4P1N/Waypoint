@@ -48,14 +48,10 @@ public sealed class RenameWindowTests
                     new PropertyCondition(AutomationElement.NameProperty, "Pair")));
                 buttonName = button?.Current.Name;
             });
-            var waited = System.Diagnostics.Stopwatch.StartNew();
-            while (!asked.IsCompleted && waited.Elapsed < TimeSpan.FromSeconds(20))
-            {
-                var frame = new DispatcherFrame();
-                Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => frame.Continue = false);
-                Dispatcher.PushFrame(frame);
-            }
-
+            // UI Automation calls back into this thread, so it keeps pumping until the question is answered and never
+            // blocks waiting on it. A question that never finishes fails the test instead of hanging it.
+            PumpUntil(asked, TimeSpan.FromSeconds(20));
+            Assert.True(asked.IsCompleted, "UI Automation didn't finish reading the pairing form");
             asked.GetAwaiter().GetResult();
         };
 
@@ -66,4 +62,19 @@ public sealed class RenameWindowTests
         Assert.Equal("Server token", boxName);
         Assert.Equal("Pair", buttonName);
     });
+
+    /// <summary>Runs the dispatcher until the task ends or the time is up, whichever is first.</summary>
+    private static void PumpUntil(Task task, TimeSpan limit)
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(limit, DispatcherPriority.Send, (_, _) => frame.Continue = false, dispatcher);
+        task.ContinueWith(_ => dispatcher.BeginInvoke(DispatcherPriority.Send, () => frame.Continue = false), TaskScheduler.Default);
+        if (!task.IsCompleted)
+        {
+            Dispatcher.PushFrame(frame);
+        }
+
+        timer.Stop();
+    }
 }
