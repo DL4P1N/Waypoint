@@ -174,7 +174,7 @@ public partial class App : System.Windows.Application
             _worker.NoteFiles = notes;
         }
 
-        _itemsWindow = new ItemsWindow(_database, OnCaptureSubmitted, ImportCsv, OnFilesDropped, _server?.Data, _server?.Budget, _server?.Sessions, _server?.Lists, _server?.History, notes, _server?.Feedback)
+        _itemsWindow = new ItemsWindow(_database, OnCaptureSubmitted, ImportCsv, OnFilesDropped, _server?.Data, _server?.Budget, _server?.Sessions, _server?.Lists, _server?.History, notes, _server?.Feedback, _server?.Client)
         {
             Classes = _schedule,
             CardUpFor = item => _cardsUp.Contains(ItemRef.Format(item)),
@@ -256,7 +256,18 @@ public partial class App : System.Windows.Application
         });
         _later.Add(_noteSync.Start);
 
-        _itemsWindow.DataChanged += RefreshStatus;
+        // In server mode what a change touched is read again off the window's thread before the status is shown.
+        _itemsWindow.DataChanged += () =>
+        {
+            if (_server is null)
+            {
+                RefreshStatus();
+            }
+            else
+            {
+                _ = RefreshStatusAheadAsync();
+            }
+        };
         _captures.Changed += () => Dispatcher.BeginInvoke(RefreshStatus);
         _captures.Sorted += outcome => Dispatcher.BeginInvoke(() => ShowOutcome(outcome));
 
@@ -509,6 +520,16 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        // A click's change goes to the server off the window's thread, so a slow answer lands here. It's said the same
+        // way, and kept in the log.
+        if (e.Exception is ServerTimedOutException slow && _started)
+        {
+            LogError(slow);
+            _itemsWindow?.ShowReply(slow.Message);
+            e.Handled = true;
+            return;
+        }
+
         LogError(e.Exception);
         e.Handled = _started;
     }
@@ -563,9 +584,18 @@ public partial class App : System.Windows.Application
         }
     }
 
+    /// <summary>How long closing waits for changes still on their way to the server, a few slow answers' worth.</summary>
+    private static readonly TimeSpan PageWorkLimit = TimeSpan.FromSeconds(10);
+
     protected override void OnExit(ExitEventArgs e)
     {
-        // A second copy exits before any of this is set up, so each part is checked before it's used.
+        // A second copy exits before any of this is set up, so each part is checked before it's used. Changes still on
+        // their way to the server go first, within a time limit, and any left are noted in the log.
+        if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)
+        {
+            LogText($"Closed with {left.Count} {(left.Count == 1 ? "change" : "changes")} still on the way to the server: {string.Join(", ", left)}");
+        }
+
         _itemsWindow?.SaveDrafts();
         _itemsWindow?.SavePlace();
         _noteSync?.Finish();

@@ -36,6 +36,12 @@
                                FontSize="18"
                                FontWeight="SemiBold"
                                Foreground="{StaticResource PrimaryText}" />
+                    <!-- While a change is on its way to a slow server. The window carries on meanwhile. -->
+                    <TextBlock x:Name="SavingLabel"
+                               FontSize="12"
+                               Text="Saving..."
+                               Foreground="{DynamicResource SecondaryText}"
+                               Visibility="Collapsed" />
                 </StackPanel>
                 <StackPanel x:Name="NextClassPanel"
                             Margin="0,0,64,0"

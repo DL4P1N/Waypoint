@@ -56,9 +56,10 @@ public partial class TodayView
     private void AddWaiting()
     {
         var today = DateOnly.FromDateTime(DateTime.Now);
-        var form = new WaitingWindow(Window.GetWindow(this), today, null, form =>
+        var form = WaitingWindow.Saving(Window.GetWindow(this), today, null, async form =>
         {
-            var added = _database.AddWaitingByHand(form.Who, form.Topic, form.FollowUp, form.Email, DateTime.Now);
+            var (who, topic, followUp, email) = (form.Who, form.Topic, form.FollowUp, form.Email);
+            var added = await Work.Run(() => _database.AddWaitingByHand(who, topic, followUp, email, DateTime.Now));
             if (added.Item is { } stored)
             {
                 Bar.Show($"Added {stored.Title}", about: About(stored));
@@ -102,8 +103,11 @@ public partial class TodayView
 
     private void MarkWaiting(StoredItem item, DateOnly today)
     {
-        var form = new WaitingWindow(Window.GetWindow(this), today, item.Title, form =>
-            _database.MarkWaitingByHand(item, form.Who, form.FollowUp, form.Email, DateTime.Now));
+        var form = WaitingWindow.Saving(Window.GetWindow(this), today, item.Title, form =>
+        {
+            var (who, followUp, email) = (form.Who, form.FollowUp, form.Email);
+            return Work.Run(() => _database.MarkWaitingByHand(item, who, followUp, email, DateTime.Now));
+        });
         if (form.ShowDialog() == true)
         {
             Bar.Show($"Waiting on {form.Who}");
@@ -135,9 +139,9 @@ public partial class TodayView
         Bar.Show($"Copied a follow-up for {waiting.Who}. Nothing was sent.");
     }
 
-    private void StillWaiting(WaitingItem waiting, DateOnly? until)
+    private async void StillWaiting(WaitingItem waiting, DateOnly? until)
     {
-        _reply(_database.StillWaiting(waiting.ItemId, until, DateTime.Now).Text);
+        _reply((await Work.Run(() => _database.StillWaiting(waiting.ItemId, until, DateTime.Now))).Text);
         Acted();
     }
 
@@ -150,9 +154,9 @@ public partial class TodayView
         }
     }
 
-    private void StopWaiting(WaitingItem waiting)
+    private async void StopWaiting(WaitingItem waiting)
     {
-        if (_database.StopWaiting(waiting.ItemId))
+        if (await Work.Run(() => _database.StopWaiting(waiting.ItemId)))
         {
             Bar.Show($"Not waiting on {waiting.Who} anymore");
         }
