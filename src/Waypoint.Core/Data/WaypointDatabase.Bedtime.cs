@@ -366,7 +366,9 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     private void SetWorkDate(DateOnly date, TimeOnly? start, TimeOnly? end)
     {
+        // The old day and the new one change in one write, so a failure between can't drop the day's hours.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = """
             DELETE FROM work_dates WHERE work_date = $date;
@@ -376,6 +378,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
         command.Parameters.AddWithValue("$start", start is { } from ? Clock(from) : DBNull.Value);
         command.Parameters.AddWithValue("$end", end is { } to ? Clock(to) : DBNull.Value);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>Null if any name can't be read, so nothing gets saved for a day that was only half understood.</summary>

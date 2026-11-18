@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Data.Sqlite;
 using Waypoint.Core.Capture;
 
 namespace Waypoint.Core.Data;
@@ -23,6 +24,13 @@ public sealed partial class WaypointDatabase
     public void RecordReminderAnswer(StoredItem item, ReminderAnswer answer, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        RecordReminderAnswer(connection, item, answer, now);
+        transaction.Commit();
+    }
+
+    private static void RecordReminderAnswer(SqliteConnection connection, StoredItem item, ReminderAnswer answer, DateTime now)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO reminder_answers (answered_at, item_ref, answer) VALUES ($at, $ref, $answer)";
         command.Parameters.AddWithValue("$at", FormatReminder(now));
@@ -32,7 +40,7 @@ public sealed partial class WaypointDatabase
 
         if (answer == ReminderAnswer.NotNow)
         {
-            RecordNotNow(ItemRef.Format(item), now);
+            RecordNotNow(connection, ItemRef.Format(item), now);
         }
     }
 

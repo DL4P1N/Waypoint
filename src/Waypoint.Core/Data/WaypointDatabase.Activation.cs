@@ -176,8 +176,17 @@ public sealed partial class WaypointDatabase
         return reply;
     }
 
-    private void RecordNotNow(string itemRef, DateTime now) =>
-        SetPreference(NotNowDeclines.Preference, NotNowDeclines.Add(GetPreference(NotNowDeclines.Preference), itemRef, now));
+    private void RecordNotNow(string itemRef, DateTime now)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        RecordNotNow(connection, itemRef, now);
+        transaction.Commit();
+    }
+
+    /// <summary>Read and written in the caller's write, so two declines at once can't drop one.</summary>
+    private static void RecordNotNow(SqliteConnection connection, string itemRef, DateTime now) =>
+        WritePreference(connection, NotNowDeclines.Preference, NotNowDeclines.Add(ReadPreference(connection, NotNowDeclines.Preference), itemRef, now));
 
     /// <summary>Puts a smaller action in front of the current one, which comes back once it's done.</summary>
     public OpReply MakeSmaller(string? action, DateTime now)

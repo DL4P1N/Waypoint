@@ -264,15 +264,38 @@ public sealed partial class WaypointDatabase
     public string? GetPreference(string key)
     {
         using var connection = Open();
+        return ReadPreference(connection, key);
+    }
+
+    public void SetPreference(string key, string value)
+    {
+        using var connection = Open();
+        WritePreference(connection, key, value);
+    }
+
+    /// <summary>Sets several preferences in one write, for values that only make sense together.</summary>
+    public void SetPreferences(params (string Key, string Value)[] values)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        foreach (var (key, value) in values)
+        {
+            WritePreference(connection, key, value);
+        }
+
+        transaction.Commit();
+    }
+
+    private static string? ReadPreference(SqliteConnection connection, string key)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT value FROM preferences WHERE key = $key";
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
     }
 
-    public void SetPreference(string key, string value)
+    private static void WritePreference(SqliteConnection connection, string key, string value)
     {
-        using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO preferences (key, value) VALUES ($key, $value) ON CONFLICT (key) DO UPDATE SET value = excluded.value";
         command.Parameters.AddWithValue("$key", key);
@@ -384,17 +407,20 @@ public sealed partial class WaypointDatabase
     public void SnoozeReminder(DueReminder reminder, DateTime until)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         ForgetAfterThis(connection, reminder.Item.Source, reminder.Item.Id);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE {ReminderTable(reminder.Item)} SET remind_at = $until WHERE id = $id";
         command.Parameters.AddWithValue("$until", FormatReminder(until));
         command.Parameters.AddWithValue("$id", reminder.Id);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public void DismissReminder(DueReminder reminder)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = $"DELETE FROM {ReminderTable(reminder.Item)} WHERE id = $id";
         if (reminder.Item.Source != ItemSource.Calendar)
@@ -405,6 +431,7 @@ public sealed partial class WaypointDatabase
 
         command.Parameters.AddWithValue("$id", reminder.Id);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>Upcoming assignments that have no nudges yet, soonest first.</summary>
@@ -487,7 +514,9 @@ public sealed partial class WaypointDatabase
         else if (reminder.Item.Recurs is not null)
         {
             using var connection = Open();
+            using var transaction = connection.BeginTransaction();
             Finish(connection, reminder.Item, now, HistoryAction.Past);
+            transaction.Commit();
         }
         else
         {
@@ -515,7 +544,9 @@ public sealed partial class WaypointDatabase
     /// <summary>Finishes or snoozes the item behind a message, and returns what to tell the user.</summary>
     public string? ApplyAlertAction(AlertAction action, DateTime now, int snoozeMinutes)
     {
+        // Claiming the card and doing what it says are one write, so a failure between can't use up the press.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         string? messageId = null;
         long itemId = 0;
         DateOnly? dueOn = null;
@@ -541,6 +572,13 @@ public sealed partial class WaypointDatabase
             return null;
         }
 
+        var reply = AlertActionOn(connection, itemId, dueOn, action.Kind, now, snoozeMinutes);
+        transaction.Commit();
+        return reply;
+    }
+
+    private static string? AlertActionOn(SqliteConnection connection, long itemId, DateOnly? dueOn, AlertActionKind kind, DateTime now, int snoozeMinutes)
+    {
         if (FindItem(connection, ItemSource.Capture, itemId) is not { Done: false } item)
         {
             return null;
@@ -549,10 +587,10 @@ public sealed partial class WaypointDatabase
         // A dose card's Took it and Not now work on the day it was for, whatever happened elsewhere since.
         if (item is { Dose: true, Recurs: not null, DueDate: { } current })
         {
-            return AnswerDose(connection, item, dueOn ?? current, action.Kind == AlertActionKind.Done ? DoseAnswer.Took : DoseAnswer.NotNow, now, null);
+            return AnswerDose(connection, item, dueOn ?? current, kind == AlertActionKind.Done ? DoseAnswer.Took : DoseAnswer.NotNow, now, null);
         }
 
-        if (action.Kind == AlertActionKind.Done)
+        if (kind == AlertActionKind.Done)
         {
             Finish(connection, item, now);
             return $"Done: {item.Title}";
@@ -693,7 +731,14 @@ public sealed partial class WaypointDatabase
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var applied = CompleteCapture(connection, captureId, items, changes);
+        transaction.Commit();
+        return applied;
+    }
 
+    /// <summary>The same, inside the caller's write, for a page that makes its own capture and items together.</summary>
+    private static List<AppliedChange> CompleteCapture(SqliteConnection connection, long captureId, IReadOnlyList<SortedItem> items, IReadOnlyList<ItemChange>? changes)
+    {
         string? captureText = null;
         foreach (var sorted in items)
         {
@@ -734,8 +779,6 @@ public sealed partial class WaypointDatabase
         update.Parameters.AddWithValue("$sortedAt", DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
         update.Parameters.AddWithValue("$id", captureId);
         update.ExecuteNonQuery();
-
-        transaction.Commit();
         return applied;
     }
 
@@ -866,9 +909,11 @@ public sealed partial class WaypointDatabase
         return items;
     }
 
+    /// <summary>Checks an item off or back on. The change and its History entry are one write.</summary>
     public void SetDone(StoredItem item, bool done)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         if (done)
         {
             // A dose is marked taken instead, and only once for its day.
@@ -881,6 +926,8 @@ public sealed partial class WaypointDatabase
         {
             Reopen(connection, FindItem(connection, item.Source, item.Id) ?? item, DateTime.Now);
         }
+
+        transaction.Commit();
     }
 
     /// <summary>A change made on a row rather than typed. Breaking down needs the sorter, so it isn't one.</summary>

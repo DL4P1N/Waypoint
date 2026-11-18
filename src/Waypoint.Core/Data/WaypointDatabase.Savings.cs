@@ -49,10 +49,11 @@ public sealed partial class WaypointDatabase
         var existing = GetSavingsGoal();
         var setOn = existing?.SetOn ?? today;
         var start = existing?.StartCents ?? SavingsPlan.SavedBalance(GetCurrentAccounts(today));
-        SetPreference(GoalCentsKey, cents.Value.ToString(CultureInfo.InvariantCulture));
-        SetPreference(GoalByKey, date?.ToString("O", CultureInfo.InvariantCulture) ?? "");
-        SetPreference(GoalSetOnKey, setOn.ToString("O", CultureInfo.InvariantCulture));
-        SetPreference(GoalStartKey, start.ToString(CultureInfo.InvariantCulture));
+        SetPreferences(
+            (GoalCentsKey, cents.Value.ToString(CultureInfo.InvariantCulture)),
+            (GoalByKey, date?.ToString("O", CultureInfo.InvariantCulture) ?? ""),
+            (GoalSetOnKey, setOn.ToString("O", CultureInfo.InvariantCulture)),
+            (GoalStartKey, start.ToString(CultureInfo.InvariantCulture)));
         return new OpReply(DescribeSavingsGoal(today));
     }
 
@@ -63,10 +64,7 @@ public sealed partial class WaypointDatabase
             return new OpReply("There's no savings goal to remove.", true);
         }
 
-        SetPreference(GoalCentsKey, "");
-        SetPreference(GoalByKey, "");
-        SetPreference(GoalSetOnKey, "");
-        SetPreference(GoalStartKey, "");
+        SetPreferences((GoalCentsKey, ""), (GoalByKey, ""), (GoalSetOnKey, ""), (GoalStartKey, ""));
         return new OpReply("Removed your savings goal");
     }
 
