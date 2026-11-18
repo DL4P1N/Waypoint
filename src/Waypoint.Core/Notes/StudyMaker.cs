@@ -148,8 +148,8 @@ public sealed class StudyMaker(WaypointDatabase database, IClaudeRunner runner)
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            var reason = exception is OperationCanceledException ? "It was stopped." : PlainProblem.Report(exception);
-            return new StudyOutcome(StudyStatus.Failed, $"The practice questions couldn't be written. {reason} You can try again.", existing);
+            var failed = exception is OperationCanceledException ? NoteJobText.StudyStopped() : NoteJobText.StudyFailed(PlainProblem.Report(exception));
+            return failed with { NoteId = existing };
         }
 
         questions = await TopUpAsync(input, questions, asked, cancellationToken);

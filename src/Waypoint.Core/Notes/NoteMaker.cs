@@ -182,8 +182,7 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            var reason = exception is OperationCanceledException ? "It was stopped." : PlainProblem.Report(exception);
-            return new NoteWriteOutcome(NoteWriteStatus.Failed, $"The notes couldn't be written. {reason} The files are saved in Sources, so you can try again.");
+            return exception is OperationCanceledException ? NoteJobText.NotesStopped() : NoteJobText.NotesFailed(PlainProblem.Report(exception));
         }
 
         return Save(noteId, written, note.Body, now);

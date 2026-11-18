@@ -535,7 +535,7 @@ public sealed class TranscriptionTests : IDisposable
 
         var done = _database.GetTranscriptionJob(job.Id)!;
         Assert.Equal(TranscriptionStatus.Done, done.Status);
-        Assert.Contains("couldn't be written", done.Error);
+        Assert.Contains("Writing notes failed:", done.Error);
         Assert.Single(_database.GetNoteSources(job.NoteId));
         Assert.Contains("transcript is saved in Sources", told);
         Assert.Equal("", _database.GetNote(job.NoteId)!.Body);
