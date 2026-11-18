@@ -42,12 +42,18 @@ public sealed class NoteDraft
         Body = body;
     }
 
-    public void MarkSaved(long id)
+    public void MarkSaved(long id) => MarkSaved(id, Title, Body);
+
+    /// <summary>
+    /// Marks the text a save sent as saved, for a save that finished after more was typed. What was typed since
+    /// still counts as not saved, so it's saved next.
+    /// </summary>
+    public void MarkSaved(long id, string title, string body)
     {
         _baselineKnown = true;
         Id = id;
-        _savedTitle = Title;
-        _savedBody = Body;
+        _savedTitle = title;
+        _savedBody = body;
     }
 
     /// <summary>
@@ -71,6 +77,18 @@ public sealed class NoteDraft
     /// </summary>
     public bool StoredMovedOn(NoteDetail stored) =>
         _baselineKnown && Id == stored.Id && stored.Body != _savedBody;
+
+    /// <summary>
+    /// <see cref="StoredMovedOn"/> as things are now, for a save made off the window's thread, which asks after the
+    /// editor may have moved on.
+    /// </summary>
+    public Func<NoteDetail, bool> StoredMovedOnNow()
+    {
+        var known = _baselineKnown;
+        var id = Id;
+        var saved = _savedBody;
+        return stored => known && id == stored.Id && stored.Body != saved;
+    }
 
     /// <summary>True if the stored note moved on and nobody is working in the editor. Null means it's gone.</summary>
     public bool ShouldReload(NoteDetail? stored, bool editing) =>

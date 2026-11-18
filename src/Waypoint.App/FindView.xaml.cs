@@ -26,7 +26,7 @@ public partial class FindView : UserControl
         _typing.Tick += (_, _) =>
         {
             _typing.Stop();
-            Search();
+            SearchSoon();
         };
     }
 
@@ -48,12 +48,54 @@ public partial class FindView : UserControl
         }, DispatcherPriority.Input);
     }
 
+    // Counts each search, so one that comes back after a newer one started is dropped.
+    private int _searches;
+
+    // What the results shown were found for, so Enter doesn't ask the server again for the same text.
+    private string? _shownFor;
+
     /// <summary>Searches for what's in the box now, without waiting for typing to pause.</summary>
     public void Search()
     {
         _typing.Stop();
+        _searches++;
         var text = SearchBox.Text.Trim();
-        var found = _sources is null ? [] : FindAnywhere.Search(text, _sources);
+        Show(text, _sources is null ? [] : FindAnywhere.Search(text, _sources));
+    }
+
+    /// <summary>
+    /// Once typing pauses. In server mode each page is asked over the network, so the search is made off the window's
+    /// thread and typing never waits on the server. Results for text that's been typed over since are dropped.
+    /// </summary>
+    private async void SearchSoon()
+    {
+        if (_sources is not { ToDo: ServerToDoData } sources)
+        {
+            Search();
+            return;
+        }
+
+        var asked = ++_searches;
+        var text = SearchBox.Text.Trim();
+        var found = await System.Threading.Tasks.Task.Run(() => FindAnywhere.Search(text, sources));
+        if (asked == _searches && SearchBox.Text.Trim() == text)
+        {
+            Show(text, found);
+        }
+    }
+
+    /// <summary>Searches now, unless in server mode the results shown are already for what's in the box.</summary>
+    private void SearchUnlessShown()
+    {
+        if (_sources is not { ToDo: ServerToDoData } || _shownFor != SearchBox.Text.Trim())
+        {
+            Search();
+        }
+    }
+
+    private void Show(string text, System.Collections.Generic.IReadOnlyList<FoundThing> found)
+    {
+        _shownFor = text;
         Results.ItemsSource = found;
         if (found.Count > 0)
         {
@@ -78,12 +120,12 @@ public partial class FindView : UserControl
         {
             case Key.Enter:
                 e.Handled = true;
-                Search();
+                SearchUnlessShown();
                 Choose(Results.SelectedItem as FoundThing);
                 break;
             case Key.Down when Results.Items.Count > 0:
                 e.Handled = true;
-                Search();
+                SearchUnlessShown();
                 Results.SelectedIndex = Math.Min(1, Results.Items.Count - 1);
                 FocusSelected();
                 break;

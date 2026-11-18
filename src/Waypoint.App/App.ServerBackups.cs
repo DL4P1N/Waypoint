@@ -51,12 +51,24 @@ public partial class App
         }
     }
 
-    private void FillServerBackups(Forms.ToolStripMenuItem restore, ServerConnection server)
+    // Counts each opening of the menu, so a list that arrives after the menu was opened again is dropped.
+    private int _backupsAsked;
+
+    /// <summary>The list is asked for off the window's thread, so a slow server never holds the menu or the window.</summary>
+    private async void FillServerBackups(Forms.ToolStripMenuItem restore, ServerConnection server)
     {
+        var asked = ++_backupsAsked;
         restore.DropDownItems.Clear();
+        restore.DropDownItems.Add(new Forms.ToolStripMenuItem("Checking the server...") { Enabled = false });
         try
         {
-            var backups = server.Backups.GetBackups();
+            var backups = await Task.Run(server.Backups.GetBackups);
+            if (asked != _backupsAsked)
+            {
+                return;
+            }
+
+            restore.DropDownItems.Clear();
             if (backups.Count == 0)
             {
                 restore.DropDownItems.Add(new Forms.ToolStripMenuItem("No backups on the server yet") { Enabled = false });
@@ -69,6 +81,12 @@ public partial class App
         }
         catch (Exception exception) when (exception is ServerUnavailableException or InvalidOperationException)
         {
+            if (asked != _backupsAsked)
+            {
+                return;
+            }
+
+            restore.DropDownItems.Clear();
             var text = exception is ServerUnavailableException away ? PageMessages.CantRun(away) : $"Couldn't list the backups. {PlainProblem.Report(exception)}";
             restore.DropDownItems.Add(new Forms.ToolStripMenuItem(text) { Enabled = false });
         }
@@ -139,8 +157,11 @@ public partial class App
         }
     }
 
-    /// <summary>The server sends every note as a zip, unpacked here into a new dated folder, as on this PC.</summary>
-    private void ExportNotesFromServer(ServerConnection server)
+    /// <summary>
+    /// The server sends every note as a zip, unpacked here into a new dated folder, as on this PC. It's fetched and
+    /// unpacked off the window's thread, so the window isn't held up waiting.
+    /// </summary>
+    private async void ExportNotesFromServer(ServerConnection server)
     {
         using var dialog = new Forms.FolderBrowserDialog { Description = "Choose where to save your notes", UseDescriptionForTitle = true };
         if (dialog.ShowDialog() != Forms.DialogResult.OK)
@@ -152,7 +173,8 @@ public partial class App
         {
             _itemsWindow.SaveDrafts();
             var name = $"Waypoint notes {DateTime.Now:yyyy-MM-dd HHmm}";
-            var count = server.Backups.ExportNotes(Path.Combine(dialog.SelectedPath, name));
+            var destination = Path.Combine(dialog.SelectedPath, name);
+            var count = await Task.Run(() => server.Backups.ExportNotes(destination));
             ShowToast("Notes exported", $"Saved {count} {(count == 1 ? "note" : "notes")} in {name}");
         }
         catch (ServerUnavailableException away)

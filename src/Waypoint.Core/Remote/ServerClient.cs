@@ -143,6 +143,7 @@ public sealed partial class ServerClient
     /// </summary>
     public async Task<bool> SendCaptureAsync(CaptureRequest capture, CancellationToken cancellationToken = default)
     {
+        using var change = Changing();
         try
         {
             using var response = await _http.PostAsJsonAsync("api/captures", capture, RemoteJson.Options, cancellationToken);
@@ -193,28 +194,17 @@ public sealed partial class ServerClient
     public T Get<T>(string path, out bool fresh)
     {
         fresh = false;
-        if (IsOnline)
+        Asked(path);
+        if (TakeRecent(path) is { } recent)
         {
-            try
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Get, path);
-                using var response = SendNow(request);
-                if (Settle(response))
-                {
-                    var json = ReadText(response);
-                    lock (_gate)
-                    {
-                        Remember(path, json);
-                    }
+            fresh = true;
+            return Parse<T>(recent);
+        }
 
-                    fresh = true;
-                    return Parse<T>(json);
-                }
-            }
-            catch (Exception exception) when (IsConnectionProblem(exception, CancellationToken.None))
-            {
-                MarkOffline();
-            }
+        if (IsOnline && ReadNow(path) is { } json)
+        {
+            fresh = true;
+            return Parse<T>(json);
         }
 
         lock (_gate)
@@ -257,6 +247,7 @@ public sealed partial class ServerClient
         {
             foreach (var path in _lastReads.Keys.Where(matches).ToList())
             {
+                _readAt.Remove(path);
                 Remember(path, JsonSerializer.Serialize(change(Parse<T>(_lastReads[path])), RemoteJson.Options));
             }
         }
@@ -267,6 +258,7 @@ public sealed partial class ServerClient
     {
         lock (_gate)
         {
+            _readAt.Remove(path);
             Remember(path, JsonSerializer.Serialize(value, RemoteJson.Options));
         }
     }
@@ -341,6 +333,7 @@ public sealed partial class ServerClient
         _lastReads[path] = json;
         while (_lastReads.Count > MaxSavedReads)
         {
+            _readAt.Remove(_lastReads.GetAt(0).Key);
             _lastReads.RemoveAt(0);
         }
 
@@ -434,6 +427,7 @@ public sealed partial class ServerClient
             throw Unavailable();
         }
 
+        using var change = method == HttpMethod.Get ? null : Changing();
         try
         {
             using var request = client is null ? new HttpRequestMessage(method, path) : FileRequest(method, path);
