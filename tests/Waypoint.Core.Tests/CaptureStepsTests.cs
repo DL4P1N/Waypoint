@@ -164,25 +164,64 @@ public sealed class CaptureStepsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_done_cut_off_before_its_capture_was_finished_is_not_done_again()
+    public async Task A_done_cut_off_before_its_capture_was_finished_is_undone_and_then_done_once()
     {
         var task = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", null), Now).Item!;
         _database.StartActivation(ItemRef.Format(task), "Made up first", ["Made up second", "Made up third"], Activation.TypedMethod, Now);
         var outcomes = new List<CaptureOutcome>();
         Service(null, outcomes).Capture("did it");
 
-        // The step moves on, then Waypoint stops before the capture is marked done.
+        // The step moves on, then Waypoint stops before the capture is marked done, so neither is kept.
         FailWhen("BEFORE UPDATE OF sorted_at ON captures");
         await Service(null, outcomes).ProcessPendingAsync();
-        Assert.Equal("Made up second", _database.GetActiveSession(Now)!.Action);
+        Assert.Equal("Made up first", _database.GetActiveSession(Now)!.Action);
         Assert.Single(_database.GetPendingCaptures());
+        Assert.Equal(0, Count("capture_progress"));
+        Assert.Equal(0, Count("conversation"));
 
         StopFailing();
         await Service(null, outcomes).ProcessPendingAsync();
 
         Assert.Equal("Made up second", _database.GetActiveSession(Now)!.Action);
         Assert.Empty(_database.GetPendingCaptures());
+        Assert.Equal("Next: Made up second.", Assert.Single(outcomes).Answer);
+        Assert.Equal(1, Count("conversation"));
+    }
+
+    [Fact]
+    public async Task A_short_reply_note_left_from_before_is_still_answered_as_cut_off()
+    {
+        var task = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", null), Now).Item!;
+        _database.StartActivation(ItemRef.Format(task), "Made up first", ["Made up second"], Activation.TypedMethod, Now);
+        var outcomes = new List<CaptureOutcome>();
+        var id = Service(null, outcomes).Capture("did it")!.Value;
+        _database.SetCaptureProgress(id, """{"Kind":"word","Started":true}""");
+
+        await Service(null, outcomes).ProcessPendingAsync();
+
+        Assert.Equal("Made up first", _database.GetActiveSession(Now)!.Action);
         Assert.Equal(CaptureService.CutOff, Assert.Single(outcomes).Answer);
+        Assert.Empty(_database.GetPendingCaptures());
+    }
+
+    [Fact]
+    public async Task A_cancel_whose_reply_fails_to_save_keeps_the_session_going_until_it_is_tried_again()
+    {
+        var task = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", null), Now).Item!;
+        _database.StartActivation(ItemRef.Format(task), "Made up first", null, Activation.TypedMethod, Now);
+        var outcomes = new List<CaptureOutcome>();
+        Service(null, outcomes).Capture("cancel");
+
+        // The very last part, keeping the exchange, fails, so the cancel goes too.
+        FailWhen("BEFORE INSERT ON conversation");
+        await Service(null, outcomes).ProcessPendingAsync();
+        Assert.NotNull(_database.GetActiveSession(Now));
+        Assert.Empty(outcomes);
+
+        StopFailing();
+        await Service(null, outcomes).ProcessPendingAsync();
+        Assert.Null(_database.GetActiveSession(Now));
+        Assert.StartsWith("Okay, stopped.", Assert.Single(outcomes).Answer);
     }
 
     [Fact]

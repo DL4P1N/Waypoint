@@ -26,6 +26,12 @@ public sealed class KilledMidSaveTests : IDisposable
     private readonly string _path;
     private WaypointDatabase _database;
 
+    /// <summary>
+    /// Held open from the start of a workflow, so another test clearing the connection pools meanwhile can't close
+    /// the last connection, which would fold the log into the file and delete it before it's read.
+    /// </summary>
+    private SqliteConnection? _holdsLog;
+
     public KilledMidSaveTests()
     {
         Directory.CreateDirectory(_folder);
@@ -45,6 +51,7 @@ public sealed class KilledMidSaveTests : IDisposable
 
     public void Dispose()
     {
+        _holdsLog?.Dispose();
         for (var attempt = 0; ; attempt++)
         {
             SqliteConnection.ClearAllPools();
@@ -161,6 +168,47 @@ public sealed class KilledMidSaveTests : IDisposable
         Assert.True(points > 1);
     }
 
+    /// <summary>
+    /// "did it" moves a session on and finishes its capture as one write, so dying at any point leaves either all of
+    /// it or none, and starting again does it exactly once with a real reply instead of asking to check.
+    /// </summary>
+    [Fact]
+    public async Task A_quick_word_killed_partway_is_found_whole_or_not_at_all_and_done_once_when_started_again()
+    {
+        var now = Day.ToDateTime(new TimeOnly(10, 0));
+        var task = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", null), now).Item!;
+        _database.StartActivation(ItemRef.Format(task), "Made up first", ["Made up second", "Made up third"], Activation.TypedMethod, now);
+        _database.AddCapture("did it");
+
+        var before = Before("captures", "activation_sessions", "conversation", "capture_progress");
+        await new CaptureService(_database, null, clock: () => now).ProcessPendingAsync();
+        var wal = ReadShared(_path + "-wal");
+        AfterEveryPoint(before);
+
+        var frame = FrameHeader + BinaryPrimitives.ReadInt32BigEndian(wal.AsSpan(8, 4));
+        var frames = (wal.Length - WalHeader) / frame;
+        for (var kept = 0; kept <= frames; kept++)
+        {
+            var length = WalHeader + (kept * frame);
+            var folder = Path.Combine(_folder, $"word-{length}");
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "waypoint.db");
+            File.Copy(before.File, path);
+            File.WriteAllBytes(path + "-wal", wal.AsSpan(0, length).ToArray());
+
+            var outcomes = new List<CaptureOutcome>();
+            var service = new CaptureService(new WaypointDatabase(path), null, clock: () => now);
+            service.Sorted += outcomes.Add;
+            await service.ProcessPendingAsync();
+
+            var where = $"Started again after {length - WalHeader} bytes of {wal.Length - WalHeader}";
+            Assert.True(1 == Count(path, "SELECT COUNT(*) FROM activation_sessions WHERE action = 'Made up second'"), $"{where}: the step didn't move on exactly once.");
+            Assert.True(0 == Count(path, "SELECT COUNT(*) FROM captures WHERE sorted_at IS NULL"), $"{where}: the capture was left unsorted.");
+            Assert.True(1 == Count(path, "SELECT COUNT(*) FROM conversation"), $"{where}: the reply wasn't kept exactly once.");
+            Assert.All(outcomes, outcome => Assert.NotEqual(CaptureService.CutOff, outcome.Answer));
+        }
+    }
+
     private sealed class CountingSorts(CaptureResult result) : ICaptureSorter
     {
         public int Asked { get; private set; }
@@ -219,6 +267,8 @@ public sealed class KilledMidSaveTests : IDisposable
         var before = Path.Combine(_folder, "before.db");
         File.Copy(_path, before);
         _database = new WaypointDatabase(_path);
+        _holdsLog = new SqliteConnection($"Data Source={_path};Pooling=False");
+        _holdsLog.Open();
         return new Saved(before, tables, Read(_path, tables));
     }
 

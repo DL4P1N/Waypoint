@@ -205,8 +205,8 @@ public sealed class CaptureService(
     public const string StepFailed = "Part of this didn't go through, so try that part again.";
 
     /// <summary>
-    /// How far a capture got, kept with it until it's finished. A short reply only notes that its action started.
-    /// A sorted capture keeps what's needed to run its remaining steps and reply: Next is the step to run, and
+    /// How far a capture got, kept with it until it's finished. A short reply saves its action and its finished
+    /// capture as one write, so it notes nothing now, but a note one left from before is still read. A sorted capture keeps what's needed to run its remaining steps and reply: Next is the step to run, and
     /// Started says it was begun, so it may have gone through.
     /// </summary>
     private sealed record StepProgress(
@@ -242,33 +242,20 @@ public sealed class CaptureService(
     }
 
     /// <summary>
-    /// Runs a short reply's action, such as "done" on a session, and finishes the capture. A note is saved first that
-    /// it started, so if Waypoint stops before the capture is finished, it isn't done a second time when the capture
-    /// comes round again. It's answered with <see cref="CutOff"/> instead. False, with nothing kept, when the action
-    /// had nothing to act on and the capture should go on to the sorter. An action that fails, such as on a busy
-    /// database, takes the note away again, so only a real stop leaves it and the capture is tried again as usual.
+    /// Runs a short reply's action, such as "done" on a session, and finishes the capture, all as one write. So a
+    /// crash partway keeps the action and the finished capture together, or neither, and the capture comes round
+    /// again to be done once. False, with the capture left as it was, when the action had nothing to act on and the
+    /// capture should go on to the sorter. An action that fails, such as on a busy database, saves nothing, and the
+    /// capture is tried again as usual.
     /// </summary>
     private bool Act(PendingCapture capture, Func<OpReply?> action)
     {
-        database.SetCaptureProgress(capture.Id, new StepProgress(StepProgress.Word, Started: true).Save());
-        OpReply? done;
-        try
+        if (database.InOneWrite(() => action() is { } reply ? Finish(capture, reply) : null) is not { } outcome)
         {
-            done = action();
-        }
-        catch
-        {
-            database.ClearCaptureProgress(capture.Id);
-            throw;
-        }
-
-        if (done is not { } reply)
-        {
-            database.ClearCaptureProgress(capture.Id);
             return false;
         }
 
-        Reply(capture, reply);
+        Announce(capture, outcome);
         return true;
     }
 
@@ -281,6 +268,7 @@ public sealed class CaptureService(
             return;
         }
 
+        // Only a short reply begun before its action and capture were saved as one write leaves this note.
         Reply(capture, new OpReply(CutOff, true));
     }
 
@@ -522,15 +510,34 @@ public sealed class CaptureService(
         return WaitingOn.ParseWord(capture.Text) is { } word && Act(capture, () => database.ApplyWaitingWord(word, DateTime.Now));
     }
 
-    private void Reply(PendingCapture capture, OpReply reply)
+    /// <summary>A reply with nothing to do but answer, saved with the finished capture as one write.</summary>
+    private void Reply(PendingCapture capture, OpReply reply) =>
+        Announce(capture, database.InOneWrite(() => Finish(capture, reply)));
+
+    /// <summary>Finishes a short reply's capture and keeps the exchange, inside the caller's one write.</summary>
+    private CaptureOutcome Finish(PendingCapture capture, OpReply reply)
     {
         database.CompleteCapture(capture.Id, []);
+        var outcome = new CaptureOutcome([], [], reply.Text, Origin: capture.Origin, Activation: database.GetActiveSession(Now));
+        Keep(capture, outcome);
+        return outcome;
+    }
+
+    /// <summary>Says what came of a short reply once it's saved.</summary>
+    private void Announce(PendingCapture capture, CaptureOutcome outcome)
+    {
         Changed?.Invoke();
-        Publish(capture, new CaptureOutcome([], [], reply.Text, Origin: capture.Origin, Activation: database.GetActiveSession(Now)));
+        Sorted?.Invoke(outcome with { CaptureId = capture.Id });
     }
 
     /// <summary>Keeps the exchange before showing it, so the next note can follow on from this one.</summary>
     private void Publish(PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
+    {
+        Keep(capture, outcome, focus, kept);
+        Sorted?.Invoke(outcome with { CaptureId = capture.Id });
+    }
+
+    private void Keep(PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
     {
         var acted = outcome.Changes.Where(change => change.Applied).Select(change => ItemRef.Format(change.Change.Source, change.Change.ItemId));
         var session = outcome.Activation?.TaskRef;
@@ -539,7 +546,6 @@ public sealed class CaptureService(
 
         // A file's text stays out, since it would go back to the sorter on every note after it.
         database.AddExchange(capture.Origin, capture.FileName is { } file ? FileNote.Title(file) : capture.Text, kept ?? reply, refs, Now);
-        Sorted?.Invoke(outcome with { CaptureId = capture.Id });
     }
 
     /// <summary>What an answer was about: the sorter's ref if it was shown that item, or the item the answer names.</summary>
