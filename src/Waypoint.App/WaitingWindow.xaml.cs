@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Threading.Tasks;
 using System.Windows;
 using Waypoint.Core.Capture;
 
@@ -11,11 +12,20 @@ namespace Waypoint.App;
 /// </summary>
 public partial class WaitingWindow : Window
 {
-    private readonly Func<WaitingWindow, string?> _save;
+    private readonly Func<WaitingWindow, Task<string?>> _save;
 
     /// <param name="itemTitle">The task being marked, or null for a new wait, which then asks what it's about.</param>
     /// <param name="save">Saves the form, returning why it couldn't, or null once it's saved.</param>
     public WaitingWindow(Window owner, DateOnly today, string? itemTitle, Func<WaitingWindow, string?> save)
+        : this(owner, today, itemTitle, form => Task.FromResult(save(form)))
+    {
+    }
+
+    /// <summary>The same form with a save that may be on its way to the server for a moment. See <see cref="FormSaving"/>.</summary>
+    public static WaitingWindow Saving(Window owner, DateOnly today, string? itemTitle, Func<WaitingWindow, Task<string?>> save) =>
+        new(owner, today, itemTitle, save);
+
+    private WaitingWindow(Window owner, DateOnly today, string? itemTitle, Func<WaitingWindow, Task<string?>> save)
     {
         InitializeComponent();
         WindowStyling.Apply(this);
@@ -53,16 +63,30 @@ public partial class WaitingWindow : Window
     {
         var problem = Who.Length == 0 ? "Say who you're waiting on."
             : Email is { } email && !email.Contains('@') ? "That email doesn't look right. Leave it empty if you're not sure."
-            : _save(this);
+            : null;
         if (problem is not null)
         {
-            Problem.Text = problem;
-            Problem.Visibility = Visibility.Visible;
-            LiveRegion.Announce(Problem);
+            ShowProblem(problem);
             return;
         }
 
-        DialogResult = true;
+        FormSaving.Then(this, SaveButton, _save(this), saved =>
+        {
+            if (saved is not null)
+            {
+                ShowProblem(saved);
+                return;
+            }
+
+            DialogResult = true;
+        });
+    }
+
+    private void ShowProblem(string problem)
+    {
+        Problem.Text = problem;
+        Problem.Visibility = Visibility.Visible;
+        LiveRegion.Announce(Problem);
     }
 
     private static string Day(DateOnly day) => day.ToString("ddd, MMM d", CultureInfo.CurrentCulture);

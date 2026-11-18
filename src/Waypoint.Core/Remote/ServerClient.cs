@@ -206,6 +206,7 @@ public sealed partial class ServerClient
         if (TakeRecent(path) is { } recent)
         {
             fresh = true;
+            _kept.Value?.Noted(path, fresh: true);
             return Parse<T>(recent);
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
@@ -30,7 +31,7 @@ public partial class AddItemWindow : Window
         new("Exam", ItemKind.Exam),
     ];
 
-    private readonly Func<HandAddedItem, string?> _add;
+    private readonly Func<HandAddedItem, Task<string?>> _add;
     private readonly DateOnly _today;
     private DateOnly? _date;
 
@@ -40,6 +41,15 @@ public partial class AddItemWindow : Window
 
     /// <param name="add">Stores the item, returning why it couldn't, or null once it's added.</param>
     public AddItemWindow(Window owner, ItemKind kind, DateOnly today, IReadOnlyList<FormPlace> places, FormPlace? place, Func<HandAddedItem, string?> add)
+        : this(owner, kind, today, places, place, item => Task.FromResult(add(item)))
+    {
+    }
+
+    /// <summary>The same form with a save that may be on its way to the server for a moment. See <see cref="FormSaving"/>.</summary>
+    public static AddItemWindow Saving(Window owner, ItemKind kind, DateOnly today, IReadOnlyList<FormPlace> places, FormPlace? place, Func<HandAddedItem, Task<string?>> add) =>
+        new(owner, kind, today, places, place, add);
+
+    private AddItemWindow(Window owner, ItemKind kind, DateOnly today, IReadOnlyList<FormPlace> places, FormPlace? place, Func<HandAddedItem, Task<string?>> add)
     {
         InitializeComponent();
         WindowStyling.Apply(this);
@@ -167,13 +177,16 @@ public partial class AddItemWindow : Window
             Reminders.SelectedItem is Choice<TimeSpan?> reminder ? reminder.Value : null,
             place?.FilterId);
 
-        if (_add(item) is { } problem)
+        FormSaving.Then(this, AddButton, _add(item), problem =>
         {
-            Show(problem);
-            return;
-        }
+            if (problem is not null)
+            {
+                Show(problem);
+                return;
+            }
 
-        DialogResult = true;
+            DialogResult = true;
+        });
     }
 
     private void Show(string problem)

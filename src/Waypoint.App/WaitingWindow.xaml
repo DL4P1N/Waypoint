@@ -57,7 +57,7 @@
                    Visibility="Collapsed" />
         <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
-            <Button Padding="14,6" Content="Save" IsDefault="True" Click="OnSaveClicked" />
+            <Button x:Name="SaveButton" Padding="14,6" Content="Save" IsDefault="True" Click="OnSaveClicked" />
         </StackPanel>
     </StackPanel>
 </Window>

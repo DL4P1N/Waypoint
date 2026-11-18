@@ -93,7 +93,7 @@
                    Visibility="Collapsed" />
         <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
-            <Button Padding="14,6" Content="Add" IsDefault="True" Click="OnAddClicked" />
+            <Button x:Name="AddButton" Padding="14,6" Content="Add" IsDefault="True" Click="OnAddClicked" />
         </StackPanel>
     </StackPanel>
 </Window>
