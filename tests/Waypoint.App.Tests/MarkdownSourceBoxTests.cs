@@ -137,6 +137,7 @@ public sealed class MarkdownSourceBoxTests
         }
 
         Key();
+        var before = box.LineWork;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         const int typed = 20;
         for (var i = 0; i < typed; i++)
@@ -145,10 +146,17 @@ public sealed class MarkdownSourceBoxTests
         }
 
         var perKey = watch.Elapsed.TotalMilliseconds / typed;
+        var read = (box.LineWork.Read - before.Read) / (double)typed;
+        var styled = (box.LineWork.Styled - before.Styled) / (double)typed;
 
-        // Reading every line again for each key took about 300 ms a key here.
+        // Reading every line again for each key took about 300 ms a key here. The work is what's checked, since the
+        // time depends on what else the PC is doing: a key reads and restyles only the lines next to it.
         Assert.Contains(new string('x', typed + 1), box.Text, StringComparison.Ordinal);
-        Assert.True(perKey < 120, $"Typing took {perKey:0.0} ms a key in Show Markdown on a 2,000 line note");
+        Assert.True(read <= 4, $"Typing read {read:0.0} lines a key in Show Markdown on a 2,000 line note");
+        Assert.True(styled <= 4, $"Typing restyled {styled:0.0} lines a key in Show Markdown on a 2,000 line note");
+
+        // Only a loose check that nothing is badly slow, wide enough for a PC busy with other work.
+        Assert.True(perKey < 1_000, $"Typing took {perKey:0.0} ms a key in Show Markdown on a 2,000 line note");
     });
 
     [Fact]
