@@ -70,6 +70,14 @@ public sealed partial class ServerClient
     /// <summary>Raised when <see cref="State"/> changes, possibly on a background thread.</summary>
     public event Action? StateChanged;
 
+    private int _stateChanges;
+
+    /// <summary>
+    /// How many times <see cref="State"/> has changed. Something learned about the server, such as what it can do,
+    /// holds only while this stays the same, since the server may have been changed for another while it was away.
+    /// </summary>
+    public int StateChanges => Volatile.Read(ref _stateChanges);
+
     public bool IsOnline => State is ServerState.Online or ServerState.Unknown;
 
     /// <summary>One line for the status: empty when all is well.</summary>
@@ -512,6 +520,7 @@ public sealed partial class ServerClient
         }
 
         State = state;
+        Interlocked.Increment(ref _stateChanges);
         StateChanged?.Invoke();
     }
 

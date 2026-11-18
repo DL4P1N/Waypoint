@@ -294,6 +294,48 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
         Assert.Equal(2, Database.GetNotes().Count);
     }
 
+    /// <summary>The same server address, answered by this server or by one from before, as when it's changed in place.</summary>
+    private sealed class Swapped(HttpMessageHandler now, HttpMessageHandler before) : HttpMessageHandler
+    {
+        private readonly HttpMessageInvoker _now = new(now, disposeHandler: false);
+        private readonly HttpMessageInvoker _before = new(before, disposeHandler: false);
+
+        public bool Before { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            (Before ? _before : _now).SendAsync(request, cancellationToken);
+    }
+
+    [Fact]
+    public async Task A_server_changed_for_one_from_before_while_away_has_the_note_read_first_again()
+    {
+        var line = NewLine();
+        var old = new OldServer(line);
+        var swapped = new Swapped(line, old);
+        var client = Client(swapped);
+        INotesData notes = new ServerNotesData(client);
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+
+        // This server said it checks. Then it goes away and comes back as one from before.
+        line.Down = true;
+        await client.CheckAsync();
+        Assert.Equal(ServerState.Offline, client.State);
+        swapped.Before = true;
+        line.Down = false;
+        await client.CheckAsync();
+        Assert.Equal(ServerState.Online, client.State);
+
+        // A change made there meanwhile is found by reading first, since that server can't check, and is kept.
+        Database.SaveNote(id, "Seed list", "radish, kale\n\nbeets too", DateTime.Now);
+        old.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", DateTime.Now));
+
+        Assert.Equal($"GET /api/notes/{id}", old.Requests[0]);
+        Assert.Equal("radish, kale, leeks", Database.GetNote(id)!.Body);
+        Assert.Contains(Database.GetNotes(), note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix && note.Body == "radish, kale\n\nbeets too");
+    }
+
     [Fact]
     public async Task Typing_kept_while_away_remembers_the_text_the_editor_loaded_so_a_reply_meanwhile_is_kept_too()
     {

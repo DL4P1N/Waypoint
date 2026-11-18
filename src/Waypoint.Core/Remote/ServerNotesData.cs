@@ -39,9 +39,12 @@ public sealed class ServerNotesData : INotesData
     // Notes made while away and deleted before they were sent, kept for undo while the app is open.
     private readonly ConcurrentDictionary<long, OfflineNote> _deletedNew = new();
 
-    // Whether the server's last answer to a note save said it checked the text expected, which a server from
-    // before never says. Until one has, a save reads the note first, as before.
-    private volatile bool _serverChecksSaves;
+    // The client's count of state changes when the server last answered a note save saying it checked the text
+    // expected, which a server from before never says, or -1. Until one has, and again once the server was away or
+    // its state changed, since it may have come back as one from before, a save reads the note first, as before.
+    private int _checksSavesSince = -1;
+
+    private bool ServerChecksSaves => Volatile.Read(ref _checksSavesSince) is var since and >= 0 && since == _server.StateChanges;
 
     /// <param name="offline">Where typing waits while the server is away. Without it, typing then says it can't be saved.</param>
     /// <param name="marks">The moments marked while recording a note's lecture, kept in this PC's recordings.</param>
@@ -274,7 +277,7 @@ public sealed class ServerNotesData : INotesData
 
         try
         {
-            if (!_serverChecksSaves)
+            if (!ServerChecksSaves)
             {
                 var stored = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{id}").Value;
                 if (stored is null)
@@ -290,7 +293,7 @@ public sealed class ServerNotesData : INotesData
             }
 
             var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{id}", new SaveNoteRequest(title, body, expectedBody));
-            _serverChecksSaves = reply.Checked;
+            Volatile.Write(ref _checksSavesSince, reply.Checked ? _server.StateChanges : -1);
             if (reply.Value)
             {
                 RememberSaved(id, title, body);
