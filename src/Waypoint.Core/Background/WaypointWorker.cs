@@ -788,16 +788,8 @@ public sealed partial class WaypointWorker
         var now = _clock();
         if (!BedtimeSchedule.IsQuiet(now))
         {
-            foreach (var notice in _database.GetHeldNotices())
+            foreach (var notice in TakeHeldToSend())
             {
-                lock (_heldSending)
-                {
-                    if (!_heldSending.Add(notice.Id))
-                    {
-                        continue;
-                    }
-                }
-
                 _ = SendHeldNoticeAsync(notice);
             }
         }
@@ -832,6 +824,18 @@ public sealed partial class WaypointWorker
 
     /// <summary>Held notices going out now, so a slow send isn't started again on the next round.</summary>
     private readonly HashSet<long> _heldSending = [];
+
+    /// <summary>
+    /// The held notices not already going out. They're read inside the guard, so one that has just gone out and
+    /// been let go is never read before its send is over and started again.
+    /// </summary>
+    private List<HeldNotice> TakeHeldToSend()
+    {
+        lock (_heldSending)
+        {
+            return _database.GetHeldNotices().Where(notice => _heldSending.Add(notice.Id)).ToList();
+        }
+    }
 
     /// <summary>
     /// A held notice is kept until it's gone out, and noted before it's sent, so a crash partway sends it once:

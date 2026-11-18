@@ -200,6 +200,27 @@ public sealed partial class DiscordPhoneTests
         Assert.Empty(_database.GetDiscordSends("reminder:"));
     }
 
+    [Fact]
+    public async Task A_held_notice_checked_on_again_and_again_while_it_goes_out_is_sent_once()
+    {
+        _database.HoldNotice("Made up refund", "Added: $7.00", CardTone.Money, false);
+        var worker = Worker(toDo: null, lists: null);
+
+        // Rounds keep coming while the send finishes, so one may land right as the notice is let go.
+        for (var round = 0; round < 400 && Try(() => _database.GetHeldNotices().Count > 0); round++)
+        {
+            worker.CheckAlerts();
+            await Task.Yield();
+        }
+
+        await Until(() => _database.GetHeldNotices().Count == 0);
+        worker.CheckAlerts();
+        await Task.Delay(50);
+
+        Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up refund"));
+        Assert.Empty(_database.GetDiscordSends("held:"));
+    }
+
     /// <summary>The messages Discord made in the views channel, by their title.</summary>
     private List<string> ViewsMade()
     {
