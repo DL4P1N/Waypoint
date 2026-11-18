@@ -171,7 +171,10 @@ public static class Api
     {
         api.MapGet("/items/open", (WaypointServer server) => server.Database.GetOpenItems());
         api.MapGet("/items/finished", (WaypointServer server) => server.Database.GetFinishedForList(DateTime.Now));
-        api.MapPost("/items", (HandAddedItem input, WaypointServer server) => server.Database.AddByHand(input, DateTime.Now));
+        // One sent with the PC's own id is kept once, however often it's sent. One without, from a PC from before, adds as it always has.
+        api.MapPost("/items", (HandAddedItem input, string? client, WaypointServer server) => client is { Length: > 0 } id
+            ? server.Database.AddByHandOnce(id, input, DateTime.Now)
+            : server.Database.AddByHand(input, DateTime.Now));
         api.MapPost("/items/done", (DoneRequest request, WaypointServer server) =>
         {
             server.Database.SetDone(request.Item, request.Done);

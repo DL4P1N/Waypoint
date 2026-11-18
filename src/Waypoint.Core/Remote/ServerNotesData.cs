@@ -39,9 +39,12 @@ public sealed class ServerNotesData : INotesData
     // Notes made while away and deleted before they were sent, kept for undo while the app is open.
     private readonly ConcurrentDictionary<long, OfflineNote> _deletedNew = new();
 
-    // Whether the server's last answer to a note save said it checked the text expected, which a server from
-    // before never says. Until one has, a save reads the note first, as before.
-    private volatile bool _serverChecksSaves;
+    // The client's count of state changes when the server last answered a note save saying it checked the text
+    // expected, which a server from before never says, or -1. Until one has, and again once the server was away or
+    // its state changed, since it may have come back as one from before, a save reads the note first, as before.
+    private int _checksSavesSince = -1;
+
+    private bool ServerChecksSaves => Volatile.Read(ref _checksSavesSince) is var since and >= 0 && since == _server.StateChanges;
 
     /// <param name="offline">Where typing waits while the server is away. Without it, typing then says it can't be saved.</param>
     /// <param name="marks">The moments marked while recording a note's lecture, kept in this PC's recordings.</param>
@@ -87,7 +90,13 @@ public sealed class ServerNotesData : INotesData
 
     public string? UnsavedPath => _offline?.UnsavedPath;
 
-    /// <summary>A plain text copy of the notes the server turned down, for opening. Null when there are none.</summary>
+    /// <summary>What to show while a file of notes typed while away was found damaged and set aside. Null when none was.</summary>
+    public string? Unreadable => _offline?.Unreadable;
+
+    /// <summary>
+    /// A plain text copy of the notes the server turned down, and of any file of them found damaged, for opening.
+    /// Null when there are none.
+    /// </summary>
     public string? WriteUnsavedCopy() => _offline?.WriteUnsavedCopy();
 
     private static string Text(string? value) => Uri.EscapeDataString(value ?? "");
@@ -268,7 +277,7 @@ public sealed class ServerNotesData : INotesData
 
         try
         {
-            if (!_serverChecksSaves)
+            if (!ServerChecksSaves)
             {
                 var stored = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{id}").Value;
                 if (stored is null)
@@ -284,7 +293,7 @@ public sealed class ServerNotesData : INotesData
             }
 
             var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{id}", new SaveNoteRequest(title, body, expectedBody));
-            _serverChecksSaves = reply.Checked;
+            Volatile.Write(ref _checksSavesSince, reply.Checked ? _server.StateChanges : -1);
             if (reply.Value)
             {
                 RememberSaved(id, title, body);
@@ -597,9 +606,10 @@ public sealed class ServerNotesData : INotesData
                     return KeepBoth(waiting, made, there, clientId);
                 }
 
-                if (there is not null && (there.Body != waiting.Body || there.Title != waiting.Title))
+                if (there is not null && (there.Body != waiting.Body || there.Title != waiting.Title)
+                    && SendOver(made, waiting, there.Body) is { } changedSince)
                 {
-                    _server.Send(Put, $"api/notes/{made}", new SaveNoteRequest(waiting.Title, waiting.Body));
+                    return KeepBoth(waiting, made, changedSince.Stored, clientId);
                 }
 
                 RememberMade(new NoteDetail(made, waiting.Title, waiting.Body, null, waiting.At, waiting.FolderId));
@@ -609,9 +619,11 @@ public sealed class ServerNotesData : INotesData
             var current = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{waiting.Id}").Value;
             if (current is not null && (current.Body == waiting.Body || current.Body == waiting.BasedOn))
             {
-                if (current.Body != waiting.Body || current.Title != waiting.Title)
+                if ((current.Body != waiting.Body || current.Title != waiting.Title)
+                    && SendOver(waiting.Id, waiting, current.Body) is { } changedSince)
                 {
-                    _server.Send(Put, $"api/notes/{waiting.Id}", new SaveNoteRequest(waiting.Title, waiting.Body));
+                    // Changed on the server, or gone from it, between the read and the save: both versions are kept.
+                    return KeepBoth(waiting, waiting.Id, changedSince.Stored, clientId);
                 }
 
                 RememberSaved(waiting.Id, waiting.Title, waiting.Body);
@@ -631,6 +643,17 @@ public sealed class ServerNotesData : INotesData
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Saves what was typed over the note, as long as it still has <paramref name="read"/>, the text just read. Null
+    /// when it was saved. Otherwise the answer says what the note is now, or has nothing when it's gone. A server from
+    /// before saves without checking, as it always has.
+    /// </summary>
+    private NoteSaveReply? SendOver(long noteId, OfflineNote waiting, string read)
+    {
+        var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{noteId}", new SaveNoteRequest(waiting.Title, waiting.Body, read));
+        return reply.Value ? null : reply;
     }
 
     /// <summary>

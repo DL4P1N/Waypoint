@@ -40,6 +40,13 @@ public interface INoteFileStore
 
     bool SaveNote(long id, string title, string body, DateTime now);
 
+    /// <summary>
+    /// Saves the note only if its text is still <paramref name="expectedBody"/>, checked and saved in one step where
+    /// the note is kept, so a change landing in between, such as a reply added from Discord, is never overwritten.
+    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>.
+    /// </summary>
+    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now);
+
     void DeleteNote(long id, DateTime now);
 
     bool MoveNoteToFolder(long noteId, long? folderId);
@@ -59,13 +66,6 @@ public interface INotesData : INoteFileStore, IPreferences
     bool CanStudy { get; }
 
     IReadOnlyList<NoteDetail> GetNotes(string? filter = null);
-
-    /// <summary>
-    /// Saves the note only if its text is still <paramref name="expectedBody"/>, checked and saved in one step where
-    /// the note is kept, so a change landing in between, such as a reply added from Discord, is never overwritten.
-    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>.
-    /// </summary>
-    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now);
 
     void RestoreNote(long id, DateTime now);
 

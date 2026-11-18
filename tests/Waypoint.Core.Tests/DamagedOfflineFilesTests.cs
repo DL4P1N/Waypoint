@@ -72,11 +72,14 @@ public sealed class DamagedOfflineFilesTests : IDisposable
         var notes = Notes();
 
         Assert.Equal(0, notes.NotSaved);
-        Assert.Null(notes.WriteUnsavedCopy());
 
         var aside = Assert.Single(SetAside(unsaved));
         Assert.Equal(bytes, File.ReadAllBytes(aside));
         Assert.False(File.Exists(unsaved), how);
+
+        // Told about, and Open names where the file is kept.
+        Assert.Contains(Path.GetFileName(aside), notes.Unreadable);
+        Assert.Contains(aside, File.ReadAllText(notes.WriteUnsavedCopy()!));
     }
 
     [Theory]
@@ -111,12 +114,14 @@ public sealed class DamagedOfflineFilesTests : IDisposable
         File.WriteAllBytes(queue.RefusedPath, bytes);
 
         Assert.Equal(0, queue.RefusedCount);
-        Assert.Null(queue.Refused);
 
-        Assert.Equal(bytes, File.ReadAllBytes(Assert.Single(SetAside(queue.RefusedPath))));
+        var aside = Assert.Single(SetAside(queue.RefusedPath));
+        Assert.Equal(bytes, File.ReadAllBytes(aside));
+        Assert.Contains(Path.GetFileName(aside), queue.Refused);
+        Assert.Contains(aside, File.ReadAllText(queue.WriteRefusedCopy()!));
     }
 
-    [Fact(Skip = "bug: a notes file holding a null entry, such as [null] left by a damaged write, crashes the Notes page in server mode with a NullReferenceException instead of being kept aside. OfflineNotes.Read only sets a file aside on a JsonException, and null entries reach note.Id.")]
+    [Fact]
     public void A_notes_file_with_an_empty_entry_is_kept_aside_rather_than_crashing()
     {
         File.WriteAllText(NotesFile, "[null]");
@@ -128,24 +133,83 @@ public sealed class DamagedOfflineFilesTests : IDisposable
         Assert.Single(SetAside(NotesFile));
     }
 
-    [Fact(Skip = "bug: notes typed while the server was away that are found damaged are set aside without a word, so the person never learns they weren't sent. Nothing such as NotSaved or the unsaved copy counts the set-aside file.")]
+    [Fact]
+    public void A_notes_file_with_entries_of_the_wrong_shape_is_kept_aside_and_the_whole_ones_still_wait()
+    {
+        var bytes = Encoding.UTF8.GetBytes("""
+            [null, {"id":-638000000000000001,"title":"Made up packing","body":"socks","at":"2026-03-04T10:00:00"}, {"id":7}, {"title":"Made up","body":"no id"}]
+            """);
+        File.WriteAllBytes(NotesFile, bytes);
+        var notes = Notes();
+
+        Assert.Equal(1, notes.WaitingToSave);
+        Assert.Equal("socks", notes.GetNote(-638000000000000001)!.Body);
+        Assert.Equal(bytes, File.ReadAllBytes(Assert.Single(SetAside(NotesFile))));
+        Assert.NotNull(notes.Unreadable);
+
+        // Read again, the file of whole ones is fine, so nothing more is set aside.
+        Assert.Equal(1, Notes().WaitingToSave);
+        Assert.Single(SetAside(NotesFile));
+    }
+
+    [Fact]
+    public async Task A_captures_file_with_entries_of_the_wrong_shape_is_kept_aside_and_the_whole_ones_still_go()
+    {
+        var bytes = Encoding.UTF8.GetBytes("""
+            [null, {"id":"made-up-1","text":"buy a made up stamp","writtenAt":"2026-03-04T10:00:00+00:00"}, {"id":"made-up-2"}]
+            """);
+        File.WriteAllBytes(QueueFile, bytes);
+        var queue = new CaptureQueue(QueueFile);
+
+        Assert.Equal(1, queue.Count);
+        Assert.Equal(bytes, File.ReadAllBytes(Assert.Single(SetAside(QueueFile))));
+        var sent = new List<string>();
+        Assert.Equal(1, await queue.SendAsync(capture =>
+        {
+            sent.Add(capture.Text);
+            return Task.FromResult(true);
+        }));
+        Assert.Equal(["buy a made up stamp"], sent);
+        Assert.NotNull(queue.Refused);
+    }
+
+    [Fact]
     public void Damaged_notes_typed_while_away_are_told_about()
     {
         File.WriteAllText(NotesFile, """[{"id":-638000000000000000,"title":"Made up packing","body":"socks and a lan""");
         var notes = Notes();
-        notes.GetNotes();
 
-        Assert.Equal(1, notes.NotSaved);
-        Assert.Contains(Path.GetFileName(Assert.Single(SetAside(NotesFile))), File.ReadAllText(notes.WriteUnsavedCopy()!));
+        // Told on the status line even before the Notes page is opened, with the file they're kept in.
+        var told = notes.Unreadable;
+        var aside = Assert.Single(SetAside(NotesFile));
+        Assert.Equal(
+            $"Some notes typed while the server was away couldn't be read, so they weren't saved on the server. They're kept on this PC in {Path.GetFileName(aside)}.",
+            told);
+
+        // Open shows where the file is kept and what it held, so the text can be copied back in.
+        var copy = File.ReadAllText(notes.WriteUnsavedCopy()!);
+        Assert.Contains(aside, copy);
+        Assert.Contains("socks and a lan", copy);
+        Assert.Empty(notes.GetNotes());
     }
 
-    [Fact(Skip = "bug: captures waiting for the server that are found damaged are set aside without a word. The status line only shows Refused, which doesn't count the set-aside file, so the person never learns what they typed wasn't sent.")]
+    [Fact]
     public void Damaged_captures_waiting_for_the_server_are_told_about()
     {
         File.WriteAllText(QueueFile, """[{"id":"made-up","text":"call a made up plum""");
         var queue = new CaptureQueue(QueueFile);
 
+        var told = queue.Refused;
         Assert.Equal(0, queue.Count);
-        Assert.NotNull(queue.Refused);
+        var aside = Assert.Single(SetAside(QueueFile));
+        Assert.Equal(
+            $"Some things you typed couldn't be read, so they weren't saved on the server. They're kept on this PC in {Path.GetFileName(aside)}.",
+            told);
+        var copy = File.ReadAllText(queue.WriteRefusedCopy()!);
+        Assert.Contains(aside, copy);
+        Assert.Contains("call a made up plum", copy);
+
+        // A queue whose files are fine says nothing.
+        Assert.Null(new CaptureQueue(Path.Combine(_folder, "other-queue.json")).Refused);
     }
 }

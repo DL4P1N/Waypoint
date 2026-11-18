@@ -175,7 +175,7 @@ public sealed class NoteJobs
                 _logger.LogError(exception, "Writing notes failed: {Reason} The files stay saved in Sources, so it can be tried again.", Reason(task.Exception));
             }
 
-            Keep(job.Id, task);
+            Keep(job, task);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -194,10 +194,17 @@ public sealed class NoteJobs
     /// Keeps how a job ended. Only what the PC needs to be told is kept: the result of one that ran to the end, or the
     /// plain reason of one that failed. Never the prompt, paths, or the exception's own text.
     /// </summary>
-    private void Keep(string id, Task<NoteJobState> task)
+    private void Keep(Job job, Task<NoteJobState> task)
     {
+        var id = job.Id;
         var now = _utcNow();
-        if (task.IsCompletedSuccessfully)
+        if (task.IsCompletedSuccessfully && Volatile.Read(ref _shuttingDown) && job.Token.IsCancellationRequested && EndedWithout(task.Result))
+        {
+            // Writing turns a stop into its own outcome and returns. Stopped by the shutdown, it's told as the
+            // restart, as one the restart cut off before it could return is.
+            _store.FinishNoteJob(id, NoteJobOutcome.Lost, now, problem: null, result: null, interrupted: true);
+        }
+        else if (task.IsCompletedSuccessfully)
         {
             var state = task.Result;
             var result = JsonSerializer.Serialize(new NoteJobState(Done: true, Notes: state.Notes, Study: state.Study), RemoteJson.Options);
@@ -216,6 +223,10 @@ public sealed class NoteJobs
             _store.FinishNoteJob(id, NoteJobOutcome.Failed, now, Reason(task.Exception), result: null);
         }
     }
+
+    /// <summary>Whether a job came back without the notes or questions it was writing, as one that was stopped does.</summary>
+    private static bool EndedWithout(NoteJobState state) =>
+        state.Notes?.Status == NoteWriteStatus.Failed || state.Study?.Status == StudyStatus.Failed;
 
     /// <summary>Forgets finished jobs nobody came back for within the hour. Their switches were let go of as they ended.</summary>
     private void Sweep() => _store.PruneNoteJobs(_utcNow() - KeepFinished);

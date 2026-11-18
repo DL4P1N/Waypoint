@@ -51,6 +51,34 @@ public sealed class OfflineNotes(string path)
 
     public const string UnsavedCopyName = "Notes not saved on the server.txt";
 
+    private readonly List<string> _setAside = [];
+
+    /// <summary>
+    /// The files of notes found damaged and set aside since the app started, so the person can be told. What was in
+    /// them was never sent, so they're named in the unsaved copy too.
+    /// </summary>
+    public IReadOnlyList<string> SetAsideFiles
+    {
+        get
+        {
+            lock (_gate)
+            {
+                // Read first, so a damaged file is found even before the Notes page is opened.
+                Read();
+                ReadUnsaved();
+                return _setAside.ToList();
+            }
+        }
+    }
+
+    /// <summary>What to show while any file of notes was found damaged and set aside. Null when none was.</summary>
+    public string? Unreadable => SetAsideFiles switch
+    {
+        [] => null,
+        [var one] => $"Some notes typed while the server was away couldn't be read, so they weren't saved on the server. They're kept on this PC in {Path.GetFileName(one)}.",
+        var files => $"Some notes typed while the server was away couldn't be read, so they weren't saved on the server. They're kept on this PC in {files.Count} files, starting with {Path.GetFileName(files[0])}.",
+    };
+
     /// <summary>
     /// Writes the notes the server turned down as plain text beside the unsaved file and returns where, so they can
     /// be opened and copied back in. Null when there are none. The unsaved file itself stays as it is.
@@ -58,18 +86,21 @@ public sealed class OfflineNotes(string path)
     public string? WriteUnsavedCopy()
     {
         List<UnsavedNote> unsaved;
+        List<string> aside;
         lock (_gate)
         {
             unsaved = ReadUnsaved();
+            aside = _setAside.ToList();
         }
 
-        return unsaved.Count == 0
+        return unsaved.Count == 0 && aside.Count == 0
             ? null
             : KeptCopy.Write(
                 Path.Combine(Path.GetDirectoryName(UnsavedPath) ?? "", UnsavedCopyName),
                 unsaved.Select(kept => (
                     $"{(string.IsNullOrWhiteSpace(kept.Note.Title) ? "A note" : kept.Note.Title)}, typed {KeptCopy.When(kept.Note.At)}. {kept.Problem.TrimEnd('.')}",
-                    kept.Note.Body)));
+                    kept.Note.Body))
+                .Concat(aside.Select(file => KeptCopy.SetAsideEntry("Notes typed while the server was away", file))));
     }
 
     public int Count
@@ -252,41 +283,51 @@ public sealed class OfflineNotes(string path)
         File.Move(temporary, UnsavedPath, overwrite: true);
     }
 
-    private List<UnsavedNote> ReadUnsaved()
+    private List<UnsavedNote> ReadUnsaved() =>
+        ReadKept<UnsavedNote>(UnsavedPath, kept => kept?.Note is { Title: not null, Body: not null } && kept.Problem is not null, unsaved =>
+        {
+            var temporary = $"{UnsavedPath}.tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(unsaved, RemoteJson.Options));
+            File.Move(temporary, UnsavedPath, overwrite: true);
+        });
+
+    private List<OfflineNote> Read() =>
+        ReadKept<OfflineNote>(path, note => note is { Title: not null, Body: not null } && note.Id != 0, Write);
+
+    /// <summary>
+    /// Reads a kept file. One that can't be read, or that holds an entry that's empty or the wrong shape, is set
+    /// aside byte for byte, so whatever was typed can still be found by hand, and is told about. The whole entries
+    /// are kept in a new file, so they still go.
+    /// </summary>
+    private List<T> ReadKept<T>(string file, Func<T?, bool> whole, Action<List<T>> keep)
     {
-        if (!File.Exists(UnsavedPath))
+        if (!File.Exists(file))
         {
             return [];
         }
 
+        List<T?> entries;
         try
         {
-            return JsonSerializer.Deserialize<List<UnsavedNote>>(File.ReadAllText(UnsavedPath), RemoteJson.Options) ?? [];
+            entries = JsonSerializer.Deserialize<List<T?>>(File.ReadAllText(file), RemoteJson.Options) ?? [];
         }
         catch (JsonException)
         {
-            File.Move(UnsavedPath, $"{UnsavedPath}.unreadable-{DateTime.Now:yyyyMMddHHmmss}", overwrite: true);
-            return [];
-        }
-    }
-
-    private List<OfflineNote> Read()
-    {
-        if (!File.Exists(path))
-        {
+            _setAside.Add(KeptCopy.SetAside(file));
             return [];
         }
 
-        try
+        var good = entries.Where(whole).Select(entry => entry!).ToList();
+        if (good.Count != entries.Count)
         {
-            return JsonSerializer.Deserialize<List<OfflineNote>>(File.ReadAllText(path), RemoteJson.Options) ?? [];
+            _setAside.Add(KeptCopy.SetAside(file));
+            if (good.Count > 0)
+            {
+                keep(good);
+            }
         }
-        catch (JsonException)
-        {
-            // Kept aside rather than thrown away, so whatever was typed can still be found by hand.
-            File.Move(path, $"{path}.unreadable-{DateTime.Now:yyyyMMddHHmmss}", overwrite: true);
-            return [];
-        }
+
+        return good;
     }
 
     private void Write(List<OfflineNote> waiting)

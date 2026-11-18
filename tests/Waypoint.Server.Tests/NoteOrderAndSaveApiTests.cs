@@ -116,7 +116,10 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
 
         public bool Down { get; set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        /// <summary>When set, the next new note reaches the server and is made, and its answer is lost on the way back.</summary>
+        public bool LoseNewNoteAnswer { get; set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
             lock (Requests)
@@ -136,7 +139,15 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
                 Assert.True(database.SaveNoteIfUnchanged(id, note.Title, $"{note.Body}\n\n{reply}", note.Body, DateTime.Now));
             }
 
-            return base.SendAsync(request, cancellationToken);
+            var response = await base.SendAsync(request, cancellationToken);
+            if (LoseNewNoteAnswer && request.Method == HttpMethod.Post && path == "/api/notes")
+            {
+                LoseNewNoteAnswer = false;
+                response.Dispose();
+                throw new HttpRequestException("The connection was reset");
+            }
+
+            return response;
         }
     }
 
@@ -294,6 +305,48 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
         Assert.Equal(2, Database.GetNotes().Count);
     }
 
+    /// <summary>The same server address, answered by this server or by one from before, as when it's changed in place.</summary>
+    private sealed class Swapped(HttpMessageHandler now, HttpMessageHandler before) : HttpMessageHandler
+    {
+        private readonly HttpMessageInvoker _now = new(now, disposeHandler: false);
+        private readonly HttpMessageInvoker _before = new(before, disposeHandler: false);
+
+        public bool Before { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            (Before ? _before : _now).SendAsync(request, cancellationToken);
+    }
+
+    [Fact]
+    public async Task A_server_changed_for_one_from_before_while_away_has_the_note_read_first_again()
+    {
+        var line = NewLine();
+        var old = new OldServer(line);
+        var swapped = new Swapped(line, old);
+        var client = Client(swapped);
+        INotesData notes = new ServerNotesData(client);
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+
+        // This server said it checks. Then it goes away and comes back as one from before.
+        line.Down = true;
+        await client.CheckAsync();
+        Assert.Equal(ServerState.Offline, client.State);
+        swapped.Before = true;
+        line.Down = false;
+        await client.CheckAsync();
+        Assert.Equal(ServerState.Online, client.State);
+
+        // A change made there meanwhile is found by reading first, since that server can't check, and is kept.
+        Database.SaveNote(id, "Seed list", "radish, kale\n\nbeets too", DateTime.Now);
+        old.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", DateTime.Now));
+
+        Assert.Equal($"GET /api/notes/{id}", old.Requests[0]);
+        Assert.Equal("radish, kale, leeks", Database.GetNote(id)!.Body);
+        Assert.Contains(Database.GetNotes(), note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix && note.Body == "radish, kale\n\nbeets too");
+    }
+
     [Fact]
     public async Task Typing_kept_while_away_remembers_the_text_the_editor_loaded_so_a_reply_meanwhile_is_kept_too()
     {
@@ -318,5 +371,56 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
         Assert.True(sent.KeptBoth);
         Assert.Equal("radish\n\nbeets too", Database.GetNote(id)!.Body);
         Assert.Equal("radish, kale", Database.GetNote(sent.NoteId)!.Body);
+    }
+
+    [Fact]
+    public async Task A_reply_landing_while_typing_kept_away_is_being_sent_is_kept_beside_it()
+    {
+        var line = NewLine();
+        var client = Client(line);
+        var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_folder, "pc-notes.json")));
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        line.Down = true;
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+        line.Down = false;
+        await client.CheckAsync();
+
+        // The note still has the text the typing started from when it's read, and a reply lands just before the save.
+        line.Reply = "beets too";
+        var sent = Assert.Single(await notes.SendOfflineAsync());
+
+        Assert.True(sent.KeptBoth);
+        Assert.Equal("radish\n\nbeets too", Database.GetNote(id)!.Body);
+        Assert.Equal("radish, kale", Database.GetNote(sent.NoteId)!.Body);
+        Assert.Equal(0, notes.WaitingToSave);
+    }
+
+    [Fact]
+    public async Task A_reply_landing_while_a_note_made_away_is_brought_up_to_date_is_kept_beside_it()
+    {
+        var line = NewLine();
+        var client = Client(line);
+        var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_folder, "pc-notes.json")));
+
+        // The server makes the note, but the answer is lost, and more is typed before it's back.
+        line.LoseNewNoteAnswer = true;
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Assert.True(id < 0);
+        line.Down = true;
+        Assert.True(notes.SaveNote(id, "Seed list", "radish, kale", DateTime.Now));
+        line.Down = false;
+        await client.CheckAsync();
+
+        // Sent again, the server gives back the note it made, which is brought up to date, and a reply lands just
+        // before that save.
+        line.Reply = "beets too";
+        var sent = Assert.Single(await notes.SendOfflineAsync());
+
+        Assert.True(sent.KeptBoth);
+        Assert.Equal("radish, kale", Database.GetNote(sent.NoteId)!.Body);
+        var made = Assert.Single(Database.GetNotes(), note => note.Id != sent.NoteId);
+        Assert.Equal("radish\n\nbeets too", made.Body);
+        Assert.Equal(0, notes.WaitingToSave);
     }
 }

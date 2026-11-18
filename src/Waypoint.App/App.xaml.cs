@@ -1455,6 +1455,10 @@ public partial class App : System.Windows.Application
         var text = problem is not null ? $"Waypoint: {problem}"
             : SortStatus.TrayTip(pending, status?.SortingError is not null) ?? TrayIdle;
 
+        // Anything typed here that the server turned down, or that was found damaged, is told with a way to open it.
+        var refused = server.Queue.Refused;
+        var unreadable = server.Notes.Unreadable;
+
         _tray!.Text = Trial.TrayTip(text, MaxTrayTextLength);
         ApplyTheme();
         try
@@ -1467,8 +1471,19 @@ public partial class App : System.Windows.Application
                 status?.ConnectionError,
                 _schedule?.GetNextClass(DateTime.Now),
                 server.Sessions.GetTonight(DateTime.Now),
-                string.Join("\n", new[] { problem, server.Queue.Refused }.OfType<string>()) is { Length: > 0 } notice ? notice : null,
-                server.Queue.RefusedCount > 0 ? () => OpenKept(server.Queue.WriteRefusedCopy) : null);
+                string.Join("\n", new[] { problem, refused, unreadable }.OfType<string>()) is { Length: > 0 } notice ? notice : null,
+                refused is null && unreadable is null ? null : () =>
+                {
+                    if (refused is not null)
+                    {
+                        OpenKept(server.Queue.WriteRefusedCopy);
+                    }
+
+                    if (unreadable is not null)
+                    {
+                        OpenKept(server.Notes.WriteUnsavedCopy);
+                    }
+                });
         }
         catch (ServerUnavailableException)
         {

@@ -302,7 +302,7 @@ public sealed class ServerAndPcTests : IDisposable
         Assert.Single(pc.Notes.GetNoteSources(id));
     }
 
-    [Fact(Skip = "bug: a notes job cut off by a server restart is told as \"It was stopped\" instead of the restart message. On shutdown NoteMaker turns the cancelled write into a NotesStopped outcome and returns normally, so NoteJobs keeps the job as Succeeded with that outcome rather than as lost and interrupted. Practice questions go the same way.")]
+    [Fact]
     public async Task A_note_job_cut_off_by_a_server_restart_is_told_as_the_server_restarting()
     {
         var (_, _, _, outcome) = await NotesCutOffByRestart();
@@ -394,7 +394,7 @@ public sealed class ServerAndPcTests : IDisposable
         Assert.Equal(["buy a made up stamp", "water the made up fern"], await PendingCaptures());
     }
 
-    [Fact(Skip = "bug: a task added by hand in server mode whose answer is lost is told as not added, and adding it again makes a second copy, since api/items takes no client id to recognize the resend.")]
+    [Fact]
     public async Task A_task_added_by_hand_whose_answer_was_lost_is_kept_once_when_added_again()
     {
         var pc = StartPc();

@@ -147,6 +147,60 @@ public sealed class NoteSavingTests : IDisposable
         Assert.Empty(_database.GetNotes());
     }
 
+    /// <summary>The notes, turning down one of the checked saves, as a busy server does.</summary>
+    public class RefuseOne : DispatchProxy
+    {
+        public INotesData Inner { get; set; } = null!;
+
+        /// <summary>Which of the checked saves to turn down, counting from one, or zero for none.</summary>
+        public int RefuseCall { get; set; }
+
+        private int _checked;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name == nameof(INotesData.SaveNoteIfUnchanged) && ++_checked == RefuseCall)
+            {
+                throw new InvalidOperationException("The server is busy. Try again in a moment.");
+            }
+
+            try
+            {
+                return targetMethod.Invoke(Inner, args);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is { } inner)
+            {
+                throw inner;
+            }
+        }
+    }
+
+    [Fact]
+    public void A_save_turned_down_after_keeping_the_other_version_does_not_keep_it_again_when_tried_again()
+    {
+        var notes = DispatchProxy.Create<INotesData, RefuseOne>();
+        var refuse = (RefuseOne)(object)notes;
+        refuse.Inner = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Seed list", "radish\n\nbeets too", Now);
+
+        // The other version is kept, then the save over it is turned down.
+        refuse.RefuseCall = 2;
+        Assert.Throws<InvalidOperationException>(() => NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        Assert.Equal(2, _database.GetNotes().Count);
+
+        // The editor tries again with the text it loaded, and the version already kept isn't kept twice.
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        Assert.Equal("radish, kale", _database.GetNote(id)!.Body);
+        var kept = Assert.Single(_database.GetNotes(), note => note.Id != id);
+        Assert.Equal("radish\n\nbeets too", kept.Body);
+
+        // A later change elsewhere is a new version, so it's kept too.
+        _database.SaveNote(id, "Seed list", "radish, kale\n\nleeks too", Now);
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, chard", "radish, kale", Now));
+        Assert.Equal(3, _database.GetNotes().Count);
+    }
+
     [Fact]
     public void With_nothing_loaded_to_compare_with_the_save_goes_ahead_as_before()
     {
