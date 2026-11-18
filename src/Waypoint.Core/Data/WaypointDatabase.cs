@@ -181,6 +181,7 @@ public sealed partial class WaypointDatabase
         CreateDiscordThreadTables();
         CreateNoteJobTables();
         CreateDiscordInboxTables();
+        CreateCaptureProgressTables();
         AddColumnIfMissing("sent_reminders", "source", "TEXT NOT NULL DEFAULT 'Capture'");
         AddColumnIfMissing("sent_reminders", "start_only", "INTEGER NOT NULL DEFAULT 0");
         CreateAfterThisTables();
@@ -739,8 +740,11 @@ public sealed partial class WaypointDatabase
         return applied;
     }
 
-    /// <summary>The same, inside the caller's write, for a page that makes its own capture and items together.</summary>
-    private static List<AppliedChange> CompleteCapture(SqliteConnection connection, long captureId, IReadOnlyList<SortedItem> items, IReadOnlyList<ItemChange>? changes)
+    /// <summary>
+    /// The same, inside the caller's write, for a page that makes its own capture and items together. Without
+    /// <paramref name="finish"/>, the capture stays pending, for one whose further steps are still to run.
+    /// </summary>
+    private static List<AppliedChange> CompleteCapture(SqliteConnection connection, long captureId, IReadOnlyList<SortedItem> items, IReadOnlyList<ItemChange>? changes, bool finish = true)
     {
         string? captureText = null;
         foreach (var sorted in items)
@@ -776,9 +780,14 @@ public sealed partial class WaypointDatabase
         }
 
         var applied = (changes ?? []).Select(change => ApplyChange(connection, captureId, change, DateTime.Now)).ToList();
+        if (!finish)
+        {
+            return applied;
+        }
 
+        // Its steps are all done by now, so what was kept of how far they got goes with it.
         using var update = connection.CreateCommand();
-        update.CommandText = "UPDATE captures SET sorted_at = $sortedAt WHERE id = $id";
+        update.CommandText = "UPDATE captures SET sorted_at = $sortedAt WHERE id = $id; DELETE FROM capture_progress WHERE capture_id = $id";
         update.Parameters.AddWithValue("$sortedAt", DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
         update.Parameters.AddWithValue("$id", captureId);
         update.ExecuteNonQuery();
