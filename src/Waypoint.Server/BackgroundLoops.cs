@@ -64,7 +64,18 @@ public sealed class BackgroundLoops(WaypointServer server, IOptions<ServerOption
         return Task.WhenAll(loops);
     }
 
-    private async Task PingAsync(string url, CancellationToken stoppingToken)
+    /// <summary>
+    /// After the loops end, Discord events already read are finished, then the work they handed on, each within a
+    /// time limit, so a capture or press that came in just before shutdown is still saved. What's left is logged.
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        await server.Worker.StopDiscordAsync(DiscordGateway.EventDrainLimit);
+        await server.Host.StopAsync(OrderedWork.DefaultStopLimit);
+    }
+
+        private async Task PingAsync(string url, CancellationToken stoppingToken)
     {
         if (server.Problem(DateTime.Now, runsBackground: true) is { } problem)
         {
