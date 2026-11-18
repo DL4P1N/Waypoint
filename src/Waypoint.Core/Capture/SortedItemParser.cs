@@ -37,7 +37,8 @@ public static class SortedItemParser
                 ParseText(element, "category"),
                 element.TryGetProperty("one_off", out var oneOff) && oneOff.ValueKind == JsonValueKind.True,
                 ParseText(element, "about"),
-                EndTime: ParseTime(element, "end_time")));
+                EndTime: ParseTime(element, "end_time"),
+                Dose: element.TryGetProperty("dose", out var dose) && dose.ValueKind == JsonValueKind.True));
         }
 
         return items;

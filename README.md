@@ -53,6 +53,7 @@ The same box changes things and answers questions:
 | Save your place | "save my spot: stopped on X, next Y", then later "where did I stop?" |
 | Catch up | "I missed the quiz" |
 | Repeat something | "water the plants every day at 9", "pay rent on the 1st of each month" |
+| Take medicine | "take vitamin D at 9 every morning", then later "did I take my meds?" |
 | Look back | "what did I need to buy?", "what did I write about the project?", "what did I finish last week?" |
 | Change the look | "use the amber theme" |
 
@@ -75,6 +76,16 @@ A card that comes back offers only Start and Skip, so it never turns into a chai
 **"After this."** If a card with Start gets no answer for half an hour (on Discord, or left up on the PC), Waypoint holds that one thing and brings it back once as "Earlier you meant to: ..." with **Start** and **Not now**. It rides on something already showing, whichever comes first: opening the Waypoint window or To do, finishing a session with Did it, tonight's heads-up, or the next morning's briefing. Nothing new is sent for it. Only the newest is kept, so a new one replaces an older one. Once it's been shown, it's gone whatever you choose, and nothing older comes back after it. It's also dropped if you start, finish, move, snooze, or delete that item first, or say its reminder didn't help. Anything held for more than a day is dropped.
 
 **This didn't help.** Reminder cards, the suggestion on To do, the session card, the "Earlier you meant to" card, and each To do row's right-click menu have a small **This didn't help**. It keeps the click straight away, then offers one optional line; **No note** keeps it without one. On Discord the line is a small form. They're listed under **Feedback**, last on Settings, where **Clear all** removes them, with Undo to put them back. Each one keeps where it was, when, the line if you added one, and the item's title, so it still reads after the item is gone. Nothing else about how you use Waypoint is kept, and nothing asks again later.
+
+### Medicine reminders
+
+Type something like "take my meds at 8am every day" or "allergy pill at 10pm daily", and it becomes a repeating reminder marked as a dose. To mark a repeating reminder you already have, right-click it on To do and choose **Mark as a dose** (or **Not a dose** to undo it).
+
+Its card, on the PC and on Discord, reads **Took it**, **Not now** (back once, ten minutes later), and **Skip**. Took it keeps the time for that day and moves the reminder to its next time, the same as Done, and it shows as finished in History. Each day counts once: if it was already marked, from any card, the To do row, `/took`, or typing "I took my vitamin D", you get "Already marked taken at 8:12 AM" and nothing is kept twice.
+
+Ask "did I take my meds?", "did I take vitamin D today?", or "when did I last take my allergy pill?" and the answer comes from what was marked, straight away and without Claude: "Yes, at 8:12 AM today." or "Not marked today. Last marked yesterday at 8:05 AM." With more than one dose, each gets its own line. It only says what was marked, never whether to take one.
+
+There's nothing to keep up. A day that goes by unanswered is simply gone, with nothing counted and nothing coming back about it. Only the taken times are kept, for 30 days.
 
 ### Waiting on someone
 
@@ -307,6 +318,7 @@ These answer without waiting on Claude. `/help` lists them.
 | `/lists`, `/waiting` | Your lists, and what you're waiting on |
 | `/add` | Add an item with a title and an optional date, time, and kind. A time with no kind makes a reminder. |
 | `/done`, `/move`, `/start` | Suggest items as you type, and ask which one when the name isn't exact. `/move` can change only the time. `/start` alone starts on the most pressing thing. |
+| `/took` | Marks a dose taken, once for its day. It suggests only doses, and needs no name when there's just one. |
 | `/spent` | Add a purchase |
 | `/check`, `/listadd` | Check off or add to a list (`/listadd` takes several with commas between) |
 | `/new` | Opens a form to add a task, deadline, reminder, event, or exam, with a day, time, end time for events, and class or filter, the same as the **+** form on To do |

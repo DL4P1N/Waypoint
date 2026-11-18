@@ -9,7 +9,7 @@ namespace Waypoint.Core.Data;
 
 public sealed partial class WaypointDatabase
 {
-    private const string ItemColumns = "id, kind, title, due_date, amount_cents, done, due_time, parent_item_id, parent_event_id, recurrence";
+    private const string ItemColumns = "id, kind, title, due_date, amount_cents, done, due_time, parent_item_id, parent_event_id, recurrence, dose";
     // The whole text kept under a shortened title, read after ItemColumns for To do. A note's body is the note itself, so it stays behind.
     private const string ItemBody = "CASE WHEN kind = 'Note' THEN NULL ELSE body END";
     // A date the user set wins over the feed's, which keeps updating underneath it.
@@ -165,6 +165,7 @@ public sealed partial class WaypointDatabase
                 added_at TEXT NOT NULL
             );
             """);
+        CreateDoseTables();
         CreateActivationTables();
         CreateBedtimeTables();
         CreateNoteFolderTables();
@@ -326,7 +327,7 @@ public sealed partial class WaypointDatabase
         using (var command = connection.CreateCommand())
         {
             command.CommandText = $"""
-                SELECT i.id, i.kind, i.title, i.due_date, i.amount_cents, i.done, i.due_time, i.parent_item_id, i.parent_event_id, i.recurrence,
+                SELECT i.id, i.kind, i.title, i.due_date, i.amount_cents, i.done, i.due_time, i.parent_item_id, i.parent_event_id, i.recurrence, i.dose,
                        r.id, r.message, i.repeat_minutes, r.remind_at, r.follow_up
                 FROM reminders r JOIN items i ON i.id = r.item_id
                 WHERE i.done = 0 AND r.remind_at <= $now AND {StepIsLive}
@@ -337,12 +338,12 @@ public sealed partial class WaypointDatabase
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                reminders.Add((reader.GetString(13), new DueReminder(
-                    reader.GetInt64(10),
+                reminders.Add((reader.GetString(14), new DueReminder(
+                    reader.GetInt64(11),
                     ReadItem(reader),
-                    reader.IsDBNull(11) ? null : reader.GetString(11),
-                    reader.IsDBNull(12) ? null : reader.GetInt32(12),
-                    reader.GetInt64(14) != 0)));
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    reader.IsDBNull(13) ? null : reader.GetInt32(13),
+                    reader.GetInt64(15) != 0)));
             }
         }
 
@@ -474,7 +475,12 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void SettleSentReminder(DueReminder reminder, DateTime now)
     {
-        if (reminder.RepeatMinutes is { } minutes)
+        // A dose stays on its day until Took it or Skip answers it, or the day is over (see MoveOnPastDoses).
+        if (reminder.Item is { Dose: true, Recurs: not null })
+        {
+            DismissReminder(reminder);
+        }
+        else if (reminder.RepeatMinutes is { } minutes)
         {
             SnoozeReminder(reminder, now.AddMinutes(minutes));
         }
@@ -491,11 +497,13 @@ public sealed partial class WaypointDatabase
 
     /// <summary>Remembers which item a Discord message was about, so it can be finished from there.</summary>
     /// <param name="sentAt">When it went out, so a card with Start that gets no answer can be held for after this.</param>
-    public void TrackSentReminder(string messageId, long itemId, ItemSource source = ItemSource.Capture, bool startOnly = false, DateTime? sentAt = null)
+    /// <param name="dueOn">For a dose, the day the card was for, so Took it on it counts for that day even after the reminder moves on.</param>
+    public void TrackSentReminder(string messageId, long itemId, ItemSource source = ItemSource.Capture, bool startOnly = false, DateTime? sentAt = null, DateOnly? dueOn = null)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT OR IGNORE INTO sent_reminders (message_id, item_id, source, start_only, sent_at) VALUES ($message, $item, $source, $startOnly, $sentAt)";
+        command.CommandText = "INSERT OR IGNORE INTO sent_reminders (message_id, item_id, source, start_only, sent_at, due_on) VALUES ($message, $item, $source, $startOnly, $sentAt, $dueOn)";
+        command.Parameters.AddWithValue("$dueOn", dueOn is { } day ? day.ToString("O", CultureInfo.InvariantCulture) : DBNull.Value);
         command.Parameters.AddWithValue("$sentAt", sentAt is { } at ? FormatReminder(at) : DBNull.Value);
         command.Parameters.AddWithValue("$source", source.ToString());
         command.Parameters.AddWithValue("$startOnly", startOnly ? 1 : 0);
@@ -510,19 +518,21 @@ public sealed partial class WaypointDatabase
         using var connection = Open();
         string? messageId = null;
         long itemId = 0;
+        DateOnly? dueOn = null;
 
         using (var find = connection.CreateCommand())
         {
             // Without a message, this means the most recent reminder.
             find.CommandText = action.MessageId is null
-                ? "SELECT message_id, item_id FROM sent_reminders WHERE handled = 0 AND start_only = 0 ORDER BY rowid DESC LIMIT 1"
-                : "SELECT message_id, item_id FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
+                ? "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 ORDER BY rowid DESC LIMIT 1"
+                : "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
             find.Parameters.AddWithValue("$message", (object?)action.MessageId ?? DBNull.Value);
             using var reader = find.ExecuteReader();
             if (reader.Read())
             {
                 messageId = reader.GetString(0);
                 itemId = reader.GetInt64(1);
+                dueOn = reader.IsDBNull(2) ? null : DateOnly.Parse(reader.GetString(2), CultureInfo.InvariantCulture);
             }
         }
 
@@ -534,6 +544,12 @@ public sealed partial class WaypointDatabase
         if (FindItem(connection, ItemSource.Capture, itemId) is not { Done: false } item)
         {
             return null;
+        }
+
+        // A dose card's Took it and Not now work on the day it was for, whatever happened elsewhere since.
+        if (item is { Dose: true, Recurs: not null, DueDate: { } current })
+        {
+            return AnswerDose(connection, item, dueOn ?? current, action.Kind == AlertActionKind.Done ? DoseAnswer.Took : DoseAnswer.NotNow, now, null);
         }
 
         if (action.Kind == AlertActionKind.Done)
@@ -776,8 +792,8 @@ public sealed partial class WaypointDatabase
             while (reader.Read())
             {
                 var item = ReadItem(reader);
-                finished.Add((reader.GetString(10), item.Kind == ItemKind.Expense && !reader.IsDBNull(11) && reader.GetString(11).StartsWith(SpendingRow.ImportedPrefix, StringComparison.Ordinal)
-                    ? item with { Account = reader.GetString(11)[SpendingRow.ImportedPrefix.Length..] }
+                finished.Add((reader.GetString(11), item.Kind == ItemKind.Expense && !reader.IsDBNull(12) && reader.GetString(12).StartsWith(SpendingRow.ImportedPrefix, StringComparison.Ordinal)
+                    ? item with { Account = reader.GetString(12)[SpendingRow.ImportedPrefix.Length..] }
                     : item));
             }
         }
@@ -855,7 +871,11 @@ public sealed partial class WaypointDatabase
         using var connection = Open();
         if (done)
         {
-            Finish(connection, item, DateTime.Now);
+            // A dose is marked taken instead, and only once for its day.
+            if (TakeDose(connection, item, null, DateTime.Now) is null)
+            {
+                Finish(connection, item, DateTime.Now);
+            }
         }
         else
         {
@@ -929,7 +949,8 @@ public sealed partial class WaypointDatabase
     /// Closes an item, or sends a recurring one on to its next date. Past means it moved on without
     /// anyone saying it was done.
     /// </summary>
-    private static void Finish(SqliteConnection connection, StoredItem item, DateTime now, HistoryAction action = HistoryAction.Done)
+    /// <param name="keepToday">Moves an earlier day's on to today's, if today has one, even once today's time has passed.</param>
+    private static void Finish(SqliteConnection connection, StoredItem item, DateTime now, HistoryAction action = HistoryAction.Done, bool keepToday = false)
     {
         ForgetAfterThis(connection, item.Source, item.Id);
         if (item.Recurs is not { } recurs)
@@ -946,7 +967,7 @@ public sealed partial class WaypointDatabase
         var isOverdue = item.DueDate < today;
         var todayIsAhead = isOverdue && now < ReminderPlan.DueMoment(today, time);
         var usual = ReadUsualDate(connection, item.Id);
-        var next = recurs.Next(usual ?? item.DueDate ?? today, todayIsAhead ? today.AddDays(-1) : today);
+        var next = recurs.Next(usual ?? item.DueDate ?? today, todayIsAhead || (keepToday && isOverdue) ? today.AddDays(-1) : today);
 
         CloseSteps(connection, item.Id, null, now);
         LogHistory(connection, action, item, now, next, ReadReminders(connection, item.Id), usualDate: usual);
@@ -1006,6 +1027,11 @@ public sealed partial class WaypointDatabase
         switch (change.Action)
         {
             case ChangeAction.Done:
+                if (TakeDose(connection, item, null, now) is { } dose)
+                {
+                    return new AppliedChange(change, item.Title, dose.Recorded, dose.Text);
+                }
+
                 Finish(connection, item, now);
                 return new AppliedChange(change, item.Title);
             case ChangeAction.Cancel:
@@ -1085,12 +1111,15 @@ public sealed partial class WaypointDatabase
     {
         using var insert = connection.CreateCommand();
         insert.CommandText = """
-            INSERT INTO items (capture_id, kind, title, due_date, amount_cents, due_time, repeat_minutes, parent_item_id, parent_event_id, recurrence, category, one_off, about, end_time, course)
-            VALUES ($captureId, $kind, $title, $dueDate, $amountCents, $dueTime, $repeatMinutes, $parentItem, $parentEvent, $recurrence, $category, $oneOff, $about, $endTime, $course)
+            INSERT INTO items (capture_id, kind, title, due_date, amount_cents, due_time, repeat_minutes, parent_item_id, parent_event_id, recurrence, category, one_off, about, end_time, course, dose)
+            VALUES ($captureId, $kind, $title, $dueDate, $amountCents, $dueTime, $repeatMinutes, $parentItem, $parentEvent, $recurrence, $category, $oneOff, $about, $endTime, $course, $dose)
             RETURNING id
             """;
         insert.Parameters.AddWithValue("$dueTime", (object?)item.DueTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? DBNull.Value);
-        insert.Parameters.AddWithValue("$repeatMinutes", (object?)ReminderPlan.RepeatMinutes(item) ?? DBNull.Value);
+        // Only a repeating reminder can be a dose, and a dose comes back once after Not now rather than over and over.
+        var dose = item.Dose && item.Recurs is not null;
+        insert.Parameters.AddWithValue("$dose", dose ? 1 : 0);
+        insert.Parameters.AddWithValue("$repeatMinutes", (object?)(dose ? null : ReminderPlan.RepeatMinutes(item)) ?? DBNull.Value);
         insert.Parameters.AddWithValue("$captureId", captureId);
         insert.Parameters.AddWithValue("$kind", item.Kind.ToString());
         insert.Parameters.AddWithValue("$title", item.Title);
@@ -1108,7 +1137,7 @@ public sealed partial class WaypointDatabase
             : DBNull.Value);
         var itemId = (long)insert.ExecuteScalar()!;
 
-        foreach (var reminder in ReminderPlan.Build(item, DateTime.Now))
+        foreach (var reminder in ReminderPlan.Build(dose ? item with { RepeatMinutes = null } : item, DateTime.Now))
         {
             AddReminder(connection, itemId, reminder);
         }
@@ -1441,14 +1470,15 @@ public sealed partial class WaypointDatabase
             ParentRef: reader.IsDBNull(7)
                 ? reader.IsDBNull(8) ? null : ItemRef.Format(ItemSource.Calendar, reader.GetInt64(8))
                 : ItemRef.Format(ItemSource.Capture, reader.GetInt64(7)),
-            Recurs: reader.IsDBNull(9) ? null : Recurrence.Parse(reader.GetString(9)));
+            Recurs: reader.IsDBNull(9) ? null : Recurrence.Parse(reader.GetString(9)),
+            Dose: reader.GetInt64(10) != 0);
     }
 
     /// <summary>An item read with <see cref="ItemBody"/> after its columns. A blank body is the same as none.</summary>
     private static StoredItem ReadItemWithBody(SqliteDataReader reader)
     {
         var item = ReadItem(reader);
-        return reader.IsDBNull(10) || string.IsNullOrWhiteSpace(reader.GetString(10)) ? item : item with { Body = reader.GetString(10) };
+        return reader.IsDBNull(11) || string.IsNullOrWhiteSpace(reader.GetString(11)) ? item : item with { Body = reader.GetString(11) };
     }
 
     private static string FormatReminder(DateTime time) => time.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);

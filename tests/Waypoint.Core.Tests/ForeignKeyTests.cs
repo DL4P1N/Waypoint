@@ -39,6 +39,7 @@ public sealed class ForeignKeyTests : IDisposable
         { "transcription_jobs", "items", "INSERT INTO transcription_jobs (note_id, original_path, status, created_at, updated_at) VALUES ($parent, 'made-up.wav', 'Queued', '2030-01-01T09:00:00', '2030-01-01T09:00:00')" },
         { "recording_marks", "recordings", "INSERT INTO recording_marks (recording_id, offset_ms, created_at) VALUES ($parent, 0, '2030-01-01T09:00:00')" },
         { "waiting_on", "items", "INSERT INTO waiting_on (item_id, who, since, follow_up_on) VALUES ($parent, 'Someone', '2030-01-01', '2030-01-03')" },
+        { "dose_taken", "items", "INSERT INTO dose_taken (item_id, due_on, taken_at) VALUES ($parent, '2030-01-01', '2030-01-01T08:12:00')" },
     };
 
     [Fact]

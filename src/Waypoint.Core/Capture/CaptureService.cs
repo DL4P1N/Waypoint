@@ -102,7 +102,7 @@ public sealed class CaptureService(
                     continue;
                 }
 
-                if (TryApplyPayWord(capture) || TryApplySessionWord(capture) || TryApplyRoutineWord(capture) || TryApplyWaitingWord(capture) || TryApplyEnergyWord(capture))
+                if (TryApplyPayWord(capture) || TryApplySessionWord(capture) || TryApplyRoutineWord(capture) || TryApplyWaitingWord(capture) || TryApplyEnergyWord(capture) || TryApplyDoseQuestion(capture))
                 {
                     continue;
                 }
@@ -324,6 +324,21 @@ public sealed class CaptureService(
 
         var started = database.StartActivation(ItemRef.Format(pick.Item), null, null, Activation.EnergyMethod, now);
         Reply(capture, new OpReply($"{EnergyPicks.Heading(level)}: {pick.Item.Title}. {pick.Reason} {started.Text}", true));
+        return true;
+    }
+
+    /// <summary>
+    /// "Did I take my meds?" is answered from the taken times kept, with no sorter, so it only ever says what was
+    /// marked. A question that names nothing marked as a dose goes on to the sorter.
+    /// </summary>
+    private bool TryApplyDoseQuestion(PendingCapture capture)
+    {
+        if (Doses.ParseQuestion(capture.Text) is null || Doses.Reply(capture.Text, database.GetDoses(), Now) is not { } answer)
+        {
+            return false;
+        }
+
+        Reply(capture, new OpReply(answer, true));
         return true;
     }
 

@@ -239,6 +239,8 @@ public sealed partial class WaypointWorker
                 }
 
                 return new CommandReply(Finish(finish), true);
+            case "took":
+                return TookFromPhone(Option("item"), today);
             case "move":
                 if (FindOpenItem(Option("item"), out var moveMatches) is not { } moving)
                 {
@@ -407,6 +409,43 @@ public sealed partial class WaypointWorker
         return null;
     }
 
+    /// <summary>
+    /// /took: marks a dose taken, once for its day. With nothing typed it's the only dose there is, and otherwise it
+    /// asks which one, the same as /done.
+    /// </summary>
+    private CommandReply TookFromPhone(string? named, DateOnly today)
+    {
+        var doses = PhoneItems().Where(item => item is { Dose: true, Recurs: not null }).ToList();
+        if (doses.Count == 0)
+        {
+            return new CommandReply(DiscordText.Notice("Nothing is marked as a dose yet", "Right-click a repeating reminder on To do and choose Mark as a dose, or type something like \"take vitamin D at 9 every morning\".", CardTone.Attention), true);
+        }
+
+        StoredItem? dose;
+        if (named is null)
+        {
+            dose = doses.Count == 1 ? doses[0] : null;
+            if (dose is null)
+            {
+                return NotExact(doses, FinishPick, "Took", today);
+            }
+        }
+        else if (FindOpenItem(named, out var matches) is { } found)
+        {
+            dose = found is { Dose: true, Recurs: not null } ? found : null;
+            if (dose is null)
+            {
+                return new CommandReply(DiscordText.Notice("That didn't work", $"{found.Title} isn't a dose.", CardTone.Attention), true);
+            }
+        }
+        else
+        {
+            return NotExact(matches.Where(item => item is { Dose: true, Recurs: not null }).ToList(), FinishPick, "Took", today);
+        }
+
+        return new CommandReply(Finish(dose), true);
+    }
+
     /// <summary>Nothing matched exactly, so it asks: one button per thing it could be, or says nothing matched.</summary>
     private static CommandReply NotExact(List<StoredItem> matches, string pick, string verb, DateOnly today)
     {
@@ -447,6 +486,7 @@ public sealed partial class WaypointWorker
         {
             case "item":
                 return PhoneItems()
+                    .Where(item => command.Name != "took" || item is { Dose: true, Recurs: not null })
                     .Where(item => Matches(item.Title))
                     .Take(MaxSuggestions)
                     .Select(item => new MenuChoice($"{item.Title} · {DiscordViews.DayLabel(item.DueDate, today)}", ItemRef.Format(item)))

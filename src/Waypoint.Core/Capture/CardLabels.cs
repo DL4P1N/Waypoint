@@ -11,6 +11,9 @@ public static class CardLabels
 {
     public const string NotNow = "Not now";
 
+    /// <summary>The main action on a dose's card. It keeps the time, once for that day.</summary>
+    public const string TookIt = "Took it";
+
     /// <summary>The one follow-up on a reminder that can be started. It matches <see cref="TransitionAssist.FollowUpMinutes"/>.</summary>
     public const string MoreTime = "10 more minutes";
 

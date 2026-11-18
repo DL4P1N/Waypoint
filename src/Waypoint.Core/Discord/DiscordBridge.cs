@@ -1150,6 +1150,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             },
         },
         new { name = "done", description = "Finish something on the list", type = 1, options = new[] { Option("item", "Start typing to pick it", required: true, suggest: true) } },
+        new { name = "took", description = "Mark a dose taken", type = 1, options = new[] { Option("item", "Leave empty when there's only one", suggest: true) } },
         new
         {
             name = "move",
@@ -1688,7 +1689,18 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private static object[] ButtonRowFor(DiscordCard card)
     {
         var buttons = new List<(ButtonRole Role, string Label, string Id)>();
-        if (card.Transition)
+        if (card.Dose)
+        {
+            // Took it keeps the time for that day. Not now brings it back once, and Skip lets the day go.
+            buttons.Add((ButtonRole.Main, CardLabels.TookIt, DoneButton));
+            if (card.MoreTime)
+            {
+                buttons.Add((ButtonRole.NotNow, CardLabels.NotNow, SnoozeButton));
+            }
+
+            buttons.Add((ButtonRole.Skip, CardLabels.Skip, NotNowReminderButton));
+        }
+        else if (card.Transition)
         {
             // Start is the way in. 10 more minutes brings it back once, and Skip ends it.
             buttons.Add((ButtonRole.Main, "Start", StartButton));

@@ -277,6 +277,13 @@ public sealed partial class WaypointWorker
     /// <summary>Finishes an item, with Undo on the reply in case it was the wrong one.</summary>
     private DiscordCard Finish(StoredItem item)
     {
+        // A dose is marked taken once for its day. A repeating item has nothing to undo here, so there's no Undo.
+        if (item is { Dose: true, Recurs: not null })
+        {
+            _viewsDirty = true;
+            return DiscordText.Notice(_database.TakeDose(item, _clock()).Text, "", CardTone.Finished);
+        }
+
         _database.SetDone(item, true);
         _viewsDirty = true;
         return DiscordText.Notice($"Finished {item.Title}", "", CardTone.Finished) with

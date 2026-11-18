@@ -19,6 +19,12 @@ public sealed record ReminderTransition(bool ShowPrimary, Action Clear, Action N
 /// </summary>
 public sealed record ReminderWaiting(Action FollowUp, Action StillWaiting);
 
+/// <summary>
+/// A dose's card: Took it is the main button and Not now comes back once, so the card that comes back has no Not now.
+/// Skip lets that day go.
+/// </summary>
+public sealed record ReminderDose(bool OffersNotNow, Action Skip);
+
 /// <summary>Corner card that stays up until answered and doesn't take focus from what's running.</summary>
 public partial class ReminderWindow : Window
 {
@@ -31,6 +37,7 @@ public partial class ReminderWindow : Window
     private readonly Action? _start;
     private readonly ReminderTransition? _transition;
     private readonly ReminderWaiting? _waiting;
+    private readonly ReminderDose? _dose;
 
     /// <summary>How many cards up from the corner this one sits, so they don't cover each other.</summary>
     public int Slot { get; init; }
@@ -50,7 +57,7 @@ public partial class ReminderWindow : Window
         init => FeedbackLine.Noted = value;
     }
 
-    public ReminderWindow(DueReminder reminder, string primaryLabel, int snoozeMinutes, Action primary, Action snooze, Action? skip = null, Action? start = null, ReminderTransition? transition = null, ReminderWaiting? waiting = null)
+    public ReminderWindow(DueReminder reminder, string primaryLabel, int snoozeMinutes, Action primary, Action snooze, Action? skip = null, Action? start = null, ReminderTransition? transition = null, ReminderWaiting? waiting = null, ReminderDose? dose = null)
     {
         _primary = primary;
         _snooze = snooze;
@@ -58,6 +65,7 @@ public partial class ReminderWindow : Window
         _start = waiting is null ? start : null;
         _transition = waiting is null ? transition : null;
         _waiting = waiting;
+        _dose = dose;
         transition = _transition;
         start = _start;
         InitializeComponent();
@@ -90,6 +98,16 @@ public partial class ReminderWindow : Window
             FollowUp.Visibility = Visibility.Visible;
             StillWaiting.Visibility = Visibility.Visible;
             Snooze.Visibility = Visibility.Collapsed;
+        }
+
+        // Took it, then Not now (back once, in ten minutes), then Skip, the same as the Discord card.
+        if (dose is not null)
+        {
+            Snooze.Content = CardLabels.NotNow;
+            Snooze.ToolTip = $"Back once, in {MinutesText(TransitionAssist.FollowUpMinutes)}";
+            Snooze.Visibility = dose.OffersNotNow ? Visibility.Visible : Visibility.Collapsed;
+            SkipOne.ToolTip = "Nothing more for this time. It comes back next time.";
+            SkipOne.Visibility = Visibility.Visible;
         }
 
         Details.Text = DetailLine(reminder, DateOnly.FromDateTime(DateTime.Now));
@@ -156,6 +174,7 @@ public partial class ReminderWindow : Window
 
     private void OnSkipOneClicked(object sender, RoutedEventArgs e)
     {
+        _dose?.Skip();
         _transition?.NotNow();
         Close();
     }

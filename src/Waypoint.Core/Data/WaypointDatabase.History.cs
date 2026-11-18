@@ -194,6 +194,9 @@ public sealed partial class WaypointDatabase
         if (entry?.NextDueDate is not null)
         {
             RestoreOccurrence(connection, item, entry);
+
+            // Undoing a dose's Took it takes back the time it kept, so the record stays right.
+            ForgetDoseTaken(connection, item, entry.DueDate);
         }
         else
         {

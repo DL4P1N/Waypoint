@@ -157,6 +157,11 @@ public static partial class ItemGroups
     public static string ChangeSummary(AppliedChange applied)
     {
         var change = applied.Change;
+        if (applied.Note is { } note)
+        {
+            return note;
+        }
+
         if (!applied.Applied)
         {
             return change.Source == ItemSource.Calendar

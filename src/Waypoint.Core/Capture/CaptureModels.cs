@@ -31,7 +31,8 @@ public sealed record SortedItem(
     bool OneOff = false,
     string? About = null,
     TimeOnly? EndTime = null,
-    string? Course = null);
+    string? Course = null,
+    bool Dose = false);
 
 /// <summary>One small step of a bigger item. At is when to be reminded, if at all.</summary>
 public sealed record PlannedStep(string Title, DateTime? At);
@@ -56,7 +57,7 @@ public enum ItemSource
 
 /// <summary>
 /// An item saved in the database. Body is the whole text of a long capture whose title was shortened, read for the
-/// To do list only, and null everywhere else.
+/// To do list only, and null everywhere else. Dose marks a repeating reminder for taking medicine, answered with Took it.
 /// </summary>
 public sealed record StoredItem(
     long Id,
@@ -71,7 +72,8 @@ public sealed record StoredItem(
     string? ParentRef = null,
     Recurrence? Recurs = null,
     string? Account = null,
-    string? Body = null);
+    string? Body = null,
+    bool Dose = false);
 
 /// <summary>Raw text that has been saved but not sorted yet.</summary>
 public sealed record PendingCapture(long Id, string Text, DateTimeOffset CreatedAt, CaptureOrigin Origin = CaptureOrigin.App, string? FileName = null);
@@ -104,8 +106,11 @@ public sealed record ItemChange(
     TimeOnly? DueTime = null,
     IReadOnlyList<PlannedStep>? Steps = null);
 
-/// <summary>A change after it was tried. Applied is false if the item can't be changed that way.</summary>
-public sealed record AppliedChange(ItemChange Change, string Title, bool Applied = true);
+/// <summary>
+/// A change after it was tried. Applied is false if the item can't be changed that way. Note is said in place of the
+/// usual summary, such as when a dose was already marked taken.
+/// </summary>
+public sealed record AppliedChange(ItemChange Change, string Title, bool Applied = true, string? Note = null);
 
 /// <summary>What the sorter made of a capture: new items, changes to existing ones, and any answer.</summary>
 public sealed record CaptureResult(

@@ -57,6 +57,9 @@ public sealed record DiscordCard(string Title, string? Description, IReadOnlyLis
 
     public string? FeedbackRef { get; init; }
 
+    /// <summary>A dose's card: Took it, then Not now (when <see cref="MoreTime"/> allows it), then Skip.</summary>
+    public bool Dose { get; init; }
+
     /// <summary>More rows of buttons under the first, such as Back and Next on a long view. Discord allows five rows in all, a menu counting as one.</summary>
     public IReadOnlyList<IReadOnlyList<CardAction>> MoreRows { get; init; } = [];
 
@@ -167,10 +170,13 @@ public static partial class DiscordText
             fields.Add(new CardField("When", Escape(when), true));
         }
 
-        return new DiscordCard(Fit(Escape(reminder.Message ?? item.Title), MaxTitle), null, fields, item.Kind == ItemKind.Exam ? CardTone.Attention : CardTone.Reminder, canFinish, canStart)
+        // A dose's Not now comes back once, so the card that comes back has only Took it and Skip.
+        var dose = item is { Dose: true, Recurs: not null };
+        return new DiscordCard(Fit(Escape(reminder.Message ?? item.Title), MaxTitle), null, fields, item.Kind == ItemKind.Exam ? CardTone.Attention : CardTone.Reminder, canFinish || dose, canStart && !dose)
         {
-            Transition = canStart && TransitionAssist.Applies(reminder),
-            MoreTime = canStart && TransitionAssist.OffersMoreTime(reminder),
+            Transition = !dose && canStart && TransitionAssist.Applies(reminder),
+            MoreTime = dose ? !reminder.IsFollowUp : canStart && TransitionAssist.OffersMoreTime(reminder),
+            Dose = dose,
         };
     }
 

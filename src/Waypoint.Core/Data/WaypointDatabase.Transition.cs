@@ -42,9 +42,10 @@ public sealed partial class WaypointDatabase
         using var connection = Open();
         long itemId;
         ItemSource source;
+        DateOnly? dueOn;
         using (var find = connection.CreateCommand())
         {
-            find.CommandText = "SELECT item_id, source FROM sent_reminders WHERE handled = 0 AND message_id = $message";
+            find.CommandText = "SELECT item_id, source, due_on FROM sent_reminders WHERE handled = 0 AND message_id = $message";
             find.Parameters.AddWithValue("$message", messageId);
             using var reader = find.ExecuteReader();
             if (!reader.Read())
@@ -54,6 +55,7 @@ public sealed partial class WaypointDatabase
 
             itemId = reader.GetInt64(0);
             source = Enum.Parse<ItemSource>(reader.GetString(1));
+            dueOn = reader.IsDBNull(2) ? null : DateOnly.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture);
         }
 
         if (!ClaimSentReminder(connection, messageId))
@@ -64,6 +66,12 @@ public sealed partial class WaypointDatabase
         if (FindItem(connection, source, itemId) is not { Done: false } item)
         {
             return null;
+        }
+
+        // On a dose's card, Skip lets that day go. It isn't counted as declining, since nothing about doses is.
+        if (item is { Dose: true, Recurs: not null, DueDate: { } current })
+        {
+            return AnswerDose(connection, item, dueOn ?? current, kind == AlertActionKind.NotNowReminder ? DoseAnswer.Skip : DoseAnswer.NotNow, now, null);
         }
 
         if (kind == AlertActionKind.NotNowReminder)

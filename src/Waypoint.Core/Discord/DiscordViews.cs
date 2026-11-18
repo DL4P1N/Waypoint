@@ -71,6 +71,7 @@ public static partial class DiscordViews
             "/now: what to do next",
             "/todo: this week, with a menu to mark one done",
             "/add, /done, /move, /start: change what's on the list",
+            "/took: mark a dose taken",
             "/today: classes, what's due, and safe to spend",
             "/budget, /spent, /afford: money",
             "/lists, /check, /listadd: lists",

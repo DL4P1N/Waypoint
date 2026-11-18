@@ -60,6 +60,9 @@ public sealed record DoneRequest(StoredItem Item, bool Done);
 
 public sealed record ItemRequest(StoredItem Item);
 
+/// <summary>Marks a repeating reminder as a dose, or not.</summary>
+public sealed record DoseRequest(StoredItem Item, bool Dose);
+
 public sealed record RescheduleRequest(StoredItem Item, DateOnly Date, TimeOnly? Time);
 
 public sealed record AssignRequest(StoredItem Item, long? FilterId);

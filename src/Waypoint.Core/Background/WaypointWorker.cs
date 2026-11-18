@@ -255,6 +255,7 @@ public sealed partial class WaypointWorker
         }
 
         Guarded(CheckClassAlert);
+        Guarded(() => _database.MoveOnPastDoses(_clock()));
         Guarded(CheckReminders);
         Guarded(CheckBedtime);
         Guarded(CheckLateNight);
@@ -677,7 +678,9 @@ public sealed partial class WaypointWorker
     private async Task SendReminderAsync(DiscordBridge discord, DueReminder reminder)
     {
         // Only things that can be finished get the prompt. A nudge about an assignment or an exam alert doesn't finish it.
-        var canFinish = reminder.Item.Recurs is null && (reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task);
+        // A dose is answered with Took it, so its card has buttons even though it repeats.
+        var dose = reminder.Item is { Dose: true, Recurs: not null };
+        var canFinish = dose || (reminder.Item.Recurs is null && (reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task));
         var canStart = Activation.CanStart(reminder.Item);
         var waiting = _database.WaitingFor(reminder);
         var card = waiting is not null
@@ -706,7 +709,7 @@ public sealed partial class WaypointWorker
             // A waiting nudge's buttons carry its item, so there's nothing to look up later.
             if (waiting is null && (canFinish || canStart) && messageId is not null)
             {
-                _database.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock());
+                _database.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock(), dueOn: dose ? reminder.Item.DueDate : null);
             }
 
             _database.SettleSentReminder(reminder, _clock());

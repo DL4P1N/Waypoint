@@ -26,7 +26,7 @@ public sealed class RowMenuTests
 
     private static string Label(RowAction action, StoredItem item) => action switch
     {
-        RowAction.Done => "Mark done",
+        RowAction.Done => item.Dose ? "Took it" : "Mark done",
         RowAction.Reopen => "Reopen",
         RowAction.Start => "Start now",
         RowAction.SmallerStep => "Start with a tiny step",
@@ -37,6 +37,7 @@ public sealed class RowMenuTests
         RowAction.BreakDown => "Break down",
         RowAction.File => "Move to filter",
         RowAction.StopReminders => "Stop reminders",
+        RowAction.Dose => item.Dose ? "Not a dose" : "Mark as a dose",
         RowAction.Cancel => "Delete",
         RowAction.Delete => "Delete",
         _ => "Copy title",
@@ -206,6 +207,31 @@ public sealed class RowMenuTests
         var moved = ui.Database.GetOpenItems().Single(item => item.Title == "laundry");
         Assert.Equal(Today.AddDays(7), moved.DueDate);
         Assert.NotNull(moved.Recurs);
+    });
+
+    [Fact]
+    public void A_dose_row_says_Took_it_and_a_second_one_says_it_was_already_marked() => Ui.Run(ui =>
+    {
+        Store(ui.Database, new SortedItem(ItemKind.Reminder, "Vitamin D", Today, null, new TimeOnly(9, 0), Recurs: new Recurrence(RecurrenceUnit.Day)));
+        var replies = new List<string>();
+        var view = new TodayView();
+        view.Connect(ui.Database, () => { }, _ => { }, replies.Add, () => { });
+        ui.Host(view);
+        view.Refresh(null);
+        ui.Pump();
+
+        ui.Choose(ui.RightClick(RowFor(ui, view, "Vitamin D"))!, "Mark as a dose");
+        ui.Pump();
+        var dose = ui.Database.GetOpenItems().Single(item => item.Title == "Vitamin D");
+        Assert.True(dose.Dose);
+        var menu = ui.RightClick(RowFor(ui, view, "Vitamin D"))!;
+        Assert.Equal(Expected(ui.Database, dose), UiTest.Labels(menu));
+
+        ui.Choose(menu, "Took it");
+
+        Assert.Equal(Today.AddDays(1), ui.Database.GetOpenItems().Single(item => item.Title == "Vitamin D").DueDate);
+        Assert.Single(Assert.Single(ui.Database.GetDoses()).Taken);
+        Assert.StartsWith("Vitamin D: marked taken at", replies.Last());
     });
 
     [Fact]

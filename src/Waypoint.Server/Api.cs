@@ -172,6 +172,8 @@ public static class Api
             server.Database.SetDone(request.Item, request.Done);
             return Results.NoContent();
         });
+        api.MapPost("/items/took", (ItemRequest request, WaypointServer server) => server.Database.TakeDose(request.Item, DateTime.Now));
+        api.MapPost("/items/dose", (DoseRequest request, WaypointServer server) => new FlagValue(server.Database.SetDose(request.Item, request.Dose)));
         api.MapPost("/items/moved", (ItemRequest request, WaypointServer server) => new FlagValue(server.Database.IsMovedFromFeed(request.Item)));
         api.MapPost("/items/delete", (ItemRequest request, WaypointServer server) => server.Database.DeleteItem(request.Item, DateTime.Now));
         api.MapPost("/items/undelete", (DeletedItem deleted, WaypointServer server) =>

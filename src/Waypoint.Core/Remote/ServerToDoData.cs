@@ -59,6 +59,10 @@ public sealed class ServerToDoData(ServerClient server) : IToDoData
 
     public void SetDone(StoredItem item, bool done) => server.Send(Post, "api/items/done", new DoneRequest(item, done));
 
+    public DoseReply TakeDose(StoredItem item, DateTime now) => server.Send<DoseReply>(Post, "api/items/took", new ItemRequest(item));
+
+    public bool SetDose(StoredItem item, bool dose) => server.Send<FlagValue>(Post, "api/items/dose", new DoseRequest(item, dose)).Value;
+
     public bool IsMovedFromFeed(StoredItem item) => server.Send<FlagValue>(Post, "api/items/moved", new ItemRequest(item)).Value;
 
     public DeletedItem? DeleteItem(StoredItem item, DateTime now) => server.Send<DeletedItem?>(Post, "api/items/delete", new ItemRequest(item));

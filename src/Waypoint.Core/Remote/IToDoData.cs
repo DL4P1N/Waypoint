@@ -56,6 +56,12 @@ public interface IToDoData : IPreferences
 
     void SetDone(StoredItem item, bool done);
 
+    /// <summary>Took it on a dose's row: kept once for its day, or says when it was already marked.</summary>
+    DoseReply TakeDose(StoredItem item, DateTime now);
+
+    /// <summary>Marks a repeating reminder as a dose, or not. False when it isn't a repeating reminder.</summary>
+    bool SetDose(StoredItem item, bool dose);
+
     bool IsMovedFromFeed(StoredItem item);
 
     DeletedItem? DeleteItem(StoredItem item, DateTime now);
@@ -126,6 +132,10 @@ public sealed class LocalToDoData(WaypointDatabase database) : IToDoData
     public OpReply StartSmaller(StoredItem item, string method, DateTime now) => database.StartSmaller(item, method, now);
 
     public void SetDone(StoredItem item, bool done) => database.SetDone(item, done);
+
+    public DoseReply TakeDose(StoredItem item, DateTime now) => database.TakeDose(item, now);
+
+    public bool SetDose(StoredItem item, bool dose) => database.SetDose(item, dose);
 
     public bool IsMovedFromFeed(StoredItem item) => database.IsMovedFromFeed(item);
 

@@ -1260,7 +1260,7 @@ public partial class TodayView : UserControl
 
     private RowMenuEntry Entry(RowAction action, StoredItem item, DateOnly today) => action switch
     {
-        RowAction.Done => new("Mark done", () => SetDone(item, true)),
+        RowAction.Done => item.Dose ? new(CardLabels.TookIt, () => TookIt(item)) : new("Mark done", () => SetDone(item, true)),
         RowAction.Reopen => new("Reopen", () => SetDone(item, false)),
         RowAction.Start => new("Start now", () => Start(item)),
         RowAction.SmallerStep => new("Start with a tiny step", () => StartSmaller(item)),
@@ -1277,6 +1277,7 @@ public partial class TodayView : UserControl
         RowAction.BreakDown => new("Break down", () => _submit($"break down {item.Title}")),
         RowAction.File => new("Move to filter", Children: FileChoices(item).ToList()),
         RowAction.StopReminders => new("Stop reminders", () => Change(item, ChangeAction.StopReminders)),
+        RowAction.Dose => new(item.Dose ? "Not a dose" : "Mark as a dose", () => MarkDose(item, !item.Dose)),
         RowAction.Cancel => new("Delete", () => Remove(item)),
         RowAction.Delete => new("Delete", () => Delete(item)),
         _ => new("Copy title", () => RowMenu.Copy(item.Title)),
@@ -1341,6 +1342,22 @@ public partial class TodayView : UserControl
     {
         _database.SetDone(item, done);
         Bar.Forget(About(item));
+        Acted();
+    }
+
+    /// <summary>A dose's Took it. It's kept once for its day, so a second one says when it was already marked.</summary>
+    private void TookIt(StoredItem item)
+    {
+        Bar.Forget(About(item));
+        _reply(_database.TakeDose(item, DateTime.Now).Text);
+        Acted();
+    }
+
+    private void MarkDose(StoredItem item, bool dose)
+    {
+        _reply(_database.SetDose(item, dose)
+            ? dose ? $"{item.Title} is now a dose. Its reminder says {CardLabels.TookIt}." : $"{item.Title} is a plain reminder again."
+            : "Only a repeating reminder can be a dose.");
         Acted();
     }
 

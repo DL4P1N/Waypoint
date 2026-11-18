@@ -28,6 +28,9 @@ public enum RowAction
 
     /// <summary>Practice questions from the class folder's notes. Only offered for an exam.</summary>
     Study,
+
+    /// <summary>Marks a repeating reminder as a dose, answered with Took it, or back to a plain reminder.</summary>
+    Dose,
 }
 
 /// <summary>
@@ -72,6 +75,11 @@ public static class RowActions
         if (!isFeed)
         {
             actions.Add(RowAction.Rename);
+        }
+
+        if (!isFeed && item.Recurs is not null && item.ParentRef is null)
+        {
+            actions.Add(RowAction.Dose);
         }
 
         // Steps go wherever their parent is, so only a top item can be filed.

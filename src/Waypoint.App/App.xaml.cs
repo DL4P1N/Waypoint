@@ -697,6 +697,41 @@ public partial class App : System.Windows.Application
         ReminderWindow? window = null;
         ReminderCardHold? holdLater = null;
 
+        // A dose gets Took it, Not now (once), and Skip, each kept for the day the card is for, whichever card answers first.
+        if (reminder.Item is { Dose: true, Recurs: not null, DueDate: { } dueOn })
+        {
+            string Answer(DoseAnswer answer)
+            {
+                var text = _database.AnswerDose(reminder.Item.Id, dueOn, answer, DateTime.Now, reminder);
+                RefreshStatus();
+                return text;
+            }
+
+            window = new ReminderWindow(
+                reminder,
+                CardLabels.TookIt,
+                TransitionAssist.FollowUpMinutes,
+                () => ShowToast(reminder.Item.Title, Answer(DoseAnswer.Took)),
+                () => Answer(DoseAnswer.NotNow),
+                dose: new ReminderDose(!reminder.IsFollowUp, () => Answer(DoseAnswer.Skip)))
+            {
+                Slot = _openCards % MaxStackedCards,
+                FeedbackKept = () => _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now),
+                FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
+            };
+            _openCards++;
+            var doseRef = ItemRef.Format(reminder.Item);
+            _cardsUp.Add(doseRef);
+            window.Closed += (_, _) =>
+            {
+                _openCards--;
+                _cardsUp.Remove(doseRef);
+                closed();
+            };
+            window.Show();
+            return;
+        }
+
         // A waiting-on nudge gets Follow up, Still waiting, and Done, all answered here without the sorter.
         var waitingOn = _database.WaitingFor(reminder);
         var waiting = waitingOn is null
