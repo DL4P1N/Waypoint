@@ -38,10 +38,11 @@ public partial class ListsView : UserControl
     internal PageWork Work { get; set; } = PageWork.Local;
 
     /// <summary>
-    /// What a box was last clicked to, while that change is on its way, by entry. A second click on the same row before
-    /// the first is saved compares with this, not the row's saved state, so it isn't mistaken for the row filling in.
+    /// What a box was last clicked to, while that change is on its way, by entry, with the row's entry it was clicked
+    /// on. A second click on the same row before the first is saved compares with this, not the row's saved state, so
+    /// it isn't mistaken for the row filling in. A row drawn again since goes by its own state.
     /// </summary>
-    private readonly Dictionary<long, bool> _doneWanted = [];
+    private readonly Dictionary<long, (ListEntry Entry, bool Done)> _doneWanted = [];
 
     /// <summary>Something changed the lists' names, order, or counts, so the column that shows them should catch up.</summary>
     public event Action? ListsChanged;
@@ -323,13 +324,13 @@ public partial class ListsView : UserControl
 
         // Rows fill their boxes from the saved state, and putting a box back isn't a change either. A row clicked
         // again before its last click was saved goes by that click instead.
-        var shown = _doneWanted.TryGetValue(entry.Id, out var wanted) ? wanted : entry.Done;
+        var shown = _doneWanted.TryGetValue(entry.Id, out var wanted) && ReferenceEquals(wanted.Entry, entry) ? wanted.Done : entry.Done;
         if (done == shown)
         {
             return;
         }
 
-        _doneWanted[entry.Id] = done;
+        _doneWanted[entry.Id] = (entry, done);
         bool changed;
         try
         {
@@ -337,7 +338,7 @@ public partial class ListsView : UserControl
         }
         finally
         {
-            if (_doneWanted.TryGetValue(entry.Id, out var last) && last == done)
+            if (_doneWanted.TryGetValue(entry.Id, out var last) && last.Done == done && ReferenceEquals(last.Entry, entry))
             {
                 _doneWanted.Remove(entry.Id);
             }

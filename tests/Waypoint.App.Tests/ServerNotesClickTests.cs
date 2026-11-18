@@ -336,4 +336,37 @@ public sealed class ServerNotesClickTests
         Assert.Equal("radish, kale", server.Body(7));
         ui.Pump();
     });
+
+    [Fact]
+    public void A_click_on_a_list_row_drawn_again_while_the_last_click_is_on_its_way_is_its_own_click() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var client = Client(server);
+        var work = new PageWork(client);
+        var view = new ListsView { Work = work };
+        view.Connect(new ServerListsData(client));
+        ui.Host(view);
+        work.Show(() => view.Open("Shopping", ""));
+        var entries = UiTest.Named<ItemsControl>(view, "Entries");
+        CheckBox Box(string text) => UiTest.Descendants<CheckBox>(entries).Single(box => UiTest.Prop<string>(box.DataContext, "Text") == text);
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
+        Box("oat milk").IsChecked = true;
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 1, "the first change");
+
+        // Unchecked while the server is held. Meanwhile the list is drawn again from what was kept, where it's still
+        // done, and that new row is unchecked too. It goes by what it shows, so that click isn't dropped.
+        server.ReleaseChanges.Reset();
+        server.ChangeArrived.Reset();
+        Box("oat milk").IsChecked = false;
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        work.Show(() => view.Refresh(force: true), () => { });
+        ui.Pump();
+        Assert.True(Box("oat milk").IsChecked);
+        Box("oat milk").IsChecked = false;
+
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3, "the click on the new row");
+        Assert.Equal(["oat milk done", "oat milk open", "oat milk open"], server.Changes);
+        Assert.False(Box("oat milk").IsChecked);
+    });
 }
