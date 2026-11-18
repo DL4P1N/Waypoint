@@ -223,10 +223,18 @@ internal sealed class PageWork
                 return Task.CompletedTask;
             }
 
-            // Read before what awaits this carries on, so the page shows the change straight away.
-            server.ReadAgain(paths);
-            Ended(what, dispatcher, change);
-            done.SetResult(result);
+            try
+            {
+                // Read before what awaits this carries on, so the page shows the change straight away.
+                server.ReadAgain(paths);
+            }
+            finally
+            {
+                // The change went through even if reading the page again didn't, so the page is never left waiting.
+                Ended(what, dispatcher, change);
+                done.SetResult(result);
+            }
+
             return Task.CompletedTask;
         });
         return done.Task;
