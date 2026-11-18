@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Waypoint.Core.Capture;
 
 namespace Waypoint.Core.Notes;
@@ -29,6 +31,13 @@ public static class NoteSaving
     public const int Tries = 3;
 
     /// <summary>
+    /// For each note, the version changed elsewhere that was last kept as its own note, until a save goes through. A
+    /// save turned down after the copy was made, such as by a busy server, is tried again from the text the editor
+    /// loaded, and finds the same version, which is then not kept twice.
+    /// </summary>
+    private static readonly ConditionalWeakTable<INotesData, ConcurrentDictionary<long, string>> Kept = new();
+
+    /// <summary>
     /// Saves the editor's text over the note, as long as the note still has <paramref name="expectedBody"/>, the text
     /// the editor loaded or last saved. If something else changed it in the meantime, such as a reply added from
     /// Discord, another PC, or its .md file, that version is first kept as a note of its own, the same as before,
@@ -43,14 +52,17 @@ public static class NoteSaving
             return notes.SaveNote(id, title, body, now);
         }
 
+        var kept = Kept.GetOrCreateValue(notes);
         for (var attempt = 0; attempt < Tries; attempt++)
         {
             var result = notes.SaveNoteIfUnchanged(id, title, body, expectedBody, now);
             switch (result.Outcome)
             {
                 case NoteSaveOutcome.Saved:
+                    kept.TryRemove(id, out _);
                     return true;
                 case NoteSaveOutcome.Gone:
+                    kept.TryRemove(id, out _);
                     return false;
             }
 
@@ -59,16 +71,21 @@ public static class NoteSaving
                 return false;
             }
 
-            // Already the same text, or what was expected after all: nothing would be lost, so no copy is needed.
-            if (stored.Body != body && stored.Body != expectedBody)
+            // Already the same text, what was expected after all, or kept by a save turned down after making the
+            // copy: nothing would be lost, so no copy is needed.
+            if (stored.Body != body && stored.Body != expectedBody
+                && !(kept.TryGetValue(id, out var already) && already == stored.Body))
             {
                 notes.CreateNote(stored.Title + NoteDraft.ElsewhereSuffix, stored.Body, now, stored.FolderId);
+                kept[id] = stored.Body;
             }
 
             expectedBody = stored.Body;
         }
 
         // Still changing each time it's checked. Every version seen was kept above, so this saves as before.
-        return notes.SaveNote(id, title, body, now);
+        var saved = notes.SaveNote(id, title, body, now);
+        kept.TryRemove(id, out _);
+        return saved;
     }
 }
