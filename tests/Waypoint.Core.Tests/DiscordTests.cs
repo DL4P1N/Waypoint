@@ -518,7 +518,7 @@ public sealed class DiscordTests : IDisposable
         await bridge.HandleEventAsync("MESSAGE_CREATE", Message("6", "200", "owner", "done"));
         var polled = await bridge.ReadAlertActionsAsync();
 
-        Assert.Equal([new AlertAction(null, AlertActionKind.Done)], acted);
+        Assert.Equal([new AlertAction(null, AlertActionKind.Done, "6")], acted);
         Assert.Empty(polled);
     }
 

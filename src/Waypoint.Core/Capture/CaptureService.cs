@@ -56,18 +56,39 @@ public sealed class CaptureService(
     }
 
     /// <summary>
-    /// A dropped file waits in line like anything typed, so it's kept if sorting is unavailable. A file sent from
-    /// Discord is treated the same, and its reply goes back there.
+    /// The same, saved under an ID of its own, such as the Discord message it came from, so the same message handed
+    /// over again saves nothing more. Null when it's empty or was already saved.
     /// </summary>
-    public long? CaptureFile(FileText file, CaptureOrigin origin = CaptureOrigin.App)
+    public long? CaptureOnce(string clientId, string text, DateTimeOffset? createdAt, CaptureOrigin origin)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0 || database.AddCaptureOnce(clientId, trimmed, createdAt, origin) is not { } id)
+        {
+            return null;
+        }
+
+        Changed?.Invoke();
+        return id;
+    }
+
+    /// <summary>
+    /// A dropped file waits in line like anything typed, so it's kept if sorting is unavailable. A file sent from
+    /// Discord is treated the same, and its reply goes back there. With <paramref name="clientId"/>, it's saved once
+    /// however often it's handed over, and the times after give null.
+    /// </summary>
+    public long? CaptureFile(FileText file, CaptureOrigin origin = CaptureOrigin.App, string? clientId = null)
     {
         if (file.Text is not { } text)
         {
             return null;
         }
 
-        var id = database.AddCapture(text, origin: origin, fileName: file.Name);
-        Changed?.Invoke();
+        var id = clientId is null ? database.AddCapture(text, origin: origin, fileName: file.Name) : database.AddCaptureOnce(clientId, text, null, origin, file.Name);
+        if (id is not null)
+        {
+            Changed?.Invoke();
+        }
+
         return id;
     }
 

@@ -465,8 +465,8 @@ public sealed class LifeFeaturesTests : IDisposable
         Assert.Equal(
             [
                 new AlertAction("2", AlertActionKind.Done),
-                new AlertAction(null, AlertActionKind.Done),
-                new AlertAction("3", AlertActionKind.Snooze),
+                new AlertAction(null, AlertActionKind.Done, "6"),
+                new AlertAction("3", AlertActionKind.Snooze, "7"),
             ],
             actions);
         Assert.Equal("8", _database.GetPreference("discord_last_alert"));

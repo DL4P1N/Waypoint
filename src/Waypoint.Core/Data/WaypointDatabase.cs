@@ -180,6 +180,7 @@ public sealed partial class WaypointDatabase
         CreateFeedbackTables();
         CreateDiscordThreadTables();
         CreateNoteJobTables();
+        CreateDiscordInboxTables();
         AddColumnIfMissing("sent_reminders", "source", "TEXT NOT NULL DEFAULT 'Capture'");
         AddColumnIfMissing("sent_reminders", "start_only", "INTEGER NOT NULL DEFAULT 0");
         CreateAfterThisTables();
@@ -568,7 +569,8 @@ public sealed partial class WaypointDatabase
             }
         }
 
-        if (messageId is null || !ClaimSentReminder(connection, messageId))
+        // A typed reply is marked as dealt with in this same write, so one handed over again can't do it twice.
+        if (messageId is null || action.SentAs is { } typed && !FinishDiscordMessage(connection, typed, now) || !ClaimSentReminder(connection, messageId))
         {
             return null;
         }

@@ -400,6 +400,7 @@ public sealed partial class WaypointWorker
         client.Timeout = TimeSpan.FromSeconds(30);
         var bridge = new DiscordBridge(client, _database, settings)
         {
+            Clock = _clock,
             Downloads = _downloads(),
             Captured = message => _host.Post(() => OnDiscordMessage(message)),
             AlertActed = action =>
@@ -976,32 +977,76 @@ public sealed partial class WaypointWorker
         _host.Changed();
     }
 
-    /// <summary>One of the owner's messages in the capture channel. Its text and each file are captured separately.</summary>
+    /// <summary>
+    /// One of the owner's messages in the capture channel. Its text and each file are captured separately, each
+    /// under the message's ID, so a message handed over again after a crash or a close saves nothing twice. The
+    /// message is marked finished once its text is saved and every file is dealt with. Until then it's handed over
+    /// again later, such as when Waypoint closed before its files could be read.
+    /// </summary>
     public void OnDiscordMessage(DiscordMessage message)
     {
         // A reply to a payment app card answers that card. It's never sorted, so it can't become a note or a task.
+        // Answering it again only says it's already settled.
         if (message.ReplyTo is { } card && message.Text.Trim().Length > 0 && _database.FindRepaymentForCard(card, message.ReplyToText) is { } repayment)
         {
             AnswerPaymentAppReply(message, card, repayment);
         }
-        else if (Captures.Capture(message.Text, message.SentAt, CaptureOrigin.Discord) is { } id)
+        else if (Captures.CaptureOnce(DiscordClientId(message.Id), message.Text, message.SentAt, CaptureOrigin.Discord) is { } id)
         {
             _discordReplies[id] = new DiscordReplyTo(message.Id);
         }
 
+        if (message.Attachments.Count == 0)
+        {
+            _database.FinishDiscordMessage(message.Id, _clock());
+        }
+
         foreach (var attachment in message.Attachments)
         {
-            _ = ReadDiscordFileAsync(message, attachment);
+            _ = ReadDiscordFileOnceAsync(message, attachment);
         }
 
         _ = ProcessDiscordAsync();
     }
 
+    /// <summary>What a capture from a Discord message, or one of its files, is saved under.</summary>
+    internal static string DiscordClientId(string messageId, string? attachmentId = null) =>
+        attachmentId is null ? $"discord:{messageId}" : $"discord:{messageId}:{attachmentId}";
+
+    /// <summary>The message a capture came from, by what it was saved under, for one whose reply was waiting when Waypoint closed.</summary>
+    private string? DiscordMessageOf(long captureId) =>
+        _database.GetCaptureClientId(captureId) is { } clientId && clientId.Split(':') is ["discord", { Length: > 0 } messageId, ..] ? messageId : null;
+
+    /// <summary>Marks one file on a message as dealt with, finishing the message once all of them are.</summary>
+    private void FinishDiscordFile(DiscordMessage message, DiscordAttachment attachment) =>
+        _database.FinishDiscordPart(message.Id, attachment.Id, message.Attachments.Select(file => file.Id).ToList(), _clock());
+
+    /// <summary>A file not already dealt with the last time the message was handed over.</summary>
+    private async Task ReadDiscordFileOnceAsync(DiscordMessage message, DiscordAttachment attachment)
+    {
+        try
+        {
+            if (_database.IsDiscordPartDone(message.Id, attachment.Id))
+            {
+                return;
+            }
+
+            await ReadDiscordFileAsync(message, attachment, () => FinishDiscordFile(message, attachment));
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Not marked as dealt with, so the message is handed over again later.
+            _logError(exception);
+        }
+    }
+
     /// <summary>
     /// A file sent from the phone goes through the same reading as a dropped one, so it can add things but never
-    /// change or finish what's already here. The downloaded copy is deleted once it's read.
+    /// change or finish what's already here. The downloaded copy is deleted once it's read. Once its words are
+    /// saved, or the owner is told why it wasn't read, <paramref name="dealtWith"/> is called. Without Discord,
+    /// such as while Waypoint is closing, it's left for the message to be handed over again.
     /// </summary>
-    private async Task ReadDiscordFileAsync(DiscordMessage message, DiscordAttachment attachment)
+    private async Task ReadDiscordFileAsync(DiscordMessage message, DiscordAttachment attachment, Action dealtWith)
     {
         if (Discord is not { } discord)
         {
@@ -1011,13 +1056,22 @@ public sealed partial class WaypointWorker
         // A voice note is captured as its words. A video stays a recording, which goes in on the PC.
         if (Transcription.VoiceNotes.IsVoiceNote(attachment.FileName, attachment.ContentType))
         {
-            await ReadVoiceNoteAsync(discord, message, attachment);
+            await ReadVoiceNoteAsync(discord, message, attachment, dealtWith);
             return;
         }
 
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
             await discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName));
+            dealtWith();
+            return;
+        }
+
+        // Saved before Waypoint stopped, so there's nothing left to read.
+        var clientId = DiscordClientId(message.Id, attachment.Id);
+        if (_database.HasCaptureClientId(clientId))
+        {
+            dealtWith();
             return;
         }
 
@@ -1030,12 +1084,15 @@ public sealed partial class WaypointWorker
             if (await discord.DownloadAsync(attachment, path, FileReader.MaxBytes) is { } problem)
             {
                 await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention));
+                dealtWith();
                 return;
             }
 
+            // An import counts each row once, so a bank file read again only says it was already counted.
             if (await Task.Run(() => ReadStatement(path)) is { } statement)
             {
                 await discord.ReplyAsync(message.Id, DiscordText.Notice("Bank file", ImportStatementsReply([statement]), CardTone.Money));
+                dealtWith();
                 return;
             }
 
@@ -1044,19 +1101,22 @@ public sealed partial class WaypointWorker
             if (file.Problem is { } unreadable)
             {
                 await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", unreadable, CardTone.Attention));
+                dealtWith();
                 return;
             }
 
-            if (Captures.CaptureFile(file, CaptureOrigin.Discord) is { } id)
+            if (Captures.CaptureFile(file, CaptureOrigin.Discord, clientId) is { } id)
             {
                 _discordReplies[id] = new DiscordReplyTo(message.Id);
             }
 
+            dealtWith();
             await ProcessDiscordAsync();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention));
+            dealtWith();
         }
         finally
         {
@@ -1242,6 +1302,9 @@ public sealed partial class WaypointWorker
         var card = DiscordText.Reply(reply.Length > 0 ? reply : "Saved.");
         card = outcome.Activation is { } running ? card with { HasSessionButtons = true, CanTrial = running.CanTrial } : card;
         var target = outcome.CaptureId is { } captureId && _discordReplies.TryRemove(captureId, out var found) ? found : null;
+
+        // One saved before a restart still answers under the message it came from.
+        target ??= outcome.CaptureId is { } saved && DiscordMessageOf(saved) is { } from ? new DiscordReplyTo(from) : null;
 
         // A voice note's reply shows what was heard, so a mis-hearing can be spotted.
         if (target?.Heard is { } heard)

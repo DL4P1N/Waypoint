@@ -1,0 +1,353 @@
+using System.Net;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Waypoint.Core.Background;
+using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
+using Waypoint.Core.Discord;
+using Waypoint.Core.Email;
+using Waypoint.Core.Files;
+
+namespace Waypoint.Core.Tests;
+
+/// <summary>
+/// Messages sent from Discord are never lost or done twice: one whose work was cut off, by a crash or a close, is
+/// handed over again later, and handing it over again saves nothing a second time. No network, made-up data.
+/// </summary>
+public sealed class DiscordInboxTests : IDisposable
+{
+    private static readonly DateTime Morning = new(2026, 11, 9, 10, 0, 0);
+    private const string FileUrl = "https://cdn.discordapp.com/attachments/1/2/made-up-list.txt";
+
+    private readonly string _folder = Path.Combine(Path.GetTempPath(), $"waypoint-inbox-{Guid.NewGuid()}");
+    private readonly WaypointDatabase _database;
+    private readonly Channel _discord = new();
+    private DateTime _now = Morning;
+
+    public DiscordInboxTests()
+    {
+        Directory.CreateDirectory(_folder);
+        _database = new WaypointDatabase(Path.Combine(_folder, "waypoint.db"));
+    }
+
+    public void Dispose()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                Directory.Delete(_folder, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The capture channel: the owner's messages by ID, read as a list after a place or one at a time, and the
+    /// made-up file they carry. Anything else sent gets the next ID.
+    /// </summary>
+    private sealed class Channel : HttpMessageHandler
+    {
+        private int _posts;
+
+        public Dictionary<string, string> Messages { get; } = [];
+
+        public List<string> Asked { get; } = [];
+
+        public List<string> Posted { get; } = [];
+
+        public void Add(string id, string text, bool withFile = false) => Messages[id] = $$"""
+            {"id":"{{id}}","channel_id":"capture","content":"{{text}}","author":{"id":"owner"},"timestamp":"2026-11-09T17:00:00+00:00"{{(withFile ? $$""","attachments":[{"id":"f{{id}}","filename":"made-up-list.txt","size":40,"url":"{{FileUrl}}","content_type":"text/plain"}]""" : "")}}}
+            """;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+            lock (Asked)
+            {
+                Asked.Add($"{request.Method} {url}");
+                if (request.Method == HttpMethod.Post)
+                {
+                    Posted.Add(body);
+                }
+            }
+
+            if (url == FileUrl)
+            {
+                return Reply(HttpStatusCode.OK, "made up thing one\nmade up thing two");
+            }
+
+            if (request.Method == HttpMethod.Get && url.Contains("/channels/capture/messages?"))
+            {
+                var after = url.Contains("after=") ? ulong.Parse(url[(url.IndexOf("after=", StringComparison.Ordinal) + 6)..]) : 0;
+                var newer = Messages.Where(message => ulong.Parse(message.Key) > after).Select(message => message.Value);
+                return Reply(HttpStatusCode.OK, $"[{string.Join(",", newer)}]");
+            }
+
+            if (request.Method == HttpMethod.Get && url.Contains("/channels/capture/messages/"))
+            {
+                return Messages.TryGetValue(url[(url.LastIndexOf('/') + 1)..], out var one)
+                    ? Reply(HttpStatusCode.OK, one)
+                    : Reply(HttpStatusCode.NotFound, """{"code":10008}""");
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                return Reply(HttpStatusCode.OK, "[]");
+            }
+
+            return Reply(HttpStatusCode.OK, $$"""{"id":"m{{Interlocked.Increment(ref _posts)}}"}""");
+        }
+
+        private static HttpResponseMessage Reply(HttpStatusCode status, string body) =>
+            new(status) { Content = new StringContent(body) };
+    }
+
+    /// <summary>Runs posted work straight away, or holds it the way the window thread does until it gets to it.</summary>
+    private sealed class Host(bool hold = false) : IWorkerHost
+    {
+        public List<Action> Held { get; } = [];
+
+        public void ShowNotice(string title, string text)
+        {
+        }
+
+        public void ShowReminder(DueReminder reminder, Action closed)
+        {
+        }
+
+        public void ShowWeeklyReset(string text)
+        {
+        }
+
+        public void Changed()
+        {
+        }
+
+        public void Post(Action action)
+        {
+            if (hold)
+            {
+                Held.Add(action);
+            }
+            else
+            {
+                action();
+            }
+        }
+    }
+
+    private sealed class NoTokens : ITokenStore
+    {
+        public string? Load() => null;
+
+        public void Save(string token)
+        {
+        }
+    }
+
+    private sealed class NullSorter : ICaptureSorter
+    {
+        public Task<CaptureResult?> SortAsync(string text, DateTime writtenAt, AssistantContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult<CaptureResult?>(null);
+    }
+
+    /// <summary>A fresh start of Waypoint on the same data, as after a crash or a close.</summary>
+    private WaypointWorker Start(Host host)
+    {
+        var settings = new WaypointSettings(Discord: new DiscordSettings("token", "owner", "capture", "alerts"));
+        var worker = new WaypointWorker(_database, settings, _folder, host, _ => { }, new WorkerParts(
+            _ => new NoTokens(),
+            Clock: () => _now,
+            Http: () => new HttpClient(_discord),
+            CaptureSorter: new NullSorter(),
+            ReadFile: path => new FileText("made-up-list.txt", File.ReadAllText(path)),
+            ConnectGateway: false))
+        {
+            RetryWait = _ => Task.CompletedTask,
+        };
+        worker.StartDiscord();
+        return worker;
+    }
+
+    /// <summary>Polls until the check holds, since the start's own poll may still be running and a poll then does nothing.</summary>
+    private static async Task PollUntil(WaypointWorker worker, Func<bool> done)
+    {
+        for (var attempt = 0; attempt < 100 && !done(); attempt++)
+        {
+            await worker.Discord!.PollAsync();
+            await Task.Delay(20);
+        }
+    }
+
+    private DiscordBridge Bridge() => new(new HttpClient(_discord), _database, new DiscordSettings("token", "owner", "capture"))
+    {
+        Clock = () => _now,
+        Delay = (_, _) => Task.CompletedTask,
+    };
+
+    private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement.Clone();
+
+    private List<string> Posted()
+    {
+        lock (_discord.Asked)
+        {
+            return _discord.Posted.ToList();
+        }
+    }
+
+    private List<string> PendingTexts() => _database.GetPendingCaptures().Select(capture => capture.Text).ToList();
+
+    [Fact]
+    public async Task A_message_whose_work_was_never_finished_is_handed_over_again_once_it_has_waited_long_enough()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "made up errand");
+        var bridge = Bridge();
+        var received = new List<string>();
+        bridge.Captured = message => received.Add(message.Id);
+
+        await bridge.HandleEventAsync("MESSAGE_CREATE", Json(_discord.Messages["7"]));
+        await bridge.PollAsync();
+        Assert.Equal(["7"], received);
+
+        // Still being worked on as far as anyone knows, so it waits.
+        _now = _now.AddMinutes(2);
+        await bridge.PollAsync();
+        Assert.Equal(["7"], received);
+
+        _now = _now.AddMinutes(2);
+        await bridge.PollAsync();
+        Assert.Equal(["7", "7"], received);
+        Assert.Contains("GET https://discord.com/api/v10/channels/capture/messages/7", _discord.Asked);
+
+        // Once its work is saved, it's never handed over again.
+        _database.FinishDiscordMessage("7", _now);
+        _now = _now.AddHours(1);
+        await bridge.PollAsync();
+        Assert.Equal(["7", "7"], received);
+    }
+
+    [Fact]
+    public async Task A_message_deleted_before_its_work_could_be_done_again_is_let_go()
+    {
+        Assert.True(_database.ClaimDiscordMessage("9", "capture", _now, DiscordBridge.UnfinishedAfter));
+        _database.SetPreference(DiscordBridge.LastMessageKey, "9");
+        var bridge = Bridge();
+        var received = new List<string>();
+        bridge.Captured = message => received.Add(message.Id);
+
+        _now = _now.AddMinutes(5);
+        await bridge.PollAsync();
+
+        Assert.Empty(received);
+        Assert.True(_database.IsDiscordMessageFinished("9"));
+    }
+
+    [Fact]
+    public void Messages_seen_before_the_upgrade_still_count_as_done()
+    {
+        _database.SetPreference("discord_seen", "made-up-1 made-up-2");
+
+        Assert.False(_database.ClaimDiscordMessage("made-up-2", "capture", _now, DiscordBridge.UnfinishedAfter));
+        Assert.True(_database.ClaimDiscordMessage("made-up-3", "capture", _now, DiscordBridge.UnfinishedAfter));
+        Assert.False(_database.ClaimDiscordMessage("made-up-3", "capture", _now, DiscordBridge.UnfinishedAfter));
+    }
+
+    [Fact]
+    public async Task A_capture_lost_to_a_crash_before_it_was_saved_is_saved_once_on_the_next_start()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "buy made up stamps");
+
+        // The message is taken, then Waypoint stops before the window thread gets to it.
+        var crashed = new Host(hold: true);
+        var first = Start(crashed);
+        await PollUntil(first, () => crashed.Held.Count > 0);
+        first.StopDiscord();
+        Assert.Empty(PendingTexts());
+
+        _now = _now.AddMinutes(5);
+        var second = Start(new Host());
+        await PollUntil(second, () => PendingTexts().Count > 0);
+        Assert.Equal(["buy made up stamps"], PendingTexts());
+        Assert.True(_database.IsDiscordMessageFinished("7"));
+
+        // Later polls and a further start never save it again.
+        _now = _now.AddMinutes(10);
+        await second.Discord!.PollAsync();
+        second.StopDiscord();
+        var third = Start(new Host());
+        await third.Discord!.PollAsync();
+        Assert.Equal(["buy made up stamps"], PendingTexts());
+    }
+
+    [Fact]
+    public async Task A_file_skipped_while_closing_is_read_on_the_next_start_and_the_words_are_saved_once()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "made up words", withFile: true);
+
+        // Closing runs what was left for the window thread after Discord has stopped, so the file can't be fetched.
+        var closing = new Host(hold: true);
+        var first = Start(closing);
+        await PollUntil(first, () => closing.Held.Count > 0);
+        first.StopDiscord();
+        closing.Held.ForEach(work => work());
+        Assert.Equal(["made up words"], PendingTexts());
+        Assert.False(_database.IsDiscordMessageFinished("7"));
+
+        _now = _now.AddMinutes(5);
+        var second = Start(new Host());
+        await PollUntil(second, () => _database.IsDiscordMessageFinished("7"));
+
+        Assert.Equal(["made up words", "made up thing one\nmade up thing two"], PendingTexts());
+        Assert.Single(_discord.Asked, asked => asked == $"GET {FileUrl}");
+
+        _now = _now.AddMinutes(10);
+        await second.Discord!.PollAsync();
+        Assert.Equal(2, PendingTexts().Count);
+    }
+
+    [Fact]
+    public async Task A_reply_to_a_capture_saved_before_a_restart_still_goes_under_its_message()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "made up question");
+        var crashed = new Host(hold: true);
+        var first = Start(crashed);
+        await PollUntil(first, () => crashed.Held.Count > 0);
+        crashed.Held.ForEach(work => work());
+        first.StopDiscord();
+        var id = _database.GetPendingCaptures().Single().Id;
+
+        var second = Start(new Host());
+        second.ReplyInDiscord(new CaptureOutcome([], [], "Made up answer", Origin: CaptureOrigin.Discord) { CaptureId = id }, "Made up answer");
+
+        await PollUntil(second, () => Posted().Any(body => body.Contains("Made up answer")));
+        Assert.Contains("\"message_id\":\"7\"", Posted().Single(body => body.Contains("Made up answer")));
+    }
+
+    [Fact]
+    public void A_typed_done_handed_over_twice_finishes_only_one_reminder()
+    {
+        var first = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up first", null), _now).Item!;
+        var second = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up second", null), _now).Item!;
+        _database.TrackSentReminder("card-1", first.Id);
+        Assert.True(_database.ClaimDiscordMessage("typed-1", "alerts", _now, DiscordBridge.UnfinishedAfter));
+
+        Assert.Equal("Done: Made up first", _database.ApplyAlertAction(new AlertAction(null, AlertActionKind.Done, "typed-1"), _now, 15));
+
+        // A newer card goes out, and the same typed reply comes round again after a restart.
+        _database.TrackSentReminder("card-2", second.Id);
+        Assert.Null(_database.ApplyAlertAction(new AlertAction(null, AlertActionKind.Done, "typed-1"), _now, 15));
+
+        Assert.Equal(["Made up second"], _database.GetOpenItems().Select(item => item.Title));
+    }
+}
