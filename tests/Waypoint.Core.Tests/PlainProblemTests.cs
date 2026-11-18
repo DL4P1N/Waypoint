@@ -37,16 +37,18 @@ public sealed class PlainProblemTests
     [Fact]
     public void Report_sends_the_detail_to_the_log()
     {
-        var logged = new List<Exception>();
+        // The log hook is shared, and other tests running at the same time report their own problems through it,
+        // so this checks that its own problem arrived rather than that nothing else did.
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
         var before = PlainProblem.Log;
-        PlainProblem.Log = logged.Add;
+        PlainProblem.Log = logged.Enqueue;
         try
         {
             var problem = new UnauthorizedAccessException(@"Access to the path 'C:\secret' is denied.");
 
             var said = PlainProblem.Report(problem);
 
-            Assert.Same(problem, Assert.Single(logged));
+            Assert.Contains(logged, entry => ReferenceEquals(entry, problem));
             Assert.DoesNotContain("secret", said);
         }
         finally
