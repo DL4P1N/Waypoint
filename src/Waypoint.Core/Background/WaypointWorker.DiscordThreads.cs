@@ -1248,7 +1248,7 @@ public sealed partial class WaypointWorker
         var all = await AttachThreadFilesAsync(discord, post.Id, noteId, files);
         if (text.Length == 0 && NoteFiles is { CanMakeNotes: true } notes && _database.GetNoteSources(noteId).Count > 0)
         {
-            var written = await notes.WriteNotesAsync(noteId, null, false, _clock());
+            var written = await NoteJobText.GuardNotes(() => notes.WriteNotesAsync(noteId, null, false, _clock()));
             if (written.Status != NoteWriteStatus.Written)
             {
                 await NoticeAsync(discord, post.Id, DiscordText.Notice("Notes not written", written.Message, CardTone.Attention));

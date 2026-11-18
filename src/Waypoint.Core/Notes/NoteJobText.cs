@@ -26,5 +26,42 @@ public static class NoteJobText
     public static StudyOutcome StudyStopped() =>
         new(StudyStatus.Failed, "The practice questions couldn't be written. It was stopped. You can try again.");
 
+    /// <summary>
+    /// Writes notes where an exception would otherwise go unseen, such as on the Notes page in local mode or for
+    /// Discord, so a failure ends as it does for the server's jobs. The detail goes to the log.
+    /// </summary>
+    public static async Task<NoteWriteOutcome> GuardNotes(Func<Task<NoteWriteOutcome>> write, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await write();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return NotesStopped();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return NotesFailed(PlainProblem.Report(exception));
+        }
+    }
+
+    /// <summary>The same for practice questions.</summary>
+    public static async Task<StudyOutcome> GuardStudy(Func<Task<StudyOutcome>> make, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await make();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return StudyStopped();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return StudyFailed(PlainProblem.Report(exception));
+        }
+    }
+
     private static string Reason(string? reason) => string.IsNullOrWhiteSpace(reason) ? NoReason : reason.Trim();
 }

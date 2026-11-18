@@ -179,7 +179,7 @@ public partial class NotesView
             Bar.Show($"Writing practice questions for {exam.Title} with Claude. This can take a minute, and you can keep using Waypoint.");
             ShowStatus();
             var allowed = replaceEdits;
-            outcome = await Task.Run(() => study.MakeStudyAsync(exam, folderId, allowed, DateTime.Now, CancellationToken.None));
+            outcome = await Task.Run(() => NoteJobText.GuardStudy(() => study.MakeStudyAsync(exam, folderId, allowed, DateTime.Now, CancellationToken.None)));
         }
         finally
         {
