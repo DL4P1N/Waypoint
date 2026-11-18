@@ -44,7 +44,7 @@ public sealed record PlannedReminder(DateTime At, string? Message);
 /// A pop-up that's ready to show. RepeatMinutes is set if it keeps coming back until the item is done.
 /// IsFollowUp is set on the one that comes back after "10 more minutes", which doesn't offer more time again.
 /// </summary>
-public sealed record DueReminder(long Id, StoredItem Item, string? Message, int? RepeatMinutes, bool IsFollowUp = false);
+public sealed record DueReminder(long Id, StoredItem Item, string? Message, int? RepeatMinutes, bool IsFollowUp = false, string? RemindAt = null);
 
 public enum ItemSource
 {

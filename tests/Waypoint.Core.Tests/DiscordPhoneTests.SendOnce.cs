@@ -169,6 +169,37 @@ public sealed partial class DiscordPhoneTests
         Assert.Empty(_database.GetDiscordSends("held:"));
     }
 
+    [Fact]
+    public async Task A_new_reminder_given_the_row_id_of_one_that_went_after_its_card_was_posted_still_gets_its_own_card()
+    {
+        var (_, firstKey) = DueReminderFor("Made up first reminder");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE INSERT ON sent_reminders");
+        first.CheckAlerts();
+        await Until(() => _database.GetDiscordSend(firstKey)?.MessageId is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+
+        // The reminder is dealt with elsewhere before the next start, and a new one takes its row id.
+        using (var connection = _database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "DELETE FROM reminders";
+            command.ExecuteNonQuery();
+        }
+
+        var (_, secondKey) = DueReminderFor("Made up second reminder");
+        Assert.Equal(firstKey.Split(':')[2], secondKey.Split(':')[2]);
+
+        var second = Worker(toDo: null, lists: null);
+        second.CheckAlerts();
+        await Until(() => Rows("sent_reminders") == 1);
+
+        Assert.Single(CardsAbout("Made up second reminder"));
+        Assert.Null(_database.GetDiscordSend(firstKey));
+        Assert.Empty(_database.GetDiscordSends("reminder:"));
+    }
+
     /// <summary>The messages Discord made in the views channel, by their title.</summary>
     private List<string> ViewsMade()
     {
@@ -192,11 +223,12 @@ public sealed partial class DiscordPhoneTests
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO reminders (item_id, remind_at) VALUES ($item, $at)";
+        var at = _now.AddMinutes(-1).ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
         command.Parameters.AddWithValue("$item", task.Id);
-        command.Parameters.AddWithValue("$at", _now.AddMinutes(-1).ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$at", at);
         command.ExecuteNonQuery();
         command.CommandText = "SELECT last_insert_rowid()";
-        return (task, $"reminder:item:{command.ExecuteScalar()}");
+        return (task, $"reminder:item:{command.ExecuteScalar()}:{task.Id}:{at}");
     }
 
     private List<(string Channel, string Id, string Body)> CardsAbout(string title)

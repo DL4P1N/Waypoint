@@ -644,7 +644,9 @@ public sealed partial class WaypointWorker
         DueReminder? reminder;
         lock (_activeReminders)
         {
-            reminder = _database.GetDueReminders(now).FirstOrDefault(due => (!quiet || due.Item.Source != ItemSource.Calendar) && !_activeReminders.Contains(ActiveKey(due)));
+            var dueNow = _database.GetDueReminders(now);
+            DropStaleReminderSends(dueNow);
+            reminder = dueNow.FirstOrDefault(due => (!quiet || due.Item.Source != ItemSource.Calendar) && !_activeReminders.Contains(ActiveKey(due)));
             if (reminder is null)
             {
                 return;
@@ -753,9 +755,30 @@ public sealed partial class WaypointWorker
         _host.Changed();
     }
 
-    /// <summary>One reminder's card, the same each time it's tried, until the reminder moves on.</summary>
+    /// <summary>
+    /// One reminder's card, the same each time it's tried, until the reminder moves on. What it's for and when it's
+    /// due are in it too, so a later reminder given the row id of one that's gone never takes that one's card.
+    /// </summary>
     private static string ReminderSendKey(DueReminder reminder) =>
-        $"reminder:{(reminder.Item.Source == ItemSource.Calendar ? "event" : "item")}:{reminder.Id}";
+        $"{ReminderSendPrefix}{(reminder.Item.Source == ItemSource.Calendar ? "event" : "item")}:{reminder.Id}:{reminder.Item.Id}:{reminder.RemindAt}";
+
+    private const string ReminderSendPrefix = "reminder:";
+
+    /// <summary>
+    /// A card's note whose reminder is no longer due (finished, put off, or gone elsewhere) is let go, so it can't
+    /// stay forever. A reminder still on its way is still due, so its note is kept.
+    /// </summary>
+    private void DropStaleReminderSends(IReadOnlyList<DueReminder> due)
+    {
+        var keys = due.Select(ReminderSendKey).ToHashSet(StringComparer.Ordinal);
+        foreach (var send in _database.GetDiscordSends(ReminderSendPrefix))
+        {
+            if (!keys.Contains(send.Key))
+            {
+                _database.FinishDiscordSend(send.Key);
+            }
+        }
+    }
 
     /// <summary>The pause between Discord retries. Tests set it to skip the waiting.</summary>
     public Func<TimeSpan, Task>? RetryWait { get; set; }

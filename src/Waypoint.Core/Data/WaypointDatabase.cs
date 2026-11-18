@@ -370,7 +370,8 @@ public sealed partial class WaypointDatabase
                     ReadItem(reader),
                     reader.IsDBNull(12) ? null : reader.GetString(12),
                     reader.IsDBNull(13) ? null : reader.GetInt32(13),
-                    reader.GetInt64(15) != 0)));
+                    reader.GetInt64(15) != 0,
+                    reader.GetString(14))));
             }
         }
 
@@ -396,7 +397,8 @@ public sealed partial class WaypointDatabase
                         item,
                         reader.IsDBNull(7) ? null : reader.GetString(7),
                         null,
-                        reader.GetInt64(9) != 0)));
+                        reader.GetInt64(9) != 0,
+                        reader.GetString(8))));
                 }
             }
         }
