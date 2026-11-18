@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -20,6 +21,8 @@ public sealed class FeedbackPrompt : StackPanel
     private readonly TextBlock _done;
     private long? _id;
     private bool _showLink = true;
+    private int _shown;
+    private int _keepingFor = -1;
 
     /// <summary>The button that keeps the click without a line. Not Skip, which on a card means skipping the reminder.</summary>
     public const string NoNote = "No note";
@@ -61,8 +64,21 @@ public sealed class FeedbackPrompt : StackPanel
     /// <summary>Keeps the click and returns its ID. Set by the host, which knows what the card was about.</summary>
     public Func<long>? Kept { get; set; }
 
+    /// <summary>
+    /// In place of <see cref="Kept"/>, for a host whose card changes while a click is on its way: asked as the link
+    /// is pressed, on the window's thread, for what keeps the click, so it's about the card as it was then.
+    /// </summary>
+    internal Func<Func<long>>? Keeping { get; set; }
+
     /// <summary>Adds the optional line to the kept click.</summary>
     public Action<long, string>? Noted { get; set; }
+
+    /// <summary>
+    /// How <see cref="Kept"/> and <see cref="Noted"/> reach where they're kept. On this PC's database they're saved
+    /// before the click returns. In server mode they're sent off the window's thread, and the line opens or thanks
+    /// once the server has them.
+    /// </summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
 
     /// <summary>False for a host that opens the line itself, such as the row menu, so no link shows.</summary>
     public bool ShowLink
@@ -78,6 +94,7 @@ public sealed class FeedbackPrompt : StackPanel
     /// <summary>Back to the plain link, for when the card moves on to something else.</summary>
     public void Reset()
     {
+        _shown++;
         _id = null;
         _note.Text = "";
         _box.Visibility = Visibility.Collapsed;
@@ -88,6 +105,7 @@ public sealed class FeedbackPrompt : StackPanel
     /// <summary>Shows the optional line for a click already kept, with what it was about.</summary>
     public void Open(long id, string? about = null)
     {
+        _shown++;
         _id = id;
         _ask.Text = about is { Length: > 0 } ? $"Noted for {about}. Anything to add? You can leave this blank." : "Noted. Anything to add? You can leave this blank.";
         _note.Text = "";
@@ -99,20 +117,71 @@ public sealed class FeedbackPrompt : StackPanel
 
     private void Give()
     {
-        if (Kept is not { } keep)
+        if (_keepingFor == _shown || (Keeping?.Invoke() ?? Kept) is not { } keep)
         {
             return;
         }
 
+        // Pressed once: the link goes while the click is on its way, so it's never kept twice. Once the card moves
+        // on, its own link can be pressed.
+        var shown = ++_shown;
+        _keepingFor = shown;
+        _link.Visibility = Visibility.Collapsed;
+        Send(keep, id => Open(id), "Couldn't keep that while the server can't be reached.", shown);
+    }
+
+    /// <summary>
+    /// Sends <paramref name="work"/> through <see cref="Work"/>, then <paramref name="done"/> or says
+    /// <paramref name="problem"/>, unless the prompt has been reset or opened again since. Done at once, as on this
+    /// PC's database, it all happens before this returns.
+    /// </summary>
+    private void Send<T>(Func<T> work, Action<T> done, string problem, int shown)
+    {
+        Task<T> sending;
         try
         {
-            Open(keep());
+            sending = Work.Run(work);
         }
-        catch (Exception exception) when (exception is Core.Remote.ServerUnavailableException or Core.Remote.ServerTimedOutException or InvalidOperationException)
+        catch (Exception exception) when (Unreachable(exception))
         {
-            Said("Couldn't keep that while the server can't be reached.");
+            Said(problem);
+            return;
+        }
+
+        if (sending.IsCompleted)
+        {
+            done(sending.GetAwaiter().GetResult());
+            return;
+        }
+
+        Later(sending, done, problem, shown);
+    }
+
+    private async void Later<T>(Task<T> sending, Action<T> done, string problem, int shown)
+    {
+        T result;
+        try
+        {
+            result = await sending;
+        }
+        catch (Exception exception) when (Unreachable(exception))
+        {
+            if (shown == _shown)
+            {
+                Said(problem);
+            }
+
+            return;
+        }
+
+        if (shown == _shown)
+        {
+            done(result);
         }
     }
+
+    private static bool Unreachable(Exception exception) =>
+        exception is Core.Remote.ServerUnavailableException or Core.Remote.ServerTimedOutException or InvalidOperationException;
 
     private void OnNoteKey(object sender, KeyEventArgs e)
     {
@@ -130,21 +199,24 @@ public sealed class FeedbackPrompt : StackPanel
 
     private void Finish(string? note)
     {
-        if (_id is { } id && !string.IsNullOrWhiteSpace(note))
+        var shown = ++_shown;
+        if (_id is { } id && !string.IsNullOrWhiteSpace(note) && Noted is { } noted)
         {
-            try
+            // The line goes while the note is on its way, so it's sent once and can't be typed into meanwhile.
+            _id = null;
+            _box.Visibility = Visibility.Collapsed;
+            Send<object?>(() =>
             {
-                Noted?.Invoke(id, note);
-            }
-            catch (Exception exception) when (exception is Core.Remote.ServerUnavailableException or Core.Remote.ServerTimedOutException or InvalidOperationException)
-            {
-                Said("The click was kept, but the note couldn't be saved while the server can't be reached.");
-                return;
-            }
+                noted(id, note);
+                return null;
+            }, _ => Said(Thanks), "The click was kept, but the note couldn't be saved while the server can't be reached.", shown);
+            return;
         }
 
-        Said("Thanks. It's on Settings, under Feedback.");
+        Said(Thanks);
     }
+
+    private const string Thanks = "Thanks. It's on Settings, under Feedback.";
 
     private void Said(string text)
     {
