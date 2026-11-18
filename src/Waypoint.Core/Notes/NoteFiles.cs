@@ -375,11 +375,24 @@ public sealed class NoteFiles(INoteFileStore database, string root)
 
                 if (!waypointChanged)
                 {
-                    database.SaveNote(note.Id, note.Title, text, now);
-                    Remember(note with { Body = text }, record.Path);
-                    _imported++;
-                    _changed = true;
-                    return;
+                    // Saved only over the text read at the start of this pass, so a save from the editor meanwhile
+                    // isn't lost under the file's. Then it was changed on both sides after all.
+                    var saved = database.SaveNoteIfUnchanged(note.Id, note.Title, text, note.Body, now);
+                    if (saved.Outcome == NoteSaveOutcome.Saved)
+                    {
+                        Remember(note with { Body = text }, record.Path);
+                        _imported++;
+                        _changed = true;
+                        return;
+                    }
+
+                    if (saved.Stored is not { } stored)
+                    {
+                        // Deleted meanwhile. The next pass finds the file changed since, and keeps it as a new note.
+                        return;
+                    }
+
+                    note = note with { Title = stored.Title, Body = stored.Body, FolderId = stored.FolderId };
                 }
 
                 // Changed on both sides: Waypoint's version keeps the note, the outside one becomes a new note.
@@ -441,10 +454,10 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             _owners[path] = note.Id;
             var title = Path.GetFileNameWithoutExtension(path);
             var folder = FolderFor(Path.GetDirectoryName(path) ?? "");
-            database.SaveNote(note.Id, title, note.Body, now);
+            var body = SaveTitle(note, title);
             database.MoveNoteToFolder(note.Id, folder);
-            var moved = note with { Title = title, FolderId = folder };
-            if (waypointChanged && record.BodyHash != Hash(note.Body))
+            var moved = note with { Title = title, Body = body, FolderId = folder };
+            if (record.BodyHash != Hash(body))
             {
                 WriteAt(moved, path);
             }
@@ -499,16 +512,19 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             var dir = Path.GetDirectoryName(path) ?? "";
             var folder = FolderFor(dir);
             var moved = note with { Title = title, FolderId = folder };
-            if (record.BodyHash == Hash(note.Body))
+
+            // Saved only over the text read at the start of this pass, so a save from the editor meanwhile isn't
+            // lost under the file's. Then it was changed on both sides after all.
+            var saved = record.BodyHash == Hash(note.Body) ? database.SaveNoteIfUnchanged(note.Id, title, text, note.Body, now) : null;
+            if (saved?.Outcome == NoteSaveOutcome.Saved)
             {
-                database.SaveNote(note.Id, title, text, now);
                 database.MoveNoteToFolder(note.Id, folder);
                 Remember(moved with { Body = text }, path);
                 _imported++;
             }
             else
             {
-                database.SaveNote(note.Id, title, note.Body, now);
+                moved = moved with { Body = SaveTitle(saved?.Stored is { } stored ? note with { Body = stored.Body } : note, title) };
                 database.MoveNoteToFolder(note.Id, folder);
                 var copy = FreePath(dir, title + ElsewhereSuffix);
                 File.Move(Full(path), Full(copy));
@@ -519,6 +535,28 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             }
 
             _changed = true;
+        }
+
+        /// <summary>
+        /// Gives the note a new title and keeps whatever text it has, even one saved from the editor during this pass,
+        /// and returns that text.
+        /// </summary>
+        private string SaveTitle(NoteFileState note, string title)
+        {
+            var body = note.Body;
+            for (var attempt = 0; attempt < NoteSaving.Tries; attempt++)
+            {
+                var result = database.SaveNoteIfUnchanged(note.Id, title, body, body, now);
+                if (result.Outcome != NoteSaveOutcome.Changed || result.Stored is not { } stored)
+                {
+                    return body;
+                }
+
+                body = stored.Body;
+            }
+
+            // Still changing each time it's checked, so the title waits for the next pass rather than risk the text.
+            return body;
         }
 
         /// <summary>How much two texts share, by their words, from 0 for nothing to 1 for the same words.</summary>

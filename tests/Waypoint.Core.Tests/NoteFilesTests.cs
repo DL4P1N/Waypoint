@@ -1,3 +1,4 @@
+using System.Reflection;
 using Waypoint.Core.Data;
 using Waypoint.Core.Notes;
 
@@ -268,6 +269,104 @@ public sealed class NoteFilesTests : IDisposable
         Assert.Equal("milk from waypoint", _database.GetNote(id)!.Body);
         Assert.Equal("milk from waypoint", Text("Groceries.md"));
         Assert.Contains(_database.GetNotes(), note => note.Title == "Groceries (edited elsewhere)" && note.Body == "milk from obsidian");
+    }
+
+    /// <summary>
+    /// The database as the sync sees it, with the editor saving a note right after the pass has read the notes, so
+    /// the pass holds the text from before that save.
+    /// </summary>
+    public class EditorSavesDuringPass : DispatchProxy
+    {
+        public WaypointDatabase Inner { get; set; } = null!;
+
+        /// <summary>The note and the text the editor saves, once, just after the next pass reads the notes.</summary>
+        public (long Id, string Body)? Save { get; set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            object? result;
+            try
+            {
+                result = targetMethod!.Invoke(Inner, args);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is { } inner)
+            {
+                throw inner;
+            }
+
+            if (targetMethod.Name == nameof(INoteFileStore.GetNoteFileStates) && Save is { } save)
+            {
+                Save = null;
+                var note = Inner.GetNote(save.Id)!;
+                Assert.True(Inner.SaveNoteIfUnchanged(save.Id, note.Title, save.Body, note.Body, Now));
+            }
+
+            return result;
+        }
+    }
+
+    private (NoteFiles Files, EditorSavesDuringPass Editor) WithEditor()
+    {
+        var store = DispatchProxy.Create<INoteFileStore, EditorSavesDuringPass>();
+        var editor = (EditorSavesDuringPass)(object)store;
+        editor.Inner = _database;
+        return (new NoteFiles(store, _root), editor);
+    }
+
+    [Fact]
+    public void An_editor_save_during_a_pass_that_takes_in_the_file_is_kept_and_the_file_too()
+    {
+        var (files, editor) = WithEditor();
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        files.Sync(Now);
+
+        WriteOutside("Groceries.md", "milk from obsidian");
+        editor.Save = (id, "milk from the editor");
+        files.Sync(Now);
+
+        Assert.Equal("milk from the editor", _database.GetNote(id)!.Body);
+        Assert.Equal("milk from the editor", Text("Groceries.md"));
+        Assert.Contains(_database.GetNotes(), note => note.Title == "Groceries (edited elsewhere)" && note.Body == "milk from obsidian");
+        Assert.Equal(2, _database.GetNotes().Count);
+    }
+
+    [Fact]
+    public void An_editor_save_during_a_pass_that_takes_a_renamed_file_keeps_the_editors_text()
+    {
+        var (files, editor) = WithEditor();
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        files.Sync(Now);
+
+        File.Move(File_("Groceries.md"), File_("Shopping.md"));
+        editor.Save = (id, "milk from the editor");
+        files.Sync(Now);
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal("Shopping", note.Title);
+        Assert.Equal("milk from the editor", note.Body);
+        Assert.Equal("milk from the editor", Text("Shopping.md"));
+        Assert.False(files.Sync(Now).NotesChanged);
+    }
+
+    [Fact]
+    public void An_editor_save_during_a_pass_that_takes_a_renamed_and_edited_file_keeps_both()
+    {
+        var (files, editor) = WithEditor();
+        var body = "# Mitosis\nProphase\nMetaphase\nAnaphase\nTelophase";
+        var id = _database.CreateNote("Lecture 4", body, Now);
+        files.Sync(Now);
+
+        File.Delete(File_("Lecture 4.md"));
+        WriteOutside(@"Biology\Mitosis.md", body + "\nCytokinesis");
+        editor.Save = (id, body + "\nInterphase");
+        files.Sync(Now);
+
+        var note = _database.GetNote(id)!;
+        Assert.Equal("Mitosis", note.Title);
+        Assert.Equal(body + "\nInterphase", note.Body);
+        Assert.Equal(body + "\nInterphase", Text(@"Biology\Mitosis.md"));
+        Assert.Contains(_database.GetNotes(), other => other.Title == "Mitosis (edited elsewhere)" && other.Body == body + "\nCytokinesis");
+        Assert.Equal(2, _database.GetNotes().Count);
     }
 
     [Fact]
