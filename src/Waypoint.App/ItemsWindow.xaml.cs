@@ -152,7 +152,8 @@ public partial class ItemsWindow : Window
         };
         MoneyPage.Work = PageWorkFor(server);
         MoneyPage.Connect(budget, importCsv);
-        HistoryPage.Connect(history, () => TodayPage.Refresh(_tonight));
+        HistoryPage.Work = PageWorkFor(server);
+        HistoryPage.Connect(history, () => TodayPage.Work.Show(() => TodayPage.Refresh(_tonight)));
         FindPage.Connect(new FindSources(toDo, lists, notes, history, budget));
         FindPage.Chosen += ShowFound;
         FindPage.Closed += CloseFind;
@@ -427,7 +428,11 @@ public partial class ItemsWindow : Window
                 SettingsPage.Refresh();
                 break;
             default:
-                HistoryPage.Refresh();
+                if (!every || !HistoryPage.Work.IsBusy)
+                {
+                    HistoryPage.Work.Show(HistoryPage.Refresh);
+                }
+
                 break;
         }
     }

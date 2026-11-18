@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -38,6 +39,25 @@ public partial class HistoryView : UserControl
 
     public HistoryView() => InitializeComponent();
 
+    private PageWork _work = PageWork.Local;
+
+    /// <summary>How the page reads and changes its data: straight away on this PC, or in order without holding the window in server mode.</summary>
+    internal PageWork Work
+    {
+        get => _work;
+        set
+        {
+            _work = value;
+            Column.Work = value;
+        }
+    }
+
+    /// <summary>Draws the rows again, at once from what was kept in server mode, then from what's read.</summary>
+    private void ShowSoon() => Work.Show(() => Refresh(force: true), () => Refresh(force: false));
+
+    /// <summary>Draws the rows again once this page's changes are done, so it never shows a moment between two of them.</summary>
+    private void ShowAfterChanges() => Work.ShowAfterChanges(nameof(Refresh), () => Refresh(force: true), () => Refresh(force: false));
+
     public void Connect(WaypointDatabase database, Action changed) => Connect(new LocalHistoryData(database), changed);
 
     public void Connect(IHistoryData history, Action changed)
@@ -47,9 +67,9 @@ public partial class HistoryView : UserControl
 
         Column.Connect(history, ViewKey);
         Column.SetEntries(Views.Select(view => new ColumnEntry(view.Filter.ToString(), view.Label)).ToList());
-        Column.SelectionChanged += _ => Refresh(force: true);
-        Column.SearchChanged += _ => Refresh(force: true);
-        Scroll.LostKeyboardFocus += (_, _) => Refresh();
+        Column.SelectionChanged += _ => ShowSoon();
+        Column.SearchChanged += _ => ShowSoon();
+        Scroll.LostKeyboardFocus += (_, _) => Work.Show(Refresh);
     }
 
     public void Refresh() => Refresh(force: false);
@@ -59,7 +79,7 @@ public partial class HistoryView : UserControl
     {
         Column.Select(HistoryFilter.All.ToString());
         Column.SetSearch(entry.Title);
-        Refresh(force: true);
+        ShowSoon();
 
         Dispatcher.InvokeAsync(() =>
         {
@@ -138,55 +158,65 @@ public partial class HistoryView : UserControl
     }
 
     /// <summary>Takes the item out of History, and off the list if it's still there. Undo puts both back.</summary>
-    private void Delete(HistoryRow row)
+    private async void Delete(HistoryRow row)
     {
-        if (!Change(() => _history!.DeleteHistoryItem(row.Entry, DateTime.Now), out var deleted) || deleted is null)
+        var (ok, deleted) = await Change(() => _history!.DeleteHistoryItem(row.Entry, DateTime.Now));
+        if (!ok || deleted is null)
         {
             return;
         }
 
-        Bar.Show($"Deleted {row.Title}", () =>
+        Bar.Show($"Deleted {row.Title}", async () =>
         {
-            if (Change(() =>
+            var (undone, _) = await Change(() =>
             {
                 _history!.UndoDelete(deleted, DateTime.Now);
                 return true;
-            }, out _))
+            });
+            if (undone)
             {
-                Refresh(force: true);
+                ShowAfterChanges();
                 _changed();
             }
         });
-        Refresh(force: true);
+        ShowAfterChanges();
         _changed();
     }
 
-    private void Reopen(HistoryRow row)
+    private async void Reopen(HistoryRow row)
     {
         // While the server is away the rows are built again, so the box goes back to checked, since nothing was put back.
-        if (!Change(() => _history!.ReopenEntry(row.Entry), out _))
+        var (ok, _) = await Change(() => _history!.ReopenEntry(row.Entry));
+        if (!ok)
         {
             _gate.Invalidate();
         }
 
-        Refresh(force: true);
+        ShowAfterChanges();
         _changed();
     }
 
-    /// <summary>Runs a change. If the server is away, the page says so and nothing else happens.</summary>
-    private bool Change<T>(Func<T> change, out T result)
+    /// <summary>
+    /// Runs a change, off the window's thread in server mode, after the page's earlier changes. If the server is away,
+    /// or too slow to answer, the page says so and nothing else happens.
+    /// </summary>
+    private async Task<(bool Ok, T Result)> Change<T>(Func<T> change, [System.Runtime.CompilerServices.CallerMemberName] string what = "")
     {
         try
         {
-            result = change();
+            var result = await Work.Run(change, what);
             Bar.Changed();
-            return true;
+            return (true, result);
         }
         catch (ServerUnavailableException away)
         {
-            result = default!;
             Bar.Show(PageMessages.CantChange(away));
-            return false;
+            return (false, default!);
+        }
+        catch (ServerTimedOutException slow)
+        {
+            Bar.Show(slow.Message);
+            return (false, default!);
         }
     }
 
