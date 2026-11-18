@@ -1,5 +1,3 @@
-using System.Globalization;
-using Waypoint.Core.Budget;
 using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;

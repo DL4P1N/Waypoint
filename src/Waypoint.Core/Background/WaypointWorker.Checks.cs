@@ -1,11 +1,7 @@
 using System.Globalization;
 using Waypoint.Core.Budget;
-using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
-using Waypoint.Core.Data;
 using Waypoint.Core.Discord;
-using Waypoint.Core.Email;
-using Waypoint.Core.Files;
 using Waypoint.Core.Schedule;
 
 namespace Waypoint.Core.Background;
