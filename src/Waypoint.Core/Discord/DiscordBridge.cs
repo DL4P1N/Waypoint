@@ -118,7 +118,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private const string ApiBase = "https://discord.com/api/v10";
     public const string LastMessageKey = "discord_last_message";
 
-    /// <summary>The last message read in the notes channel, kept apart from the capture channel's.</summary>
+    /// <summary>
+    /// The last message read in the notes channel, kept apart from the capture channel's, as the channel and the
+    /// message, so a notes channel moved elsewhere starts over instead of reading from a place in another channel.
+    /// </summary>
     public const string LastNotesMessageKey = "discord_last_notes_message";
     private const int MaxFetched = 50;
     private const int MaxAlertsRead = 25;
@@ -1531,9 +1534,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         {
             await RetryUnfinishedAsync(onMessage, cancellationToken);
             await CatchUpAsync(channel, LastMessageKey, onMessage, cancellationToken);
-            if (PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) is { } notes && notes != channel)
+            // A notes channel that's also the capture or alerts channel is read there already.
+            if (PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) is { } notes && notes != channel && notes != settings.AlertsChannelId)
             {
-                await CatchUpAsync(notes, LastNotesMessageKey, NotesSent, cancellationToken);
+                await CatchUpAsync(notes, LastNotesMessageKey, NotesSent, cancellationToken, placeHasChannel: true);
             }
 
             LastError = null;
@@ -1551,11 +1555,17 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 
     /// <summary>
     /// Reads one channel's messages since the last one read there, and hands over each of the owner's that hasn't
-    /// been claimed yet. The place moves on past each, so it's read once however often this runs.
+    /// been claimed yet. The place moves on past each, so it's read once however often this runs. With
+    /// <paramref name="placeHasChannel"/>, the place is kept with its channel, and one from another channel, or none,
+    /// is a first run.
     /// </summary>
-    private async Task CatchUpAsync(string channel, string lastKey, Action<DiscordMessage>? handOver, CancellationToken cancellationToken)
+    private async Task CatchUpAsync(string channel, string lastKey, Action<DiscordMessage>? handOver, CancellationToken cancellationToken, bool placeHasChannel = false)
     {
-        var last = database.GetPreference(lastKey);
+        var saved = database.GetPreference(lastKey);
+        var last = !placeHasChannel ? saved
+            : saved is not null && saved.StartsWith(channel + ":", StringComparison.Ordinal) ? saved[(channel.Length + 1)..]
+            : null;
+        string Place(string id) => placeHasChannel ? $"{channel}:{id}" : id;
         var query = last is null ? "limit=1" : $"limit={MaxFetched}&after={last}";
 
         using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?{query}"), cancellationToken);
@@ -1569,7 +1579,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         // An empty channel still marks the place, or its first message would only be marked too.
         if (last is null && messages.Count == 0)
         {
-            database.SetPreference(lastKey, "0");
+            database.SetPreference(lastKey, Place("0"));
         }
 
         foreach (var message in messages)
@@ -1580,7 +1590,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                 handOver?.Invoke(read);
             }
 
-            database.SetPreference(lastKey, id);
+            database.SetPreference(lastKey, Place(id));
         }
     }
 

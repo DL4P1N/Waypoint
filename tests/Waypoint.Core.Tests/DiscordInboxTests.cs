@@ -493,7 +493,7 @@ public sealed class DiscordInboxTests : IDisposable
     public async Task A_notes_channel_message_sent_while_waypoint_was_off_is_handed_over_once_when_it_is_back()
     {
         _database.SetPreference(DiscordBridge.LastMessageKey, "5");
-        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "5");
+        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "notes:5");
         _discord.Add("8", "made up notes question", channel: "notes");
         _discord.Messages["9"] = """{"id":"9","channel_id":"notes","content":"made up","author":{"id":"someone"}}""";
         var bridge = Bridge(notes: "notes");
@@ -507,7 +507,7 @@ public sealed class DiscordInboxTests : IDisposable
 
         Assert.Equal(["8"], notes);
         Assert.Empty(captured);
-        Assert.Equal("9", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
+        Assert.Equal("notes:9", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
 
         // One sent later is read on the next poll, and the one before isn't handed over again.
         _discord.Add("12", "made up later", channel: "notes");
@@ -527,15 +527,58 @@ public sealed class DiscordInboxTests : IDisposable
         await bridge.PollAsync();
 
         Assert.Empty(notes);
-        Assert.Equal("8", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
+        Assert.Equal("notes:8", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
         Assert.Empty(PendingTexts());
+    }
+
+    [Fact]
+    public async Task A_notes_channel_moved_elsewhere_is_only_marked_on_its_first_poll_there()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+
+        // The place kept is from the old notes channel, so it says nothing about where to start in the new one.
+        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "old-notes:5");
+        _discord.Add("8", "made up older note", channel: "notes");
+        var bridge = Bridge(notes: "notes");
+        var notes = new List<string>();
+        bridge.NotesSent = message => notes.Add(message.Id);
+
+        await bridge.PollAsync();
+
+        Assert.Empty(notes);
+        Assert.Equal("notes:8", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
+
+        _discord.Add("12", "made up later", channel: "notes");
+        await bridge.PollAsync();
+        Assert.Equal(["12"], notes);
+    }
+
+    [Fact]
+    public async Task A_notes_channel_that_is_also_the_alerts_channel_is_not_caught_up_as_notes()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("8", "made up reply to a card", channel: "alerts");
+        var bridge = new DiscordBridge(new HttpClient(_discord), _database, new DiscordSettings("token", "owner", "capture", "alerts", NotesChannelId: "alerts"))
+        {
+            Clock = () => _now,
+            Delay = (_, _) => Task.CompletedTask,
+        };
+        var notes = new List<string>();
+        bridge.NotesSent = message => notes.Add(message.Id);
+
+        await bridge.PollAsync();
+        _discord.Add("12", "made up later reply", channel: "alerts");
+        await bridge.PollAsync();
+
+        Assert.Empty(notes);
+        Assert.Null(_database.GetPreference(DiscordBridge.LastNotesMessageKey));
     }
 
     [Fact]
     public async Task A_notes_message_taken_before_a_crash_is_answered_exactly_once_after_the_next_start()
     {
         _database.SetPreference(DiscordBridge.LastMessageKey, "5");
-        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "5");
+        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "notes:5");
         _discord.Add("8", "made up words with no file", channel: "notes");
 
         // The poll takes the message, then Waypoint stops before the window thread gets to it.
