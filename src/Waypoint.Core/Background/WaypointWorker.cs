@@ -81,6 +81,7 @@ public sealed partial class WaypointWorker
     private readonly bool _connectGateway;
     private DiscordGateway? _gateway;
     private CancellationTokenSource? _discordStop;
+    private Task _gatewayRun = Task.CompletedTask;
 
     // Only one copy uses the bot at a time. The host asked for Discord, and the claim says whether it may connect.
     private readonly DiscordRunner? _runner;
@@ -443,13 +444,13 @@ public sealed partial class WaypointWorker
         };
 
         var stop = new CancellationTokenSource();
-        var gateway = new DiscordGateway(settings.BotToken, bridge.HandleEventAsync);
+        var gateway = new DiscordGateway(settings.BotToken, bridge.HandleEventAsync, _logError);
         Discord = bridge;
         _gateway = gateway;
         _discordStop = stop;
         if (_connectGateway)
         {
-            _ = Task.Run(() => gateway.RunAsync(stop.Token));
+            _gatewayRun = Task.Run(() => gateway.RunAsync(stop.Token));
         }
 
         _ = PollDiscordAsync(force: true);
@@ -460,6 +461,27 @@ public sealed partial class WaypointWorker
         _discordWanted = false;
         _discordWantedAt = null;
         Disconnect();
+    }
+
+    /// <summary>
+    /// Stops Discord and waits, up to <paramref name="limit"/>, for events already read to be finished, so a capture
+    /// or press that arrived just before closing is still saved. Anything left is logged by the gateway.
+    /// </summary>
+    public async Task StopDiscordAsync(TimeSpan limit)
+    {
+        var run = _gatewayRun;
+        StopDiscord();
+        try
+        {
+            await run.WaitAsync(limit).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            _logError(exception);
+        }
     }
 
     private void Disconnect()
