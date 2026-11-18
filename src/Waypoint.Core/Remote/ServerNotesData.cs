@@ -606,9 +606,10 @@ public sealed class ServerNotesData : INotesData
                     return KeepBoth(waiting, made, there, clientId);
                 }
 
-                if (there is not null && (there.Body != waiting.Body || there.Title != waiting.Title))
+                if (there is not null && (there.Body != waiting.Body || there.Title != waiting.Title)
+                    && SendOver(made, waiting, there.Body) is { } changedSince)
                 {
-                    _server.Send(Put, $"api/notes/{made}", new SaveNoteRequest(waiting.Title, waiting.Body));
+                    return KeepBoth(waiting, made, changedSince.Stored, clientId);
                 }
 
                 RememberMade(new NoteDetail(made, waiting.Title, waiting.Body, null, waiting.At, waiting.FolderId));
@@ -618,9 +619,11 @@ public sealed class ServerNotesData : INotesData
             var current = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{waiting.Id}").Value;
             if (current is not null && (current.Body == waiting.Body || current.Body == waiting.BasedOn))
             {
-                if (current.Body != waiting.Body || current.Title != waiting.Title)
+                if ((current.Body != waiting.Body || current.Title != waiting.Title)
+                    && SendOver(waiting.Id, waiting, current.Body) is { } changedSince)
                 {
-                    _server.Send(Put, $"api/notes/{waiting.Id}", new SaveNoteRequest(waiting.Title, waiting.Body));
+                    // Changed on the server, or gone from it, between the read and the save: both versions are kept.
+                    return KeepBoth(waiting, waiting.Id, changedSince.Stored, clientId);
                 }
 
                 RememberSaved(waiting.Id, waiting.Title, waiting.Body);
@@ -640,6 +643,17 @@ public sealed class ServerNotesData : INotesData
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Saves what was typed over the note, as long as it still has <paramref name="read"/>, the text just read. Null
+    /// when it was saved. Otherwise the answer says what the note is now, or has nothing when it's gone. A server from
+    /// before saves without checking, as it always has.
+    /// </summary>
+    private NoteSaveReply? SendOver(long noteId, OfflineNote waiting, string read)
+    {
+        var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{noteId}", new SaveNoteRequest(waiting.Title, waiting.Body, read));
+        return reply.Value ? null : reply;
     }
 
     /// <summary>
