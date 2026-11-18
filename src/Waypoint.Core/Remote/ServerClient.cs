@@ -382,7 +382,10 @@ public sealed partial class ServerClient
     /// </summary>
     public string ClientId { get; }
 
-    /// <summary>A file made on the server, such as the notes export. Like a change, it needs the server.</summary>
+    /// <summary>
+    /// A file made on the server, such as the notes export. Like a change, it needs the server. A large one can take
+    /// longer than a page read waits, so it uses the long-wait client files use.
+    /// </summary>
     public byte[] Download(string path)
     {
         if (!IsOnline)
@@ -392,8 +395,8 @@ public sealed partial class ServerClient
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, path);
-            using var response = SendNow(request);
+            using var request = FileRequest(HttpMethod.Get, path);
+            using var response = SendNow(request, FileHttp ?? _http);
             if (!Settle(response))
             {
                 throw Unavailable();

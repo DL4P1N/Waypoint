@@ -60,6 +60,13 @@ public interface INotesData : INoteFileStore, IPreferences
 
     IReadOnlyList<NoteDetail> GetNotes(string? filter = null);
 
+    /// <summary>
+    /// Saves the note only if its text is still <paramref name="expectedBody"/>, checked and saved in one step where
+    /// the note is kept, so a change landing in between, such as a reply added from Discord, is never overwritten.
+    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>.
+    /// </summary>
+    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now);
+
     void RestoreNote(long id, DateTime now);
 
     IReadOnlyList<NoteDetail> SearchNotes(string? words);
@@ -75,6 +82,12 @@ public interface INotesData : INoteFileStore, IPreferences
     FolderEdit RenameNoteFolder(long id, string name);
 
     bool MoveNoteFolder(long id, long? parentId, int position);
+
+    /// <summary>
+    /// Puts the folders in that order inside <paramref name="parentId"/> all at once, so a failure partway never
+    /// leaves half of the new order. False, with nothing changed, if any of them can't go there.
+    /// </summary>
+    bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids);
 
     FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes);
 
@@ -198,6 +211,11 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
 
     public bool SaveNote(long id, string title, string body, DateTime now) => database.SaveNote(id, title, body, now);
 
+    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now) =>
+        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now) ? NoteSaveResult.Saved
+        : database.GetNote(id) is { } stored ? NoteSaveResult.Changed(stored)
+        : NoteSaveResult.Gone;
+
     public void DeleteNote(long id, DateTime now) => database.DeleteNote(id, now);
 
     public bool MoveNoteToFolder(long noteId, long? folderId) => database.MoveNoteToFolder(noteId, folderId);
@@ -220,6 +238,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public FolderEdit RenameNoteFolder(long id, string name) => database.RenameNoteFolder(id, name);
 
     public bool MoveNoteFolder(long id, long? parentId, int position) => database.MoveNoteFolder(id, parentId, position);
+
+    public bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids) => database.ReorderNoteFolders(parentId, ids);
 
     public FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes) => database.DeleteNoteFolder(id, notes);
 

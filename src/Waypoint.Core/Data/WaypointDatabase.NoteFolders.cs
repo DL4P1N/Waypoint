@@ -162,6 +162,44 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>
+    /// Puts <paramref name="ids"/> first among the folders in <paramref name="parentId"/>, in that order, the same as
+    /// moving each to its place one at a time, but in one write. Any other folders there follow in the order they
+    /// had. Returns false, and changes nothing, if any folder or the parent is gone, a folder is listed twice, or a
+    /// move would put a folder inside itself.
+    /// </summary>
+    public bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        if (ids.Distinct().Count() != ids.Count
+            || (parentId is { } parent && !FolderExists(connection, parent))
+            || ids.Any(id => !FolderExists(connection, id) || (parentId is { } inside && IsInside(connection, inside, id))))
+        {
+            return false;
+        }
+
+        var oldParents = ids.Select(id => ReadFolderParent(connection, id)).Where(old => old != parentId).Distinct().ToList();
+        foreach (var id in ids)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE note_folders SET parent_id = $parent WHERE id = $id";
+            command.Parameters.AddWithValue("$parent", (object?)parentId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+
+        var listed = ids.ToHashSet();
+        Renumber(connection, [.. ids, .. ReadSiblingIds(connection, parentId).Where(id => !listed.Contains(id))]);
+        foreach (var old in oldParents)
+        {
+            Renumber(connection, ReadSiblingIds(connection, old));
+        }
+
+        transaction.Commit();
+        return true;
+    }
+
+    /// <summary>
     /// Deletes a folder. Its notes go where <paramref name="notes"/> says, and with Refuse a folder that still
     /// has notes stays. Folders inside it move up a level in its place, so nothing in them is lost.
     /// </summary>

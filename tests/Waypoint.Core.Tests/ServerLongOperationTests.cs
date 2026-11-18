@@ -72,6 +72,61 @@ public sealed class ServerLongOperationTests
     }
 
     [Fact]
+    public void A_large_notes_export_waits_as_long_as_files_do()
+    {
+        // The page client gives up after 100 ms, and the zip takes 400 ms to come back.
+        var handler = new SlowZip(TimeSpan.FromMilliseconds(400));
+        var client = new ServerClient(new HttpClient(handler) { BaseAddress = new Uri("http://server/"), Timeout = TimeSpan.FromMilliseconds(100) }, "token")
+        {
+            FileHttp = new HttpClient(handler) { BaseAddress = new Uri("http://server/"), Timeout = TimeSpan.FromSeconds(30) },
+        };
+        var destination = Path.Combine(Path.GetTempPath(), $"waypoint-export-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(2, new ServerBackups(client).ExportNotes(destination));
+            Assert.Equal("# Seed list\n\nradish", File.ReadAllText(Path.Combine(destination, "Seed list.md")));
+            Assert.Equal(ServerState.Online, client.State);
+
+            // The long-wait client is a different one, so the pairing token and this PC's id go on the request itself.
+            Assert.Equal("Bearer token", handler.Authorization);
+            Assert.Equal(client.ClientId, handler.ClientId);
+        }
+        finally
+        {
+            if (Directory.Exists(destination))
+            {
+                Directory.Delete(destination, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>Sends back a zip of two made-up notes after a wait, the way a big export takes a while to build.</summary>
+    private sealed class SlowZip(TimeSpan wait) : HttpMessageHandler
+    {
+        public string? Authorization { get; private set; }
+
+        public string? ClientId { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString();
+            ClientId = request.Headers.TryGetValues(ServerClient.ClientHeader, out var ids) ? ids.Single() : null;
+            await Task.Delay(wait, cancellationToken);
+            using var zip = new MemoryStream();
+            using (var archive = new System.IO.Compression.ZipArchive(zip, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var (name, text) in new[] { ("Seed list.md", "# Seed list\n\nradish"), ("Garden/Beds.md", "# Beds\n\nthree") })
+                {
+                    using var writer = new StreamWriter(archive.CreateEntry(name).Open());
+                    writer.Write(text);
+                }
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip.ToArray()) };
+        }
+    }
+
+    [Fact]
     public void A_long_operation_while_the_server_is_down_still_says_it_cant_reach_it()
     {
         var handler = new DownServer();

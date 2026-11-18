@@ -115,6 +115,46 @@ public sealed class NoteFolderTests : IDisposable
     }
 
     [Fact]
+    public void ANewOrderIsSavedWholeWithOtherFoldersAfterIt()
+    {
+        var a = Folder("A");
+        var b = Folder("B");
+        var c = Folder("C");
+        var d = Folder("D");
+        var inner = Folder("Inner", a);
+
+        Assert.True(_database.ReorderNoteFolders(null, [c, a, b]));
+        Assert.Equal(["C", "A", "B", "D"], _database.GetNoteFolders().Select(folder => folder.Name));
+        Assert.Equal([0, 1, 2, 3], _database.GetNoteFolders().Select(folder => folder.Position));
+
+        // A folder dragged in from another level moves there, and the level it left is renumbered.
+        Assert.True(_database.ReorderNoteFolders(null, [inner, d]));
+        Assert.Equal(["Inner", "D", "C", "A", "B"], _database.GetNoteFolders().Select(folder => folder.Name));
+        Assert.Empty(_database.GetNoteFolder(a)!.Children);
+        Assert.Equal([0, 1, 2, 3, 4], _database.GetNoteFolders().Select(folder => folder.Position));
+    }
+
+    [Fact]
+    public void ANewOrderThatCantAllBeSavedChangesNothing()
+    {
+        var a = Folder("A");
+        var b = Folder("B");
+        var c = Folder("C");
+        var inner = Folder("Inner", a);
+        var before = _database.GetNoteFolders();
+
+        // One folder gone, one listed twice, a folder put inside itself, or a parent that's gone: none of it is kept.
+        Assert.False(_database.ReorderNoteFolders(null, [c, b, 999, a]));
+        Assert.False(_database.ReorderNoteFolders(null, [c, b, c, a]));
+        Assert.False(_database.ReorderNoteFolders(inner, [b, a]));
+        Assert.False(_database.ReorderNoteFolders(999, [c, b]));
+
+        Assert.Equivalent(before, _database.GetNoteFolders(), strict: true);
+        Assert.Equal(["A", "B", "C"], _database.GetNoteFolders().Select(folder => folder.Name));
+        Assert.Equal("Inner", Assert.Single(_database.GetNoteFolder(a)!.Children).Name);
+    }
+
+    [Fact]
     public void DeletingAFolderWithNotesAsksFirst()
     {
         var id = Folder("School");
