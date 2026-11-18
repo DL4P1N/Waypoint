@@ -333,7 +333,7 @@ public partial class App : System.Windows.Application
                 : [new ConnectionStatus("Server", PcMode.NeedsAddressNotice)]));
 
         _statusTimer = new DispatcherTimer { Interval = StatusRefreshInterval };
-        _statusTimer.Tick += (_, _) => RefreshStatus();
+        _statusTimer.Tick += async (_, _) => await RefreshStatusAheadAsync();
         _statusTimer.Start();
 
         if (_server is null)
@@ -1181,7 +1181,12 @@ public partial class App : System.Windows.Application
                 _ = SyncWithServerAsync();
             }
 
-            RefreshStatus();
+            // Only the waiting count changed here, so the pages are shown from what was read lately.
+            using (_server.Client.UseRecentReads())
+            {
+                RefreshStatus();
+            }
+
             return;
         }
 
@@ -1266,7 +1271,26 @@ public partial class App : System.Windows.Application
             LogError(exception);
         }
 
-        RefreshStatus();
+        await RefreshStatusAheadAsync();
+    }
+
+    /// <summary>
+    /// The refresh made every so often. In server mode what the pages read is read first off this thread, and the
+    /// pages are then shown from those reads, so a slow or unreachable server never holds the window still.
+    /// </summary>
+    private async System.Threading.Tasks.Task RefreshStatusAheadAsync()
+    {
+        if (_server is not { } server)
+        {
+            RefreshStatus();
+            return;
+        }
+
+        await server.Client.RefreshReadsAsync();
+        using (server.Client.UseRecentReads())
+        {
+            RefreshStatus();
+        }
     }
 
     private void ShowNotesSent(IReadOnlyList<Waypoint.Core.Remote.OfflineNoteSent> sent)

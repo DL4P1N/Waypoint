@@ -33,6 +33,7 @@ public sealed partial class ServerClient
             return FileSendResult.Away;
         }
 
+        using var change = Changing();
         try
         {
             await using var file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true);
