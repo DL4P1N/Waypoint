@@ -227,6 +227,30 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task A_task_sent_again_under_the_same_id_is_kept_once_and_one_from_a_pc_from_before_is_added_as_always()
+    {
+        var http = Paired();
+        var task = new HandAddedItem(ItemKind.Task, "Fold the made up laundry", null);
+
+        var first = await (await http.PostAsJsonAsync("/api/items?client=pc-a:1", task, RemoteJson.Options)).Content.ReadFromJsonAsync<HandAddResult>(RemoteJson.Options);
+        var again = await (await http.PostAsJsonAsync("/api/items?client=pc-a:1", task, RemoteJson.Options)).Content.ReadFromJsonAsync<HandAddResult>(RemoteJson.Options);
+        Assert.Equal(first!.Item!.Id, again!.Item!.Id);
+
+        // Another id is another task, and a PC from before sends none, so each of its adds is one.
+        await http.PostAsJsonAsync("/api/items?client=pc-a:2", task, RemoteJson.Options);
+        await http.PostAsJsonAsync("/api/items", task, RemoteJson.Options);
+        await http.PostAsJsonAsync("/api/items", task, RemoteJson.Options);
+        var open = await http.GetFromJsonAsync<List<StoredItem>>("/api/items/open", RemoteJson.Options);
+        Assert.Equal(4, open!.Count(item => item.Title == "Fold the made up laundry"));
+
+        // Deleted since, it's added anew rather than lost.
+        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        data.DeleteItem(first.Item, DateTime.Now);
+        var anew = await (await http.PostAsJsonAsync("/api/items?client=pc-a:1", task, RemoteJson.Options)).Content.ReadFromJsonAsync<HandAddResult>(RemoteJson.Options);
+        Assert.NotEqual(first.Item.Id, anew!.Item!.Id);
+    }
+
+    [Fact]
     public void The_to_do_page_works_the_same_through_the_server()
     {
         var server = new ServerClient(Paired(), _token);

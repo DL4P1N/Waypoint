@@ -37,6 +37,50 @@ public sealed partial class WaypointDatabase
         return added;
     }
 
+    /// <summary>
+    /// The same, sent from a PC with an id of its own. Sent again with the same id, such as after the answer was lost,
+    /// it gives the item already added rather than adding another. One that's since been deleted doesn't count, so
+    /// adding it again then adds it anew.
+    /// </summary>
+    public HandAddResult AddByHandOnce(string clientId, HandAddedItem input, DateTime now)
+    {
+        lock (_sentOnce)
+        {
+            // The item and the id it was sent under are one write, so a failure between can't add it twice.
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            using (var find = connection.CreateCommand())
+            {
+                find.CommandText = "SELECT id FROM items WHERE client_id = $client AND kind <> 'Note' AND canceled = 0";
+                find.Parameters.AddWithValue("$client", clientId);
+                if (find.ExecuteScalar() is long made && FindItem(connection, ItemSource.Capture, made) is { } item)
+                {
+                    return new HandAddResult(item);
+                }
+            }
+
+            using (var forget = connection.CreateCommand())
+            {
+                forget.CommandText = "UPDATE items SET client_id = NULL WHERE client_id = $client";
+                forget.Parameters.AddWithValue("$client", clientId);
+                forget.ExecuteNonQuery();
+            }
+
+            var added = AddByHand(connection, input, now);
+            if (added.Item is { } stored)
+            {
+                using var mark = connection.CreateCommand();
+                mark.CommandText = "UPDATE items SET client_id = $client WHERE id = $id";
+                mark.Parameters.AddWithValue("$client", clientId);
+                mark.Parameters.AddWithValue("$id", stored.Id);
+                mark.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+            return added;
+        }
+    }
+
     /// <summary>The same, inside the caller's write. The capture, the item, and its filter land together or not at all.</summary>
     private static HandAddResult AddByHand(SqliteConnection connection, HandAddedItem input, DateTime now)
     {

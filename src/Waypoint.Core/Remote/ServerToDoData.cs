@@ -15,6 +15,11 @@ public sealed class ServerToDoData(ServerClient server) : IToDoData
     private static readonly HttpMethod Post = HttpMethod.Post;
     private static readonly HttpMethod Put = HttpMethod.Put;
 
+    private readonly Lock _unansweredGate = new();
+
+    /// <summary>The last item added by hand that no answer came back for, and the id it was sent under.</summary>
+    private (HandAddedItem Input, string Id)? _unanswered;
+
     public string? GetPreference(string key) => server.GetOr($"api/preferences/{Uri.EscapeDataString(key)}", new PreferenceValue(null)).Value;
 
     public void SetPreference(string key, string value) => server.Send(Put, $"api/preferences/{Uri.EscapeDataString(key)}", new PreferenceValue(value));
@@ -38,7 +43,34 @@ public sealed class ServerToDoData(ServerClient server) : IToDoData
 
     public FilterEdit CreateToDoFilter(string name) => server.Send<FilterEdit>(Post, "api/filters", new NameRequest(name));
 
-    public HandAddResult AddByHand(HandAddedItem input, DateTime now) => server.Send<HandAddResult>(Post, "api/items", input);
+    /// <summary>
+    /// Sent with an id of its own, so adding the same thing again after an answer was lost keeps it once. The id is
+    /// kept until an answer comes back, and a server from before leaves it unread.
+    /// </summary>
+    public HandAddResult AddByHand(HandAddedItem input, DateTime now)
+    {
+        string id;
+        lock (_unansweredGate)
+        {
+            if (_unanswered is not { } unanswered || unanswered.Input != input)
+            {
+                _unanswered = unanswered = (input, Guid.NewGuid().ToString("N"));
+            }
+
+            id = unanswered.Id;
+        }
+
+        var added = server.Send<HandAddResult>(Post, $"api/items?client={Uri.EscapeDataString($"{server.ClientId}:{id}")}", input);
+        lock (_unansweredGate)
+        {
+            if (_unanswered is { } sent && sent.Id == id)
+            {
+                _unanswered = null;
+            }
+        }
+
+        return added;
+    }
 
     public SpendSummary GetSpendSummary(DateOnly today) => server.GetOr("api/money", new SpendSummary(null, null));
 

@@ -394,7 +394,7 @@ public sealed class ServerAndPcTests : IDisposable
         Assert.Equal(["buy a made up stamp", "water the made up fern"], await PendingCaptures());
     }
 
-    [Fact(Skip = "bug: a task added by hand in server mode whose answer is lost is told as not added, and adding it again makes a second copy, since api/items takes no client id to recognize the resend.")]
+    [Fact]
     public async Task A_task_added_by_hand_whose_answer_was_lost_is_kept_once_when_added_again()
     {
         var pc = StartPc();
