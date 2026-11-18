@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Controls;
 using Waypoint.App;
 using Waypoint.Core.Capture;
+using Waypoint.Core.Files;
 using Waypoint.Core.Notes;
 using Waypoint.Core.Remote;
 
@@ -87,7 +88,17 @@ public sealed class ServerNotesClickTests
                     return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
                 }
 
-                if (path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
+                if (path == "/api/notes/7/files")
+                {
+                    var file = JsonSerializer.Deserialize<FileText>(sent, RemoteJson.Options)!;
+                    Changes.Add($"attach 7 {file.Name}");
+                    body = new StartedNote(7, "Seed list", null, null);
+                }
+                else if (path == "/api/notes/7/generation")
+                {
+                    body = new Found<NoteGeneration>(new NoteGeneration(null, false, Changes.Count(change => change.StartsWith("attach", StringComparison.Ordinal))));
+                }
+                else if (path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
                 {
                     if (request.Method == HttpMethod.Put)
                     {
@@ -245,6 +256,37 @@ public sealed class ServerNotesClickTests
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
         Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
         Assert.Equal(1, server.NotesMade);
+    });
+
+    [Fact]
+    public void Adding_a_file_to_a_note_returns_at_once_while_the_server_holds_it_and_says_what_to_do_next() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+        var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid():N}.txt");
+        System.IO.File.WriteAllText(file, "Sow radish in early spring.");
+        try
+        {
+            server.ChangeArrived.Reset();
+            server.ReleaseChanges.Reset();
+            UiTest.Call(view, "AttachFiles", 7L, new List<string> { file });
+
+            // The window carries on while the server holds the file.
+            ServerToDoClickTests.PumpUntil(ui, () => server.ChangeArrived.IsSet, "the file to be sent");
+            ui.Pump();
+            Assert.Empty(server.Changes);
+            Assert.True(work.ChangesWaiting);
+
+            server.ReleaseChanges.Set();
+            var message = UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message");
+            ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && message.Text.Contains("Choose Write notes", StringComparison.Ordinal), "what to do next");
+            Assert.Equal([$"attach 7 {System.IO.Path.GetFileName(file)}"], server.Changes);
+            Assert.Equal("radish", body.Text);
+        }
+        finally
+        {
+            System.IO.File.Delete(file);
+        }
     });
 
     [Fact]

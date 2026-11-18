@@ -223,7 +223,7 @@ public sealed class LectureRecorder : IDisposable
         StateChanged?.Invoke();
     }
 
-    private void HandOff(RecordingInfo recording)
+    private async void HandOff(RecordingInfo recording)
     {
         var keep = recording.KeepAudio;
         if (!_queue.IsReady && !_queue.AgreedToDownload)
@@ -243,7 +243,8 @@ public sealed class LectureRecorder : IDisposable
 
         try
         {
-            var job = _core.HandOff(recording with { KeepAudio = keep }, _queue);
+            // Its note is made on the server in server mode, so that's sent in the Notes page's order, off the window's thread.
+            var job = await _window.NotesPage.Work.Run(() => _core.HandOff(recording with { KeepAudio = keep }, _queue));
             _window.ShowNotes();
             _window.NotesPage.ShowRecordedNote(job.NoteId);
         }

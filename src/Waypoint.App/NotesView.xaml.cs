@@ -802,16 +802,25 @@ public partial class NotesView : UserControl
     }
 
     /// <summary>Opens the note a finished recording became, while it's transcribed.</summary>
-    public void ShowRecordedNote(long noteId)
+    public async void ShowRecordedNote(long noteId)
     {
         Flush();
         RefreshTranscriptions();
         FoldersChanged(refocus: false);
-        Open(_notes.GetNote(noteId));
-        var note = _notes.GetNote(noteId);
-        var place = note?.FolderId is { } folder ? _notes.GetNoteFolder(folder)?.Name ?? "Unfiled" : "Unfiled";
+        var (note, place) = await Work.Read(() =>
+        {
+            var note = _notes.GetNote(noteId);
+            return (note, PlaceName(note?.FolderId));
+        });
+
+        // Anything typed while it was read is saved before it opens.
+        Flush();
+        Open(note);
         Bar.Show($"Recording saved as {note?.Title} in {place}. It's being turned into notes on this PC.");
     }
+
+    /// <summary>The name of the folder a note was put in, for saying where it went. Asks the server in server mode.</summary>
+    private string PlaceName(long? folderId) => folderId is { } folder ? _notes.GetNoteFolder(folder)?.Name ?? "Unfiled" : "Unfiled";
 
     private async void NewFolder(long? parentId)
     {
@@ -2009,7 +2018,7 @@ public partial class NotesView : UserControl
         foreach (var path in paths)
         {
             var file = await Task.Run(() => ImageText.ReadFile(path));
-            var started = maker.StartFromFile(file, picked, picked is not null, DateTime.Now);
+            var started = await Work.Run(() => maker.StartFromFile(file, picked, picked is not null, DateTime.Now));
             if (started.Problem is { } problem)
             {
                 problems.Add(problem);
@@ -2024,15 +2033,13 @@ public partial class NotesView : UserControl
         {
             // Anything typed while the files were read is saved before the new note opens.
             Flush();
-            Open(_notes.GetNote(last.NoteId));
+            var note = await Work.Read(() => _notes.GetNote(last.NoteId));
+            Flush();
+            Open(note);
         }
 
         FoldersChanged(refocus: false);
-        var lines = made.Select(started =>
-        {
-            var place = started.FolderId is { } folder ? _notes.GetNoteFolder(folder)?.Name ?? "Unfiled" : "Unfiled";
-            return $"Made {started.Title} in {place}.";
-        }).Concat(problems).ToList();
+        var lines = (await Work.Read(() => made.Select(started => $"Made {started.Title} in {PlaceName(started.FolderId)}.").ToList())).Concat(problems).ToList();
         if (made.Count > 0)
         {
             lines.Add("The notes are being written now.");
@@ -2065,32 +2072,37 @@ public partial class NotesView : UserControl
         foreach (var path in paths)
         {
             var file = await Task.Run(() => ImageText.ReadFile(path));
-            var attached = maker.AttachFile(noteId, file, DateTime.Now);
+            var attached = await Work.Run(() => maker.AttachFile(noteId, file, DateTime.Now));
             lines.Add(attached.Problem ?? $"Added {file.Name} to Sources.");
         }
 
-        if (_draft.Id == noteId)
-        {
-            ShowNoteExtras();
-        }
-
-        var generation = _notes.GetNoteGeneration(noteId);
+        ShowExtrasIfOpen(noteId);
+        var generation = await Work.Read(() => _notes.GetNoteGeneration(noteId));
         if (generation is { SourceCount: > 0 } && lines.Any(line => line.StartsWith("Added", StringComparison.Ordinal)))
         {
             lines.Add(generation.WasGenerated ? "Choose Write again to use it in the notes." : "Choose Write notes to make notes from it.");
         }
 
         Bar.Show(string.Join(" ", lines));
-        Refresh(force: true);
+        ShowSoon(force: true);
     }
+
+    /// <summary>The open note's status, sources and suggestions drawn again, if it's this one, from what's read in server mode.</summary>
+    private void ShowExtrasIfOpen(long noteId) => Work.Show(() =>
+    {
+        if (_draft.Id == noteId)
+        {
+            ShowNoteExtras();
+        }
+    });
 
     /// <summary>
     /// Asks before notes replace text the user has in the note. Text they changed after notes were written is
     /// replaced only on a yes. Text typed by hand before any notes were written is kept as a source.
     /// </summary>
-    private bool ConfirmReplace(long noteId)
+    private async Task<bool> ConfirmReplace(long noteId)
     {
-        if (_notes.GetNoteGeneration(noteId) is not { EditedSince: true } generation)
+        if (await Work.Read(() => _notes.GetNoteGeneration(noteId)) is not { EditedSince: true } generation)
         {
             return true;
         }
@@ -2157,23 +2169,18 @@ public partial class NotesView : UserControl
             }
         }
 
-        Finish(noteId, outcome);
+        await Finish(noteId, outcome);
     }
 
-    private void Finish(long noteId, NoteWriteOutcome outcome)
+    private async Task Finish(long noteId, NoteWriteOutcome outcome)
     {
-        var title = _notes.GetNote(noteId)?.Title ?? "The note";
+        var title = (await Work.Read(() => _notes.GetNote(noteId)))?.Title ?? "The note";
         switch (outcome.Status)
         {
             case NoteWriteStatus.Written:
                 var before = outcome.Before;
                 Action? undo = before is not null && !string.IsNullOrWhiteSpace(before.Body)
-                    ? () =>
-                    {
-                        _notes.RestoreNoteBody(noteId, before, DateTime.Now);
-                        ReloadIfOpen(noteId);
-                        Refresh(force: true);
-                    }
+                    ? () => RestoreBody(noteId, before)
                     : null;
                 Bar.Show($"{title}: {outcome.Message}", undo);
                 break;
@@ -2192,7 +2199,7 @@ public partial class NotesView : UserControl
                     title: "New notes are ready");
                 if (ask.ShowDialog() == true)
                 {
-                    Finish(noteId, maker.SaveWrittenAnyway(noteId, notes, DateTime.Now));
+                    await Finish(noteId, await Work.Run(() => maker.SaveWrittenAnyway(noteId, notes, DateTime.Now)));
                     return;
                 }
 
@@ -2214,11 +2221,22 @@ public partial class NotesView : UserControl
         }
 
         ReloadIfOpen(noteId);
-        Refresh(force: true);
+        ShowSoon(force: true);
     }
 
-    /// <summary>The editor is read only while a note's notes are written, so nothing typed is waiting to be saved here.</summary>
-    private void ReloadIfOpen(long noteId)
+    /// <summary>Undo for notes written over a note: its text from before goes back, after anything saved ahead of it.</summary>
+    private async void RestoreBody(long noteId, NoteBodyState before)
+    {
+        await Work.Run(() => _notes.RestoreNoteBody(noteId, before, DateTime.Now));
+        ReloadIfOpen(noteId);
+        ShowSoon(force: true);
+    }
+
+    /// <summary>
+    /// The editor is read only while a note's notes are written, so nothing typed is waiting to be saved here. In
+    /// server mode it's read after anything saved ahead of it, and opened again unless something was typed meanwhile.
+    /// </summary>
+    private async void ReloadIfOpen(long noteId)
     {
         if (_draft.Id != noteId)
         {
@@ -2230,9 +2248,11 @@ public partial class NotesView : UserControl
             Flush();
         }
 
-        if (_notes.GetNote(noteId) is { } stored)
+        var (title, body) = (_draft.Title, _draft.Body);
+        var stored = await Work.Read(() => _notes.GetNote(noteId));
+        if (stored is not null && _draft.Id == noteId && _draft.Title == title && _draft.Body == body)
         {
-            Open(stored, keepMode: true);
+            Open(WithPendingSave(stored), keepMode: true);
         }
     }
 
@@ -2375,7 +2395,7 @@ public partial class NotesView : UserControl
         StatusPanel.Visibility = Visibility.Visible;
     }
 
-    private void OnStatusButtonClicked(object sender, RoutedEventArgs e)
+    private async void OnStatusButtonClicked(object sender, RoutedEventArgs e)
     {
         if (_draft.Id is { } id && !_jobs.ContainsKey(id) && TranscriptionFor(id) is { } transcribing && _transcription is { } queue)
         {
@@ -2397,7 +2417,7 @@ public partial class NotesView : UserControl
             return;
         }
 
-        Rewrite(null);
+        await Rewrite(null);
     }
 
     /// <summary>Asks before a transcription is stopped, titled for that, with keeping it going as the default.</summary>
@@ -2447,7 +2467,7 @@ public partial class NotesView : UserControl
     /// Asks once, with the "Keep the audio" choice and, the first time, the download. Each recording gets its note
     /// right away, filed like a file would be, and is transcribed in the background one at a time.
     /// </summary>
-    public void ImportAudio(IReadOnlyList<string> paths)
+    public async void ImportAudio(IReadOnlyList<string> paths)
     {
         if (_transcription is not { } queue || _maker is null)
         {
@@ -2470,6 +2490,7 @@ public partial class NotesView : UserControl
 
         Flush();
         var picked = SelectedFolder?.Folder.Id;
+        var keepAudio = ask.KeepTheAudio;
         var lines = new List<string>();
         TranscriptionJob? last = null;
         foreach (var path in paths)
@@ -2480,17 +2501,27 @@ public partial class NotesView : UserControl
                 continue;
             }
 
-            last = queue.Import(path, ask.KeepTheAudio, picked, picked is not null);
-            var note = _notes.GetNote(last.NoteId);
-            var place = note?.FolderId is { } folder ? _notes.GetNoteFolder(folder)?.Name ?? "Unfiled" : "Unfiled";
-            lines.Add($"Made {note?.Title ?? last.Name} in {place}.");
+            // Its note is made on the server in server mode, so that's sent off the window's thread.
+            var (job, line) = await Work.Run(() =>
+            {
+                var job = queue.Import(path, keepAudio, picked, picked is not null);
+                var note = _notes.GetNote(job.NoteId);
+                return (job, $"Made {note?.Title ?? job.Name} in {PlaceName(note?.FolderId)}.");
+            });
+            last = job;
+            lines.Add(line);
         }
 
         RefreshTranscriptions();
         if (last is not null)
         {
             Flush();
-            Open(_notes.GetNote(last.NoteId));
+            var lastId = last.NoteId;
+            var note = await Work.Read(() => _notes.GetNote(lastId));
+
+            // Anything typed while it was read is saved before it opens.
+            Flush();
+            Open(note);
             lines.Add(needsDownload ? "Transcribing starts once the download is done." : "It's being transcribed on this PC now.");
         }
 
@@ -2513,12 +2544,8 @@ public partial class NotesView : UserControl
                     ReloadIfOpen(noteId);
                 }
 
-                if (_draft.Id == noteId)
-                {
-                    ShowNoteExtras();
-                }
-
-                Refresh(force: true);
+                ShowExtrasIfOpen(noteId);
+                ShowSoon(force: true);
             }
             else if (after?.Status == TranscriptionStatus.Transcribing)
             {
@@ -2553,7 +2580,7 @@ public partial class NotesView : UserControl
         ShowStatus();
     }
 
-    private void OnChangeClicked(object sender, RoutedEventArgs e)
+    private async void OnChangeClicked(object sender, RoutedEventArgs e)
     {
         var request = ChangeBox.Text.Trim();
         if (request.Length == 0)
@@ -2562,7 +2589,8 @@ public partial class NotesView : UserControl
             return;
         }
 
-        if (Rewrite(request))
+        // Cleared once it's on its way, unless something else was typed there while the server was asked.
+        if (await Rewrite(request) && ChangeBox.Text.Trim() == request)
         {
             ChangeBox.Text = "";
         }
@@ -2578,7 +2606,7 @@ public partial class NotesView : UserControl
     }
 
     /// <summary>Writes the open note again from its sources. False if the user kept their version.</summary>
-    private bool Rewrite(string? request)
+    private async Task<bool> Rewrite(string? request)
     {
         Flush();
         if (_draft.Id is not { } id || _jobs.ContainsKey(id))
@@ -2586,7 +2614,7 @@ public partial class NotesView : UserControl
             return false;
         }
 
-        if (!ConfirmReplace(id))
+        if (!await ConfirmReplace(id))
         {
             Bar.Show("Kept your version. Nothing was rewritten.");
             return false;
