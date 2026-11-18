@@ -97,6 +97,7 @@ public partial class ItemsWindow : Window
         RestorePlace();
         TodayPage.Work = PageWorkFor(server);
         NotesPage.Work = PageWorkFor(server);
+        SettingsPage.Work = PageWorkFor(server);
         _askWork = PageWorkFor(server);
         PageWork.SavingChanged += ShowSaving;
         Closed += (_, _) => PageWork.SavingChanged -= ShowSaving;
@@ -384,7 +385,7 @@ public partial class ItemsWindow : Window
         RefreshPage();
         if (page == Page.Settings)
         {
-            SettingsPage.Load();
+            SettingsPage.LoadSoon();
         }
 
         Visibility PageVisibility(Page shown) => shown == page ? Visibility.Visible : Visibility.Collapsed;
@@ -425,7 +426,11 @@ public partial class ItemsWindow : Window
 
                 break;
             case Page.Settings:
-                SettingsPage.Refresh();
+                if (!every || !SettingsPage.Work.IsBusy)
+                {
+                    SettingsPage.Work.Show(SettingsPage.Refresh);
+                }
+
                 break;
             default:
                 if (!every || !HistoryPage.Work.IsBusy)

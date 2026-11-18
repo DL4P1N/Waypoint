@@ -246,19 +246,17 @@ public partial class SettingsView : UserControl
     }
 
     /// <summary>Saved where email is read: on this PC in local mode, on the server in server mode. Neither value is a secret.</summary>
-    private void OnAlertEmailSaved(object sender, RoutedEventArgs e)
+    private async void OnAlertEmailSaved(object sender, RoutedEventArgs e)
     {
-        try
+        var form = new AlertEmailForm(EmailClientId.Text, EmailOwnAddress.Text);
+        var (ok, reply) = await Change(() => _settings.SaveAlertEmail(form), text => ShowNote(EmailNote, text));
+        if (!ok)
         {
-            ShowNote(EmailNote, _settings.SaveAlertEmail(new AlertEmailForm(EmailClientId.Text, EmailOwnAddress.Text)));
-        }
-        catch (ServerUnavailableException away)
-        {
-            ShowNote(EmailNote, PageMessages.CantChange(away));
             return;
         }
 
-        Refresh();
+        ShowNote(EmailNote, reply);
+        ShowAfterChanges();
     }
 
     /// <summary>
@@ -291,6 +289,28 @@ public partial class SettingsView : UserControl
         _moveNotesFolder = move;
         NotesFolderPath.Text = current();
     }
+
+    /// <summary>How the page reads and changes its data: straight away on this PC, or in order without holding the window in server mode.</summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
+
+    /// <summary>The lists and status lines again once this page's changes are done.</summary>
+    private void ShowAfterChanges() => Work.ShowAfterChanges(nameof(Refresh), Refresh);
+
+    /// <summary>
+    /// For the page opened in server mode: filled at once from what was kept, then again from what's read, unless
+    /// something on the page has the keyboard, so what's being typed is never replaced.
+    /// </summary>
+    public void LoadSoon() => Work.Show(Load, () =>
+    {
+        if (IsKeyboardFocusWithin)
+        {
+            Refresh();
+        }
+        else
+        {
+            Load();
+        }
+    });
 
     /// <summary>Only lists and status lines, so a refresh never replaces something being typed.</summary>
     public void Refresh()
@@ -461,9 +481,11 @@ public partial class SettingsView : UserControl
         CalendarFeedNote.Visibility = CalendarFeedNote.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnCalendarFeedSaved(object sender, RoutedEventArgs e)
+    private async void OnCalendarFeedSaved(object sender, RoutedEventArgs e)
     {
-        if (!Change(() => _settings.SaveCalendarFeed(CalendarFeed.Text), ShowCalendar, out var reply))
+        var link = CalendarFeed.Text;
+        var (ok, reply) = await Change(() => _settings.SaveCalendarFeed(link), ShowCalendar);
+        if (!ok)
         {
             return;
         }
@@ -477,9 +499,10 @@ public partial class SettingsView : UserControl
         CalendarFeedChanged(reply);
     }
 
-    private void OnCalendarFeedRemoved(object sender, RoutedEventArgs e)
+    private async void OnCalendarFeedRemoved(object sender, RoutedEventArgs e)
     {
-        if (Change(() => _settings.RemoveCalendarFeed(), ShowCalendar, out var reply))
+        var (ok, reply) = await Change(() => _settings.RemoveCalendarFeed(), ShowCalendar);
+        if (ok)
         {
             CalendarFeedChanged(reply);
         }
@@ -488,8 +511,8 @@ public partial class SettingsView : UserControl
     private void CalendarFeedChanged(string reply)
     {
         ShowCalendar(reply);
-        ShowCalendarFeed();
-        Refresh();
+        Work.Peek(ShowCalendarFeed);
+        ShowAfterChanges();
         _changed();
     }
 
@@ -541,7 +564,7 @@ public partial class SettingsView : UserControl
         _changed();
     }
 
-    private void OnWeeklySaved(object sender, RoutedEventArgs e)
+    private async void OnWeeklySaved(object sender, RoutedEventArgs e)
     {
         var days = Days.SelectedItems.Cast<string>().ToList();
         if (days.Count == 0)
@@ -556,7 +579,8 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        if (!Change(() => _settings.SetWeeklyHours(days, $"{Clock(start)}-{Clock(end)}"), ShowWeekly, out var reply))
+        var (ok, reply) = await Change(() => _settings.SetWeeklyHours(days, $"{Clock(start)}-{Clock(end)}"), ShowWeekly);
+        if (!ok)
         {
             return;
         }
@@ -581,7 +605,7 @@ public partial class SettingsView : UserControl
         }
     }
 
-    private void OnShiftAdded(object sender, RoutedEventArgs e)
+    private async void OnShiftAdded(object sender, RoutedEventArgs e)
     {
         if (ReadHours(ShiftStart.Text, ShiftEnd.Text) is not ({ } start, { } end))
         {
@@ -590,7 +614,8 @@ public partial class SettingsView : UserControl
         }
 
         var day = _shiftDate.ToDateTime(TimeOnly.MinValue);
-        if (!Change(() => _settings.AddWorkShift(day.Add(start.ToTimeSpan()), day.Add(end.ToTimeSpan())), ShowShift, out var reply))
+        var (ok, reply) = await Change(() => _settings.AddWorkShift(day.Add(start.ToTimeSpan()), day.Add(end.ToTimeSpan())), ShowShift);
+        if (!ok)
         {
             return;
         }
@@ -604,21 +629,25 @@ public partial class SettingsView : UserControl
         WorkSaved(reply, ShowShift);
     }
 
-    private void OnDayOffAdded(object sender, RoutedEventArgs e) =>
-        WorkSaved(() => _settings.SetDayOff(_shiftDate.ToDateTime(TimeOnly.MinValue)), ShowShift);
-
-    private void OnCommuteSaved(object sender, RoutedEventArgs e)
+    private void OnDayOffAdded(object sender, RoutedEventArgs e)
     {
-        FieldSaved(() => _settings.SetCommute(Commute.Text), CommuteHint, "Try a number of minutes, like 15.");
-        WorkRemote.IsChecked = _settings.GetCommuteMinutes() == 0;
+        var day = _shiftDate.ToDateTime(TimeOnly.MinValue);
+        WorkSaved(() => _settings.SetDayOff(day), ShowShift);
+    }
+
+    private async void OnCommuteSaved(object sender, RoutedEventArgs e)
+    {
+        var commute = Commute.Text;
+        await FieldSaved(() => _settings.SetCommute(commute), CommuteHint, "Try a number of minutes, like 15.");
+        WorkRemote.IsChecked = Work.Peek(() => _settings.GetCommuteMinutes()) == 0;
     }
 
     /// <summary>Working from home is a commute of 0, so the box and the checkbox are two views of the one saved number.</summary>
-    private void OnWorkRemoteClicked(object sender, RoutedEventArgs e)
+    private async void OnWorkRemoteClicked(object sender, RoutedEventArgs e)
     {
         var minutes = WorkRemote.IsChecked == true ? 0 : WorkShift.DefaultCommuteMinutes;
-        FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.");
-        ShowCommute();
+        await FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.");
+        Work.Peek(ShowCommute);
     }
 
     private void ShowCommute()
@@ -628,17 +657,21 @@ public partial class SettingsView : UserControl
         WorkRemote.IsChecked = minutes == 0;
     }
 
-    private void OnHourlyRateSaved(object sender, RoutedEventArgs e) =>
-        FieldSaved(() => _settings.SetHourlyRate(BudgetFormWindow.ParseCents(HourlyRate.Text) is { } cents ? cents / 100m : null), HourlyRateHint, "Try an amount like 20.00.");
+    private async void OnHourlyRateSaved(object sender, RoutedEventArgs e)
+    {
+        var rate = BudgetFormWindow.ParseCents(HourlyRate.Text) is { } cents ? cents / 100m : (decimal?)null;
+        await FieldSaved(() => _settings.SetHourlyRate(rate), HourlyRateHint, "Try an amount like 20.00.");
+    }
 
     /// <summary>
     /// Something the field can't use is answered under it with an example, the way the other forms do, rather than
     /// with the question the chat would ask.
     /// </summary>
-    private void FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis)
+    private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis)
     {
         hint.Visibility = Visibility.Collapsed;
-        if (!Change(change, ShowWork, out var reply))
+        var (ok, reply) = await Change(change, ShowWork);
+        if (!ok)
         {
             return;
         }
@@ -668,9 +701,10 @@ public partial class SettingsView : UserControl
     }
 
     /// <summary>Runs a work change and says how it went under the part of the section it was made in.</summary>
-    private void WorkSaved(Func<OpReply> change, Action<string> show)
+    private async void WorkSaved(Func<OpReply> change, Action<string> show)
     {
-        if (Change(change, show, out var reply))
+        var (ok, reply) = await Change(change, show);
+        if (ok)
         {
             WorkSaved(reply, show);
         }
@@ -679,7 +713,7 @@ public partial class SettingsView : UserControl
     private void WorkSaved(OpReply reply, Action<string> show)
     {
         show(reply.Text);
-        Refresh();
+        ShowAfterChanges();
         _changed();
     }
 
@@ -689,7 +723,7 @@ public partial class SettingsView : UserControl
 
     private void ShowWork(string text) => ShowNote(WorkStatus, text);
 
-    private void OnBedtimeSaved(object sender, RoutedEventArgs e)
+    private async void OnBedtimeSaved(object sender, RoutedEventArgs e)
     {
         double? sleep = null;
         if (SleepHours.Text.Trim().Length > 0)
@@ -739,7 +773,7 @@ public partial class SettingsView : UserControl
             BedtimeChoices.CleanName(EveningStepName.Text),
             BedtimeChoices.CleanName(WindDownStepName.Text));
 
-        if (SaveBedtime(choices))
+        if (await SaveBedtime(choices))
         {
             ShowBedtime("Bedtime saved.");
         }
@@ -749,35 +783,38 @@ public partial class SettingsView : UserControl
     /// A tick saves straight away, like Less see-through, so leaving the page never drops one. It goes with the
     /// times and steps as they were saved, so anything typed above still waits for Save.
     /// </summary>
-    private void OnBedtimeTicked(object sender, RoutedEventArgs e)
+    private async void OnBedtimeTicked(object sender, RoutedEventArgs e)
     {
         if (_loading || _settings is null)
         {
             return;
         }
 
-        var saved = _settings.GetBedtime();
+        // What was last saved, read where the change is made, so two quick ticks each keep the other's.
+        var (evening, windDown, quiet, late) = (EveningStepOn.IsChecked == true, WindDownStepOn.IsChecked == true, QuietOn.IsChecked == true, LateCheckInsOn.IsChecked == true);
+        var saved = await Work.Read(() => _settings.GetBedtime());
         var choices = new BedtimeChoices(
             saved.SleepHours,
             saved.ReadyMinutes,
             saved.LatestBedtime is { } latest ? BedtimeChoices.FormatTime(latest) : null,
-            EveningStepOn.IsChecked == true,
-            WindDownStepOn.IsChecked == true,
+            evening,
+            windDown,
             saved.RoutineSteps ?? [],
-            QuietOn.IsChecked == true,
-            LateCheckInsOn.IsChecked == true,
+            quiet,
+            late,
             saved.EveningStepName,
             saved.WindDownStepName);
-        if (SaveBedtime(choices))
+        if (await SaveBedtime(choices))
         {
             BedtimeNote.Visibility = Visibility.Collapsed;
         }
     }
 
     /// <summary>Saves the bedtime choices and has reminders use them. False, with why shown, if they weren't saved.</summary>
-    private bool SaveBedtime(BedtimeChoices choices)
+    private async Task<bool> SaveBedtime(BedtimeChoices choices)
     {
-        if (!Change(() => _settings.SetBedtimeChoices(choices), ShowBedtime, out var problem))
+        var (ok, problem) = await Change(() => _settings.SetBedtimeChoices(choices), ShowBedtime);
+        if (!ok)
         {
             return false;
         }
@@ -793,7 +830,7 @@ public partial class SettingsView : UserControl
             _bedtime.Settings = choices.ApplyTo(_fileBedtime);
         }
 
-        Refresh();
+        ShowAfterChanges();
         _changed();
         return true;
     }
@@ -906,10 +943,11 @@ public partial class SettingsView : UserControl
         return new ClassMeeting(name, ClassPlace.Text.Trim(), days, start, end, travel);
     }
 
-    private void SaveClasses(List<ClassMeeting> classes)
+    private async void SaveClasses(List<ClassMeeting> classes)
     {
         var form = new ClassesForm(_termStart, _termEnd, classes);
-        if (!Change(() => _settings.SaveClasses(form), ShowClassesStatus, out var reply))
+        var (ok, reply) = await Change(() => _settings.SaveClasses(form), ShowClassesStatus);
+        if (!ok)
         {
             return;
         }
@@ -920,15 +958,17 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        LoadClasses();
+        // The classes as the server saved them, read off the window's thread, then shown from that.
+        var saved = await Work.Read(() => _settings.GetClasses());
+        Work.Peek(LoadClasses);
         if (_settings.OnServer && Classes is { } here)
         {
-            here.Use(ClassSetup.FromForm(_settings.GetClasses(), here));
+            here.Use(ClassSetup.FromForm(saved, here));
             _database.ScheduleCourses = here.Meetings.Select(meeting => meeting.Course).ToList();
         }
 
         ShowClassesStatus(reply);
-        Refresh();
+        ShowAfterChanges();
         _changed();
     }
 
@@ -1000,18 +1040,25 @@ public partial class SettingsView : UserControl
     private void ShowClassesStatus(string text) => ShowNote(ClassesStatus, text);
 
     /// <summary>Runs a change. If the server is away, the section's note says so and nothing else happens.</summary>
-    private static bool Change<T>(Func<T> change, Action<string> show, out T result)
+    /// <summary>
+    /// Runs a change, off the window's thread in server mode, after the page's earlier changes. If the server is away,
+    /// or too slow to answer, <paramref name="show"/> says so and nothing else happens.
+    /// </summary>
+    private async Task<(bool Ok, T Result)> Change<T>(Func<T> change, Action<string> show, [System.Runtime.CompilerServices.CallerMemberName] string what = "")
     {
         try
         {
-            result = change();
-            return true;
+            return (true, await Work.Run(change, what));
         }
         catch (ServerUnavailableException away)
         {
-            result = default!;
             show(PageMessages.CantChange(away));
-            return false;
+            return (false, default!);
+        }
+        catch (ServerTimedOutException slow)
+        {
+            show(slow.Message);
+            return (false, default!);
         }
     }
 
