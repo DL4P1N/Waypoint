@@ -35,6 +35,24 @@ public sealed partial class DiscordPhoneTests
         Assert.Equal(1, Rows("activation_sessions"));
     }
 
+    [Fact]
+    public async Task A_list_started_from_its_button_is_made_with_its_entries_or_not_at_all()
+    {
+        var worker = Worker(toDo: null, lists: null);
+        var offer = worker.OnDiscordCommand(new SlashCommand("listadd", Options(("list", "Made up chores"), ("entry", "dishes, laundry"))));
+
+        FailPartway("BEFORE INSERT ON list_entries WHEN NEW.text = 'laundry'");
+        await Assert.ThrowsAnyAsync<SqliteException>(() => worker.OnButtonActedAsync(new ButtonPress(DiscordBridge.ActionPrefix + Assert.Single(offer.Card.Actions).Id, null, "m1", "c")));
+        Assert.DoesNotContain("Made up chores", _database.GetListNames());
+
+        StopFailingPartway();
+        offer = worker.OnDiscordCommand(new SlashCommand("listadd", Options(("list", "Made up chores"), ("entry", "dishes, laundry"))));
+        var made = await worker.OnButtonActedAsync(new ButtonPress(DiscordBridge.ActionPrefix + Assert.Single(offer.Card.Actions).Id, null, "m2", "c"));
+
+        Assert.Contains("Started a list called Made up chores", made!.Outcome);
+        Assert.Equal(["dishes", "laundry"], _database.GetListEntries("Made up chores").Select(entry => entry.Text));
+    }
+
     private void FailPartway(string when)
     {
         using var connection = _database.Open();

@@ -249,9 +249,16 @@ public sealed partial class WaypointWorker
 
         if (action.StartsWith(MakeList, StringComparison.Ordinal) && _newLists.TryRemove(action[MakeList.Length..], out var asked))
         {
+            // Adding makes the list in the same write, so a failure partway never leaves it made but empty.
             var adding = ListLines(asked.Entry);
-            _database.CreateList(asked.List, _clock());
-            _database.AddListEntries(asked.List, adding, _clock());
+            if (adding.Any(entry => entry.Trim().Length > 0))
+            {
+                _database.AddListEntries(asked.List, adding, _clock());
+            }
+            else
+            {
+                _database.CreateList(asked.List, _clock());
+            }
             return new ButtonResult(Outcome: $"Started a list called {asked.List}, with {string.Join(", ", adding)} on it");
         }
 
