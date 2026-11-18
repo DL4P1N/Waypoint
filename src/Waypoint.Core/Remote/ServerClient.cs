@@ -209,6 +209,12 @@ public sealed partial class ServerClient
             return Parse<T>(recent);
         }
 
+        if (TryKept(path, out var keptJson, out var keptFresh))
+        {
+            fresh = keptFresh;
+            return keptJson is not null ? Parse<T>(keptJson) : throw Unavailable();
+        }
+
         if (IsOnline && ReadNow(path) is { } json)
         {
             fresh = true;
@@ -255,7 +261,7 @@ public sealed partial class ServerClient
         {
             foreach (var path in _lastReads.Keys.Where(matches).ToList())
             {
-                _readAt.Remove(path);
+                SetByHand(path);
                 Remember(path, JsonSerializer.Serialize(change(Parse<T>(_lastReads[path])), RemoteJson.Options));
             }
         }
@@ -266,7 +272,7 @@ public sealed partial class ServerClient
     {
         lock (_gate)
         {
-            _readAt.Remove(path);
+            SetByHand(path);
             Remember(path, JsonSerializer.Serialize(value, RemoteJson.Options));
         }
     }
