@@ -1616,7 +1616,17 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                 database.CountDiscordTry(id, Clock());
             }
         }
+
+        // Tried as many times as it may be, so the owner is told under it, once, rather than it going quiet.
+        foreach (var (id, channel) in database.GetGivenUpDiscordMessages(Clock(), UnfinishedAfter))
+        {
+            await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id);
+            database.FinishDiscordMessage(id, Clock());
+        }
     }
+
+    /// <summary>Said under a message whose work never finished however many times it was tried.</summary>
+    public const string GaveUp = "Couldn't finish this, so send it again.";
 
     private static JsonElement WithChannel(JsonElement message, string channel)
     {

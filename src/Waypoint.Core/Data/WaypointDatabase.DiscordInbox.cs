@@ -117,6 +117,28 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Messages handed over as many times as they may be without ever finishing, so the owner can be told.</summary>
+    public IReadOnlyList<(string MessageId, string ChannelId)> GetGivenUpDiscordMessages(DateTime now, TimeSpan unfinishedAfter)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT message_id, channel_id FROM discord_inbox
+            WHERE done_at IS NULL AND channel_id <> '' AND claimed_at <= $before AND tries >= $tries
+            ORDER BY claimed_at
+            """;
+        command.Parameters.AddWithValue("$before", FormatReminder(now - unfinishedAfter));
+        command.Parameters.AddWithValue("$tries", MaxDiscordTries);
+        var given = new List<(string, string)>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            given.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return given;
+    }
+
     public bool IsDiscordMessageFinished(string messageId)
     {
         using var connection = Open();

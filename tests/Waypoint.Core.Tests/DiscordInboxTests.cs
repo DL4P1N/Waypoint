@@ -296,6 +296,31 @@ public sealed class DiscordInboxTests : IDisposable
     }
 
     [Fact]
+    public async Task A_message_that_never_finishes_is_answered_once_when_it_is_given_up_on()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "50");
+        _discord.Add("23", "made up errand");
+
+        // Handed over again and again without its work ever being saved.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Assert.True(_database.ClaimDiscordMessage("23", "capture", _now, DiscordBridge.UnfinishedAfter));
+            _now = _now.AddMinutes(4);
+        }
+
+        var bridge = Bridge();
+        bridge.Captured = _ => { };
+        await bridge.PollAsync();
+        _now = _now.AddMinutes(10);
+        await bridge.PollAsync();
+
+        var told = Assert.Single(Posted());
+        Assert.Equal(DiscordBridge.GaveUp, JsonDocument.Parse(told).RootElement.GetProperty("embeds")[0].GetProperty("description").GetString());
+        Assert.Contains("\"message_id\":\"23\"", told);
+        Assert.True(_database.IsDiscordMessageFinished("23"));
+    }
+
+    [Fact]
     public void Messages_seen_before_the_upgrade_still_count_as_done()
     {
         _database.SetPreference("discord_seen", "made-up-1 made-up-2");
