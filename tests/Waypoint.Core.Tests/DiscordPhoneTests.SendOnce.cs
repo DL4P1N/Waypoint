@@ -86,6 +86,78 @@ public sealed partial class DiscordPhoneTests
         AssertOneAction(second, card.Id, task);
     }
 
+    [Fact]
+    public async Task A_view_posted_just_before_a_crash_is_kept_on_the_next_start_and_not_posted_again()
+    {
+        AddTask("Made up reading", Today);
+
+        // The views go out and are noted, then Waypoint stops before where they are is kept.
+        FailPartway("BEFORE INSERT ON preferences WHEN NEW.key = 'discord_pinned_views'");
+        var first = Worker(lists: null);
+        await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
+        await Task.Delay(50);
+        first.StopDiscord();
+        StopFailingPartway();
+        var noted = _database.GetDiscordSends("view:");
+        Assert.NotEmpty(noted);
+        Assert.All(noted, send => Assert.NotNull(send.MessageId));
+        var second = Worker(lists: null);
+        await second.RefreshDiscordViewsAsync();
+        await Task.Delay(50);
+        AssertEachViewMadeOnce();
+        Assert.Empty(_database.GetDiscordSends("view:"));
+
+        // The view kept is the one edited when the list changes.
+        AddTask("Made up essay", Today);
+        _now = _now.AddMinutes(2);
+        await second.RefreshDiscordViewsAsync();
+        var edit = Assert.Single(_discord.Of(HttpMethod.Patch), patch => patch.Body.Contains("Made up essay"));
+        Assert.Contains(noted, send => edit.Url.EndsWith("/messages/" + send.MessageId, StringComparison.Ordinal));
+        AssertEachViewMadeOnce();
+    }
+
+    [Fact]
+    public async Task A_view_made_but_never_heard_back_about_is_found_in_its_channel_and_brought_up_to_date()
+    {
+        AddTask("Made up reading", Today);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        var first = Worker(lists: null);
+        await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
+        await Task.Delay(50);
+        first.StopDiscord();
+        StopFailingPartway();
+        Assert.NotEmpty(ViewsMade());
+
+        _discord.ForgetNonces();
+        _discord.ListMade = true;
+        var second = Worker(lists: null);
+        await second.RefreshDiscordViewsAsync();
+        await Task.Delay(50);
+
+        AssertEachViewMadeOnce();
+        Assert.Empty(_database.GetDiscordSends("view:"));
+
+        // What it shows can't be told from the channel, so the next round draws it again in place.
+        _now = _now.AddMinutes(2);
+        await second.RefreshDiscordViewsAsync();
+        Assert.Contains(_discord.Of(HttpMethod.Patch), patch => patch.Url.Contains("/channels/todo-ch/messages/") && patch.Body.Contains("Made up reading"));
+        AssertEachViewMadeOnce();
+    }
+
+    /// <summary>The messages Discord made in the views channel, by their title.</summary>
+    private List<string> ViewsMade()
+    {
+        lock (_discord.MadeMessages)
+        {
+            return _discord.MadeMessages.Where(made => made.Channel == "todo-ch")
+                .Select(made => System.Text.Json.JsonDocument.Parse(made.Body).RootElement.GetProperty("embeds")[0].GetProperty("title").GetString()!)
+                .ToList();
+        }
+    }
+
+    /// <summary>To do and Waiting on each went out as one message, however many times they were tried.</summary>
+    private void AssertEachViewMadeOnce() => Assert.Equal(["To do", "Waiting on"], ViewsMade().Order());
+
     /// <summary>A made up task with a reminder already due.</summary>
     private (StoredItem Task, string Key) DueReminderFor(string title)
     {

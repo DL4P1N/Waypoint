@@ -125,9 +125,8 @@ public sealed class PinnedViews(WaypointDatabase database)
                 await bridge.DeleteAsync(placed.Channel, placed.Message);
             }
 
-            if (await bridge.PostAsync(view.Channel, view.Card) is { } message)
+            if (await PostOnceAsync(bridge, view, hash) is { } message)
             {
-                Store(view.Key, new Placed(view.Channel, message, hash));
                 await bridge.PinAsync(view.Channel, message);
             }
             else if (placed is not null)
@@ -150,6 +149,46 @@ public sealed class PinnedViews(WaypointDatabase database)
                 Forget(key);
             }
         }
+    }
+
+    /// <summary>
+    /// Posts a view and keeps where it is. It's noted before it goes, with Discord's nonce, so a crash before it's
+    /// kept finds the view already posted instead of posting a second. One found that way may show something older,
+    /// so it's kept as needing an edit. Null when it couldn't be posted.
+    /// </summary>
+    private async Task<string?> PostOnceAsync(DiscordBridge bridge, PinnedView view, string hash)
+    {
+        var key = $"view:{view.Key}:{view.Channel}";
+        var send = database.BeginDiscordSend(key, view.Channel, bridge.Clock());
+        var message = send.MessageId;
+        var shown = hash;
+        if (message is null && !send.Fresh)
+        {
+            message = (await bridge.FindSentAsync(view.Channel, send.StartedAt, send.Nonce, view.Card, sameTitleOnly: true)).MessageId;
+        }
+
+        if (message is null)
+        {
+            message = (await bridge.DeliverOnceAsync(view.Channel, view.Card, send.Nonce)).MessageId;
+            if (message is null)
+            {
+                return null;
+            }
+
+            database.SetDiscordSendMessage(key, message);
+        }
+        else
+        {
+            shown = "";
+        }
+
+        database.InOneWrite(() =>
+        {
+            Store(view.Key, new Placed(view.Channel, message, shown));
+            database.FinishDiscordSend(key);
+            return 0;
+        });
+        return message;
     }
 
     /// <summary>Short and stable across restarts, unlike string hash codes.</summary>

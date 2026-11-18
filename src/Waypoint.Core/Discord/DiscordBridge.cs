@@ -311,13 +311,14 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// since <paramref name="since"/> and carrying this nonce or showing this card. Read is false when the channel
     /// couldn't be read, so it isn't known.
     /// </summary>
-    public Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card) =>
-        FindSentAfterAsync(channel, SnowflakeAt(since - SentLookBack), nonce, card, new HashSet<string>());
+    /// <param name="sameTitleOnly">For a card whose words change, such as a pinned view, the title alone is enough.</param>
+    public Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card, bool sameTitleOnly = false) =>
+        FindSentAfterAsync(channel, SnowflakeAt(since - SentLookBack), nonce, card, new HashSet<string>(), sameTitleOnly);
 
     /// <summary>
     /// The same, among the messages after <paramref name="after"/>, leaving out any already <paramref name="known"/>.
     /// </summary>
-    public async Task<(bool Read, string? MessageId)> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known)
+    public async Task<(bool Read, string? MessageId)> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known, bool sameTitleOnly = false)
     {
         try
         {
@@ -334,7 +335,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             }
 
             var found = document.RootElement.EnumerateArray()
-                .Where(message => IsFromBot(message) && (NonceOf(message) == nonce || Shows(message, card)))
+                .Where(message => IsFromBot(message) && (NonceOf(message) == nonce || Shows(message, card, sameTitleOnly)))
                 .Select(message => Text(message, "id"))
                 .FirstOrDefault(id => id is not null && !known.Contains(id));
             return (true, found);
@@ -369,12 +370,12 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             _ => null,
         } : null;
 
-    /// <summary>Whether a message shows this card's title and words, the way Waypoint posts it.</summary>
-    private static bool Shows(JsonElement message, DiscordCard card) =>
+    /// <summary>Whether a message shows this card's title and words, or only its title, the way Waypoint posts it.</summary>
+    private static bool Shows(JsonElement message, DiscordCard card, bool titleOnly) =>
         message.TryGetProperty("embeds", out var embeds) && embeds.ValueKind == JsonValueKind.Array
         && embeds.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } embed
         && (Text(embed, "title") ?? "") == (card.Title ?? "")
-        && (Text(embed, "description") ?? "") == (card.Description ?? "");
+        && (titleOnly || (Text(embed, "description") ?? "") == (card.Description ?? ""));
 
     /// <summary>Changes a sent card in place. Editing makes no sound on the phone, so a view can change as often as it needs to.</summary>
     public async Task<EditOutcome> EditAsync(string channel, string messageId, DiscordCard card)
