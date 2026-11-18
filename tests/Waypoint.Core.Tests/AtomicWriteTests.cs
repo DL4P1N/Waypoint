@@ -221,6 +221,35 @@ public sealed class AtomicWriteTests : IDisposable
         Assert.Equal(75000, _database.GetBudgetAccounts().Single().BalanceCents);
     }
 
+    [Fact]
+    public void Not_a_repayment_after_it_was_matched_meanwhile_says_already_settled()
+    {
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP BAKERY", 3000)]);
+        _database.AddRepayment("made-up-payment", new PaymentAppPayment("A Made Up Friend", 1500, null), Day);
+        OpReply? reply = null;
+
+        WhileAnotherWriteIsOpen(
+            () => reply = _database.ClearRepaymentById("made-up-payment"),
+            "UPDATE repayments SET status = 'matched' WHERE message_id = 'made-up-payment'");
+
+        Assert.Equal("That repayment is already settled", reply!.Text);
+        Assert.Equal(1, Count("repayments", "status = 'matched'"));
+    }
+
+    [Fact]
+    public void A_repayment_whose_settling_changes_nothing_isnt_kept_as_settled()
+    {
+        _database.AddCategory("Made Up Dining", null, BudgetPeriod.Month);
+        _database.SaveMerchantRule("made up bistro", "Made Up Dining");
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP BISTRO", 3000)]);
+        Run("CREATE TRIGGER skip_update BEFORE UPDATE ON repayments BEGIN SELECT RAISE(IGNORE); END");
+
+        Assert.Throws<InvalidOperationException>(() => _database.AddRepayment("made-up-payment", new PaymentAppPayment("A Made Up Friend", 1500, null), Day));
+
+        Assert.Equal(0, Count("repayments"));
+        Assert.Equal(0, Scalar("SELECT reimbursed_cents FROM items WHERE kind = 'Expense'"));
+    }
+
     private StoredItem AddTask(string title)
     {
         _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(ItemKind.Task, title, null, null)]);

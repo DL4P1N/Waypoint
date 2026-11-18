@@ -62,7 +62,12 @@ public sealed partial class WaypointDatabase
             return new PaymentAppOutcome($"{payment.Payer} paid you {money}{reason}. Which purchase was it for?", false, messageId);
         }
 
-        SettleRepayment(connection, messageId, match.Id, payment.Cents);
+        // It was kept as waiting a moment ago in this same write, so settling it can only fail if something is wrong.
+        if (!SettleRepayment(connection, messageId, match.Id, payment.Cents))
+        {
+            throw new InvalidOperationException($"The repayment {messageId} was kept but couldn't be settled.");
+        }
+
         transaction.Commit();
         return new PaymentAppOutcome($"{payment.Payer} paid you {money}, so it's marked repaid on {match.Title}", true, messageId);
     }
@@ -287,11 +292,18 @@ public sealed partial class WaypointDatabase
             ? Clear(repayment)
             : new OpReply("That repayment is already settled");
 
+    /// <summary>Only a payment still waiting is cleared, so one matched meanwhile, from another card or the Budget page, stays matched.</summary>
     private OpReply Clear(PaymentAppRepayment repayment)
     {
         using var connection = Open();
-        SetRepaymentStatus(connection, repayment.MessageId, RepaymentCleared, null);
-        return new OpReply($"{repayment.Payer}'s {Briefing.Money(repayment.Cents)} won't count as a repayment");
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE repayments SET status = $status, item_id = NULL WHERE message_id = $id AND status = $pending";
+        command.Parameters.AddWithValue("$status", RepaymentCleared);
+        command.Parameters.AddWithValue("$id", repayment.MessageId);
+        command.Parameters.AddWithValue("$pending", RepaymentPending);
+        return command.ExecuteNonQuery() == 1
+            ? new OpReply($"{repayment.Payer}'s {Briefing.Money(repayment.Cents)} won't count as a repayment")
+            : new OpReply("That repayment is already settled");
     }
 
     private PaymentAppRepayment? FindWaiting(string? payer)
@@ -380,16 +392,6 @@ public sealed partial class WaypointDatabase
         command.Parameters.AddWithValue("$id", itemId);
         command.ExecuteNonQuery();
         return true;
-    }
-
-    private static void SetRepaymentStatus(SqliteConnection connection, string messageId, string status, long? itemId)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE repayments SET status = $status, item_id = $item WHERE message_id = $id";
-        command.Parameters.AddWithValue("$status", status);
-        command.Parameters.AddWithValue("$item", (object?)itemId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$id", messageId);
-        command.ExecuteNonQuery();
     }
 }
 
