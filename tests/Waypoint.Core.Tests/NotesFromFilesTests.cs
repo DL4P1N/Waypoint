@@ -169,6 +169,23 @@ public sealed class NotesFromFilesTests : IDisposable
         Assert.InRange(asked, 1, 3);
     }
 
+    [Fact]
+    public void A_scan_always_recognizes_its_first_scanned_page_however_long_the_pages_before_it_took()
+    {
+        var path = WritePdf("late scan.pdf", ["Typed first page", null, null]);
+        var asked = new List<int>();
+
+        // No time at all: the clock starts at the first page that needs recognizing, so that page is still read.
+        var file = FileReader.Read(path, readScannedPage: (_, index) =>
+        {
+            asked.Add(index);
+            return "recognized";
+        }, scanBudget: TimeSpan.Zero);
+
+        Assert.Equal([1], asked);
+        Assert.Equal("Typed first page\nrecognized", file.Text);
+    }
+
     // Making a note from a file
 
     [Fact]

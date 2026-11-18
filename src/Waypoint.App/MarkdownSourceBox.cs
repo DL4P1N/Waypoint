@@ -170,8 +170,17 @@ public sealed partial class MarkdownSourceBox : RichTextBox
 
     private string ReadText() => string.Join(_newline, Lines.Select(TextOf));
 
-    private static string LineText(Paragraph paragraph) =>
-        new TextRange(paragraph.ContentStart, paragraph.ContentEnd).Text.Replace("\r\n", "\n").Replace("\n", "");
+    /// <summary>How many times a line's text was read from the document, and how many lines were styled again, for tests.</summary>
+    internal (int Read, int Styled) LineWork => (_linesRead, _linesStyled);
+
+    private int _linesRead;
+    private int _linesStyled;
+
+    private string LineText(Paragraph paragraph)
+    {
+        _linesRead++;
+        return new TextRange(paragraph.ContentStart, paragraph.ContentEnd).Text.Replace("\r\n", "\n").Replace("\n", "");
+    }
 
     /// <summary>
     /// What a line holds and the style it was last given. Reading a line's text from the document is slow, so it's
@@ -179,7 +188,7 @@ public sealed partial class MarkdownSourceBox : RichTextBox
     /// </summary>
     private sealed record LineState(string? Text, string? Key);
 
-    private static string TextOf(Paragraph paragraph)
+    private string TextOf(Paragraph paragraph)
     {
         if (paragraph.Tag is LineState { Text: { } known })
         {
@@ -381,6 +390,7 @@ public sealed partial class MarkdownSourceBox : RichTextBox
                 if ((line.Tag as LineState)?.Key != key)
                 {
                     StyleLine(line, text, inFence || fence);
+                    _linesStyled++;
                     line.Tag = new LineState(text, key);
                     moved = true;
                 }
