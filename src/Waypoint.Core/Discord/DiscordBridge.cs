@@ -117,6 +117,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
 {
     private const string ApiBase = "https://discord.com/api/v10";
     public const string LastMessageKey = "discord_last_message";
+
+    /// <summary>The last message read in the notes channel, kept apart from the capture channel's.</summary>
+    public const string LastNotesMessageKey = "discord_last_notes_message";
     private const int MaxFetched = 50;
     private const int MaxAlertsRead = 25;
     private const string DoneButton = "waypoint:done";
@@ -1420,9 +1423,11 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     };
 
     /// <summary>
-    /// Hands over the owner's new messages, oldest first. The first run only marks where to start. Messages the
-    /// live connection already handed over are skipped. A poll still running keeps the next one from reading the same messages.
-    /// Messages handed over before whose work was cut off are read again first, from whichever channel they came in.
+    /// Hands over the owner's new messages, oldest first, from the capture channel and then the notes channel, so
+    /// one sent while Waypoint was off is read once it's back. The first run in each only marks where to start.
+    /// Messages the live connection already handed over are skipped. A poll still running keeps the next one from
+    /// reading the same messages. Messages handed over before whose work was cut off are read again first, from
+    /// whichever channel they came in.
     /// </summary>
     public async Task PollAsync(Action<DiscordMessage>? onMessage = null, CancellationToken cancellationToken = default)
     {
@@ -1435,32 +1440,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         try
         {
             await RetryUnfinishedAsync(onMessage, cancellationToken);
-            var last = database.GetPreference(LastMessageKey);
-            var query = last is null ? "limit=1" : $"limit={MaxFetched}&after={last}";
-
-            using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?{query}"), cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-            var messages = document.RootElement.EnumerateArray()
-                .OrderBy(message => ulong.Parse(message.GetProperty("id").GetString()!))
-                .ToList();
-
-            // An empty channel still marks the place, or its first message would only be marked too.
-            if (last is null && messages.Count == 0)
+            await CatchUpAsync(channel, LastMessageKey, onMessage, cancellationToken);
+            if (PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) is { } notes && notes != channel)
             {
-                database.SetPreference(LastMessageKey, "0");
-            }
-
-            foreach (var message in messages)
-            {
-                var id = message.GetProperty("id").GetString()!;
-                if (last is not null && IsFromOwner(message) && ReadMessage(message) is { } read && FirstTime(id, channel))
-                {
-                    onMessage?.Invoke(read);
-                }
-
-                database.SetPreference(LastMessageKey, id);
+                await CatchUpAsync(notes, LastNotesMessageKey, NotesSent, cancellationToken);
             }
 
             LastError = null;
@@ -1473,6 +1456,41 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         finally
         {
             _polling.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads one channel's messages since the last one read there, and hands over each of the owner's that hasn't
+    /// been claimed yet. The place moves on past each, so it's read once however often this runs.
+    /// </summary>
+    private async Task CatchUpAsync(string channel, string lastKey, Action<DiscordMessage>? handOver, CancellationToken cancellationToken)
+    {
+        var last = database.GetPreference(lastKey);
+        var query = last is null ? "limit=1" : $"limit={MaxFetched}&after={last}";
+
+        using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?{query}"), cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var messages = document.RootElement.EnumerateArray()
+            .OrderBy(message => ulong.Parse(message.GetProperty("id").GetString()!))
+            .ToList();
+
+        // An empty channel still marks the place, or its first message would only be marked too.
+        if (last is null && messages.Count == 0)
+        {
+            database.SetPreference(lastKey, "0");
+        }
+
+        foreach (var message in messages)
+        {
+            var id = message.GetProperty("id").GetString()!;
+            if (last is not null && IsFromOwner(message) && ReadMessage(message) is { } read && FirstTime(id, channel))
+            {
+                handOver?.Invoke(read);
+            }
+
+            database.SetPreference(lastKey, id);
         }
     }
 

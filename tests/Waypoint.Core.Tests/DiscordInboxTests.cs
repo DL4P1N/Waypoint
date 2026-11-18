@@ -48,8 +48,8 @@ public sealed class DiscordInboxTests : IDisposable
     }
 
     /// <summary>
-    /// The capture channel: the owner's messages by ID, read as a list after a place or one at a time, and the
-    /// made-up file they carry. Anything else sent gets the next ID.
+    /// The capture and notes channels: the owner's messages by ID, read as a list after a place or one at a time,
+    /// and the made-up file they carry. Anything else sent gets the next ID.
     /// </summary>
     private sealed class Channel : HttpMessageHandler
     {
@@ -64,8 +64,8 @@ public sealed class DiscordInboxTests : IDisposable
         /// <summary>Messages Discord won't let the bot read back, the way a lost permission does.</summary>
         public HashSet<string> Forbidden { get; } = [];
 
-        public void Add(string id, string text, bool withFile = false) => Messages[id] = $$"""
-            {"id":"{{id}}","channel_id":"capture","content":"{{text}}","author":{"id":"owner"},"timestamp":"2026-11-09T17:00:00+00:00"{{(withFile ? $$""","attachments":[{"id":"f{{id}}","filename":"made-up-list.txt","size":40,"url":"{{FileUrl}}","content_type":"text/plain"}]""" : "")}}}
+        public void Add(string id, string text, bool withFile = false, string channel = "capture") => Messages[id] = $$"""
+            {"id":"{{id}}","channel_id":"{{channel}}","content":"{{text}}","author":{"id":"owner"},"timestamp":"2026-11-09T17:00:00+00:00"{{(withFile ? $$""","attachments":[{"id":"f{{id}}","filename":"made-up-list.txt","size":40,"url":"{{FileUrl}}","content_type":"text/plain"}]""" : "")}}}
             """;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -86,10 +86,10 @@ public sealed class DiscordInboxTests : IDisposable
                 return Reply(HttpStatusCode.OK, "made up thing one\nmade up thing two");
             }
 
-            if (request.Method == HttpMethod.Get && url.Contains("/channels/capture/messages?"))
+            if (request.Method == HttpMethod.Get && Listed(url) is { } listed)
             {
                 var after = url.Contains("after=") ? ulong.Parse(url[(url.IndexOf("after=", StringComparison.Ordinal) + 6)..]) : 0;
-                var newer = Messages.Where(message => ulong.Parse(message.Key) > after).Select(message => message.Value);
+                var newer = Messages.Where(message => ulong.Parse(message.Key) > after && message.Value.Contains($"\"channel_id\":\"{listed}\"")).Select(message => message.Value);
                 return Reply(HttpStatusCode.OK, $"[{string.Join(",", newer)}]");
             }
 
@@ -98,7 +98,7 @@ public sealed class DiscordInboxTests : IDisposable
                 return Reply(HttpStatusCode.Forbidden, """{"code":50001}""");
             }
 
-            if (request.Method == HttpMethod.Get && url.Contains("/channels/capture/messages/"))
+            if (request.Method == HttpMethod.Get && (url.Contains("/channels/capture/messages/") || url.Contains("/channels/notes/messages/")))
             {
                 return Messages.TryGetValue(url[(url.LastIndexOf('/') + 1)..], out var one)
                     ? Reply(HttpStatusCode.OK, one)
@@ -112,6 +112,10 @@ public sealed class DiscordInboxTests : IDisposable
 
             return Reply(HttpStatusCode.OK, $$"""{"id":"m{{Interlocked.Increment(ref _posts)}}"}""");
         }
+
+        /// <summary>The channel a request lists the messages of, if it's one of these.</summary>
+        private static string? Listed(string url) =>
+            new[] { "capture", "notes" }.FirstOrDefault(channel => url.Contains($"/channels/{channel}/messages?"));
 
         private static HttpResponseMessage Reply(HttpStatusCode status, string body) =>
             new(status) { Content = new StringContent(body) };
@@ -167,9 +171,9 @@ public sealed class DiscordInboxTests : IDisposable
     }
 
     /// <summary>A fresh start of Waypoint on the same data, as after a crash or a close.</summary>
-    private WaypointWorker Start(Host host)
+    private WaypointWorker Start(Host host, string? notes = null)
     {
-        var settings = new WaypointSettings(Discord: new DiscordSettings("token", "owner", "capture", "alerts"));
+        var settings = new WaypointSettings(Discord: new DiscordSettings("token", "owner", "capture", "alerts", NotesChannelId: notes));
         var worker = new WaypointWorker(_database, settings, _folder, host, _ => { }, new WorkerParts(
             _ => new NoTokens(),
             Clock: () => _now,
@@ -194,7 +198,7 @@ public sealed class DiscordInboxTests : IDisposable
         }
     }
 
-    private DiscordBridge Bridge() => new(new HttpClient(_discord), _database, new DiscordSettings("token", "owner", "capture"))
+    private DiscordBridge Bridge(string? notes = null) => new(new HttpClient(_discord), _database, new DiscordSettings("token", "owner", "capture", NotesChannelId: notes))
     {
         Clock = () => _now,
         Delay = (_, _) => Task.CompletedTask,
@@ -483,5 +487,80 @@ public sealed class DiscordInboxTests : IDisposable
         Assert.Null(_database.ApplyAlertAction(new AlertAction(null, AlertActionKind.Done, "typed-1"), _now, 15));
 
         Assert.Equal(["Made up second"], _database.GetOpenItems().Select(item => item.Title));
+    }
+
+    [Fact]
+    public async Task A_notes_channel_message_sent_while_waypoint_was_off_is_handed_over_once_when_it_is_back()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "5");
+        _discord.Add("8", "made up notes question", channel: "notes");
+        _discord.Messages["9"] = """{"id":"9","channel_id":"notes","content":"made up","author":{"id":"someone"}}""";
+        var bridge = Bridge(notes: "notes");
+        var captured = new List<string>();
+        var notes = new List<string>();
+        bridge.Captured = message => captured.Add(message.Id);
+        bridge.NotesSent = message => notes.Add(message.Id);
+
+        await bridge.PollAsync();
+        await bridge.PollAsync();
+
+        Assert.Equal(["8"], notes);
+        Assert.Empty(captured);
+        Assert.Equal("9", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
+
+        // One sent later is read on the next poll, and the one before isn't handed over again.
+        _discord.Add("12", "made up later", channel: "notes");
+        await bridge.PollAsync();
+        Assert.Equal(["8", "12"], notes);
+    }
+
+    [Fact]
+    public async Task The_notes_channel_is_only_marked_on_its_first_poll_and_never_read_as_captures()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("8", "made up older note", channel: "notes");
+        var bridge = Bridge(notes: "notes");
+        var notes = new List<string>();
+        bridge.NotesSent = message => notes.Add(message.Id);
+
+        await bridge.PollAsync();
+
+        Assert.Empty(notes);
+        Assert.Equal("8", _database.GetPreference(DiscordBridge.LastNotesMessageKey));
+        Assert.Empty(PendingTexts());
+    }
+
+    [Fact]
+    public async Task A_notes_message_taken_before_a_crash_is_answered_exactly_once_after_the_next_start()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _database.SetPreference(DiscordBridge.LastNotesMessageKey, "5");
+        _discord.Add("8", "made up words with no file", channel: "notes");
+
+        // The poll takes the message, then Waypoint stops before the window thread gets to it.
+        var crashed = new Host(hold: true);
+        var first = Start(crashed, notes: "notes");
+        await PollUntil(first, () => crashed.Held.Count > 0);
+        first.StopDiscord();
+        Assert.False(_database.IsDiscordMessageFinished("8"));
+        Assert.DoesNotContain(Posted(), body => body.Contains("Send files here"));
+
+        _now = _now.AddMinutes(5);
+        var second = Start(new Host(), notes: "notes");
+        await PollUntil(second, () => _database.IsDiscordMessageFinished("8"));
+        await PollUntil(second, () => Posted().Any(body => body.Contains("Send files here")));
+
+        // Later polls and a further start never answer it again.
+        _now = _now.AddMinutes(10);
+        await second.Discord!.PollAsync();
+        second.StopDiscord();
+        var third = Start(new Host(), notes: "notes");
+        await third.Discord!.PollAsync();
+        third.StopDiscord();
+
+        var answer = Assert.Single(Posted(), body => body.Contains("Send files here"));
+        Assert.Contains("\"message_id\":\"8\"", answer);
+        Assert.Empty(PendingTexts());
     }
 }
