@@ -36,7 +36,7 @@ This builds a small `Waypoint.exe` (the `Install` publish profile, which uses th
 
 An update can't leave a half-copied install behind:
 
-- Each build is copied whole into `versions\<time>-<commit>` and checked byte for byte against what was built before anything is stopped.
+- Each build is copied whole into `versions\<time>-<commit>` and checked byte for byte against what was built before anything is stopped. A copy installed before versions were kept becomes the first version, so it can be gone back to.
 - The running app is asked to close the usual way, so drafts are saved and a recording is finished, and is only stopped by force if it hasn't closed within 20 seconds.
 - The new `Waypoint.exe` is copied beside the old one, checked, and switched in by rename, keeping the old one as `Waypoint.previous.exe`. The shortcut and sign-in entry always start the same `Waypoint.exe`. Files the new version doesn't have are removed, and `current.txt` names the version in use.
 - If the new version isn't still running after 8 seconds, it's removed and the previous version is put back and started, and the installer says so.
