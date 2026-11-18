@@ -70,25 +70,13 @@ public sealed class NoteDraft
     public const string ElsewhereSuffix = " (edited elsewhere)";
 
     /// <summary>
-    /// True if the stored note changed since the editor loaded or last saved it, such as from its .md file while the
-    /// editor had focus. Saving over it then would lose that change, so it's kept as its own note first. Only the text
-    /// counts, since a saved title is tidied (trimmed, or taken from the first line) and would always look changed.
-    /// After <see cref="MoveTo"/> there's nothing loaded to compare with until the next save.
+    /// The text the stored note should still have, the one the editor loaded or last saved. A save goes ahead only if
+    /// it does. If it changed meanwhile, such as from its .md file while the editor had focus or a reply added from
+    /// Discord, saving over it would lose that change, so it's kept as its own note first. Only the text counts,
+    /// since a saved title is tidied (trimmed, or taken from the first line) and would always look changed. Null
+    /// after <see cref="MoveTo"/>, when there's nothing loaded to compare with until the next save.
     /// </summary>
-    public bool StoredMovedOn(NoteDetail stored) =>
-        _baselineKnown && Id == stored.Id && stored.Body != _savedBody;
-
-    /// <summary>
-    /// <see cref="StoredMovedOn"/> as things are now, for a save made off the window's thread, which asks after the
-    /// editor may have moved on.
-    /// </summary>
-    public Func<NoteDetail, bool> StoredMovedOnNow()
-    {
-        var known = _baselineKnown;
-        var id = Id;
-        var saved = _savedBody;
-        return stored => known && id == stored.Id && stored.Body != saved;
-    }
+    public string? ExpectedStoredBody => _baselineKnown && Id is not null ? _savedBody : null;
 
     /// <summary>True if the stored note moved on and nobody is working in the editor. Null means it's gone.</summary>
     public bool ShouldReload(NoteDetail? stored, bool editing) =>

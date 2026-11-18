@@ -1045,18 +1045,11 @@ public partial class NotesView : UserControl
         var notes = _notes;
         var title = _draft.Title;
         var body = _draft.Body;
-        var movedOn = _draft.StoredMovedOnNow();
+        var expected = _draft.ExpectedStoredBody;
         var now = DateTime.Now;
-        var save = new BackgroundSave(id, title, body, Task.Run(() =>
-        {
-            // As in Flush: a version changed elsewhere while this editor held the note is kept as its own note first.
-            if (notes.GetNote(id) is { } stored && movedOn(stored))
-            {
-                notes.CreateNote(stored.Title + NoteDraft.ElsewhereSuffix, stored.Body, now, stored.FolderId);
-            }
 
-            return notes.SaveNote(id, title, body, now);
-        }));
+        // As in Flush: a version changed elsewhere while this editor held the note is kept as its own note first.
+        var save = new BackgroundSave(id, title, body, Task.Run(() => NoteSaving.SaveKeepingOther(notes, id, title, body, expected, now)));
         _backgroundSave = save;
         try
         {
@@ -1130,16 +1123,12 @@ public partial class NotesView : UserControl
 
         var now = DateTime.Now;
 
-        // A note changed elsewhere while this editor held it, such as its .md file edited while typing here, would be
-        // lost under this save. That version is kept as its own note first, as the file sync does.
-        if (_draft.Id is { } changed && _notes.GetNote(changed) is { } stored && _draft.StoredMovedOn(stored))
-        {
-            _notes.CreateNote(stored.Title + NoteDraft.ElsewhereSuffix, stored.Body, now, stored.FolderId);
-        }
-
-        // A note removed while it was being typed in comes back as a new one, so the text isn't lost.
+        // A note changed elsewhere while this editor held it, such as its .md file edited while typing here or a reply
+        // added from Discord, would be lost under this save. The save only goes over the text the editor loaded, and
+        // any other version is kept as its own note first, as the file sync does. A note removed while it was being
+        // typed in comes back as a new one, so the text isn't lost.
         long id;
-        if (_draft.Id is { } existing && _notes.SaveNote(existing, _draft.Title, _draft.Body, now))
+        if (_draft.Id is { } existing && NoteSaving.SaveKeepingOther(_notes, existing, _draft.Title, _draft.Body, _draft.ExpectedStoredBody, now))
         {
             id = existing;
         }
