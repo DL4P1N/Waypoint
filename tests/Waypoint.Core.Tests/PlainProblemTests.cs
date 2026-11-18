@@ -18,6 +18,14 @@ public sealed class PlainProblemTests
         Assert.Equal("Something unexpected went wrong.", PlainProblem.Describe(new ArgumentException("bad arg at 0x1234")));
     }
 
+    [Theory]
+    [InlineData("Not logged in · Please run /login")]
+    [InlineData("Invalid API key · Please run /login")]
+    public void Claude_not_being_signed_in_is_said_plainly(string message)
+    {
+        Assert.Equal("Claude isn't signed in.", PlainProblem.Describe(new InvalidOperationException(message)));
+    }
+
     [Fact]
     public void Messages_written_for_people_are_kept()
     {

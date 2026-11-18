@@ -41,5 +41,46 @@ public sealed record MarkdownRequest(string Markdown);
 /// <summary>Writing with Haiku can take minutes, longer than one request waits, so it runs on the server as a job.</summary>
 public sealed record NoteJobStarted(string Id);
 
-/// <summary>Where a job is. Gone means the server no longer knows it, such as after a restart.</summary>
-public sealed record NoteJobState(bool Done, bool Gone = false, NoteWriteOutcome? Notes = null, StudyOutcome? Study = null);
+/// <summary>How a notes job stands, or how it ended.</summary>
+public enum NoteJobOutcome
+{
+    Running,
+
+    /// <summary>It ran to the end, with what came of it in <see cref="NoteJobState.Notes"/> or <see cref="NoteJobState.Study"/>.</summary>
+    Succeeded,
+
+    /// <summary>It broke off partway, with a plain reason in <see cref="NoteJobState.Problem"/>.</summary>
+    Failed,
+
+    /// <summary>It was stopped, by the PC or by the server shutting down.</summary>
+    Cancelled,
+
+    /// <summary>The server doesn't know the job, such as after a restart, so how it ended is unknown.</summary>
+    Lost,
+}
+
+/// <summary>
+/// Where a job is. Outcome says how it stands, and Problem why a failed one failed, in plain words for the person.
+/// Done and Gone are what PCs from before Outcome read: Gone is set only for a lost job, and Done for every job
+/// that ended, so those PCs stop checking either way. From a server from before Outcome, it's worked out from them.
+/// </summary>
+public sealed record NoteJobState(
+    bool Done,
+    bool Gone = false,
+    NoteWriteOutcome? Notes = null,
+    StudyOutcome? Study = null,
+    NoteJobOutcome? Outcome = null,
+    string? Problem = null)
+{
+    public static NoteJobState Running() => new(Done: false, Outcome: NoteJobOutcome.Running);
+
+    public static NoteJobState Lost() => new(Done: false, Gone: true, Outcome: NoteJobOutcome.Lost);
+
+    public static NoteJobState Failed(string problem) => new(Done: true, Outcome: NoteJobOutcome.Failed, Problem: problem);
+
+    public static NoteJobState Cancelled() => new(Done: true, Outcome: NoteJobOutcome.Cancelled);
+
+    /// <summary>How it stands, also for a server that only sends Done and Gone.</summary>
+    public NoteJobOutcome Kind() =>
+        Outcome ?? (Gone ? NoteJobOutcome.Lost : Done ? NoteJobOutcome.Succeeded : NoteJobOutcome.Running);
+}

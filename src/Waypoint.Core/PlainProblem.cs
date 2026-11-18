@@ -41,10 +41,17 @@ public static class PlainProblem
         HttpRequestException => "The connection didn't go through.",
         TimeoutException or TaskCanceledException => "It took too long.",
         Win32Exception => "Windows couldn't open what it needed.",
+        InvalidOperationException when IsSignedOut(exception.Message) => "Claude isn't signed in.",
         InvalidOperationException when exception.Message.StartsWith("Claude Code", StringComparison.Ordinal) => "Claude couldn't be reached just now.",
         System.Text.Json.JsonException => "What came back couldn't be read.",
         _ => "Something unexpected went wrong.",
     };
+
+    // What Claude Code says when it has no sign-in to use, or the one it has was turned down.
+    private static bool IsSignedOut(string message) =>
+        message.Contains("/login", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("not logged in", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Invalid API key", StringComparison.OrdinalIgnoreCase);
 
     // ERROR_HANDLE_DISK_FULL and ERROR_DISK_FULL, in the low word of the HResult.
     private static bool IsDiskFull(IOException exception) => (exception.HResult & 0xFFFF) is 0x27 or 0x70;

@@ -307,7 +307,7 @@ public sealed partial class WaypointWorker
         var place = started.FolderId is { } placed ? _database.GetNoteFolder(placed)?.Name ?? "Unfiled" : "Unfiled";
         await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice($"Made {started.Title} in {place}", "The notes are being written now.", CardTone.Finished));
 
-        var written = await notes.WriteNotesAsync(started.NoteId, null, false, _clock());
+        var written = await NoteJobText.GuardNotes(() => notes.WriteNotesAsync(started.NoteId, null, false, _clock()));
         _host.Changed();
         ViewsChanged();
         var card = written.Status == NoteWriteStatus.Written

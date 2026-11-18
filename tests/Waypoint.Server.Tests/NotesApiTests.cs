@@ -314,6 +314,8 @@ public sealed class NotesApiTests : IDisposable
                 await Task.Delay(20);
             }
             while (!state.Done && !state.Gone && DateTime.UtcNow < deadline);
+
+            Assert.Equal(NoteJobOutcome.Succeeded, state.Outcome);
         }
     }
 

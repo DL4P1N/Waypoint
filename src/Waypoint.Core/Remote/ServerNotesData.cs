@@ -405,7 +405,10 @@ public sealed class ServerNotesData : INotesData
         return state switch
         {
             { Notes: { } outcome } => outcome,
-            null when cancellationToken.IsCancellationRequested => new NoteWriteOutcome(NoteWriteStatus.Failed, "The notes couldn't be written. It was stopped. The files are saved in Sources, so you can try again."),
+            null when cancellationToken.IsCancellationRequested => NoteJobText.NotesStopped(),
+            { } ended when ended.Kind() == NoteJobOutcome.Failed => NoteJobText.NotesFailed(ended.Problem),
+            { } ended when ended.Kind() == NoteJobOutcome.Cancelled => NoteJobText.NotesStopped(),
+            { } ended when ended.Kind() == NoteJobOutcome.Lost => NoteJobText.NotesLost(),
             _ => new NoteWriteOutcome(NoteWriteStatus.Failed, "The notes couldn't be written, because the server couldn't be reached. The files are saved in Sources, so you can try again."),
         };
     }
@@ -439,7 +442,15 @@ public sealed class ServerNotesData : INotesData
             return new StudyOutcome(StudyStatus.Failed, "The practice questions couldn't be written yet, because the server is already writing others. You can try again in a few minutes.");
         }
 
-        return state?.Study ?? new StudyOutcome(StudyStatus.Failed, "The practice questions couldn't be written, because the server couldn't be reached. You can try again.");
+        return state switch
+        {
+            { Study: { } outcome } => outcome,
+            null when cancellationToken.IsCancellationRequested => NoteJobText.StudyStopped(),
+            { } ended when ended.Kind() == NoteJobOutcome.Failed => NoteJobText.StudyFailed(ended.Problem),
+            { } ended when ended.Kind() == NoteJobOutcome.Cancelled => NoteJobText.StudyStopped(),
+            { } ended when ended.Kind() == NoteJobOutcome.Lost => NoteJobText.StudyLost(),
+            _ => new StudyOutcome(StudyStatus.Failed, "The practice questions couldn't be written, because the server couldn't be reached. You can try again."),
+        };
     }
 
     public StudyOutcome SaveStudyAnyway(long noteId, string markdown, DateTime now) => _server.Send<StudyOutcome>(Post, $"api/notes/{Real(noteId)}/study-anyway", new MarkdownRequest(markdown));
@@ -606,7 +617,8 @@ public sealed class ServerNotesData : INotesData
 
     /// <summary>
     /// Starts a job and checks on it until it's done. Being away for a while doesn't end the wait, since the job goes
-    /// on without the PC. Null if it couldn't be started, the wait ran out, or it was stopped.
+    /// on without the PC. Null if it couldn't be started, the wait ran out, or it was stopped here. Otherwise how it
+    /// ended there, lost ones included.
     /// </summary>
     private async Task<NoteJobState?> RunJobAsync(Func<NoteJobStarted> start, CancellationToken cancellationToken)
     {
@@ -648,9 +660,9 @@ public sealed class ServerNotesData : INotesData
             try
             {
                 var state = await Task.Run(() => _server.Send<NoteJobState>(Get, $"api/notes/jobs/{job.Id}"), CancellationToken.None);
-                if (state.Done || state.Gone)
+                if (state.Kind() != NoteJobOutcome.Running)
                 {
-                    return state.Gone ? null : state;
+                    return state;
                 }
             }
             catch (ServerUnavailableException)

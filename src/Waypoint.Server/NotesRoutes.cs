@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Logging.Abstractions;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 using Waypoint.Core.Files;
@@ -11,14 +11,11 @@ namespace Waypoint.Server;
 
 /// <summary>
 /// The notes on the server, with notes and practice questions written here by Haiku through <c>claude -p</c>, where
-/// sorting runs too. Writing takes minutes, so each one runs as a job the PC checks on. Jobs live in memory: after
-/// a restart the PC hears the job is gone, and whatever was saved by then stays saved.
+/// sorting runs too. Writing takes minutes, so each one runs as a job the PC checks on, kept by <see cref="NoteJobs"/>.
 /// </summary>
 public sealed class ServerNotes
 {
-    private static readonly TimeSpan KeepFinished = TimeSpan.FromHours(1);
-
-    private readonly ConcurrentDictionary<string, Job> _jobs = new();
+    private readonly NoteJobs _jobs;
 
     public ServerNotes(WaypointServer server, IServiceProvider services)
     {
@@ -29,6 +26,11 @@ public sealed class ServerNotes
         // Files sent in Discord's notes channel make notes the same way as files sent from the PC's Notes page.
         server.Worker.NoteFiles = Data;
         Attachments = Path.Combine(server.DataDirectory, "attachments");
+
+        _jobs = new NoteJobs(services.GetService<ILogger<ServerNotes>>() ?? NullLogger<ServerNotes>.Instance, MaxRunning);
+
+        // Jobs still going as the server shuts down are stopped, and each lets go of what it held once it ends.
+        services.GetService<IHostApplicationLifetime>()?.ApplicationStopping.Register(_jobs.StopAll);
     }
 
     public LocalNotesData Data { get; }
@@ -41,78 +43,12 @@ public sealed class ServerNotes
     /// <summary>How many notes or practice questions are written at once. Each is a claude -p, which is slow and heavy.</summary>
     public const int MaxRunning = 2;
 
-    private readonly SemaphoreSlim _running = new(MaxRunning, MaxRunning);
-
     /// <summary>Starts a job, or returns null when <see cref="MaxRunning"/> are already running, so the PC can try later.</summary>
-    public NoteJobStarted? Start(Func<CancellationToken, Task<NoteJobState>> work)
-    {
-        Sweep();
-        if (!_running.Wait(0))
-        {
-            return null;
-        }
+    public NoteJobStarted? Start(Func<CancellationToken, Task<NoteJobState>> work) => _jobs.Start(work);
 
-        var stop = new CancellationTokenSource();
-        var id = Guid.NewGuid().ToString("N");
-        var job = new Job(stop);
-        _jobs[id] = job;
-        job.Task = Task.Run(async () =>
-        {
-            try
-            {
-                return await work(stop.Token);
-            }
-            finally
-            {
-                job.FinishedAt = DateTime.UtcNow;
-                _running.Release();
-            }
-        });
-        return new NoteJobStarted(id);
-    }
+    public NoteJobState State(string id) => _jobs.State(id);
 
-    /// <summary>Forgets finished jobs nobody came back for within the hour.</summary>
-    private void Sweep()
-    {
-        foreach (var old in _jobs.Where(entry => entry.Value.FinishedAt is { } at && DateTime.UtcNow - at > KeepFinished).ToList())
-        {
-            _jobs.TryRemove(old.Key, out _);
-        }
-    }
-
-    public NoteJobState State(string id)
-    {
-        Sweep();
-        if (!_jobs.TryGetValue(id, out var job) || job.Task is not { } task)
-        {
-            return new NoteJobState(Done: false, Gone: true);
-        }
-
-        if (!task.IsCompleted)
-        {
-            return new NoteJobState(Done: false);
-        }
-
-        _jobs.TryRemove(id, out _);
-        return task.IsCompletedSuccessfully ? task.Result : new NoteJobState(Done: false, Gone: true);
-    }
-
-    public void Stop(string id)
-    {
-        if (_jobs.TryGetValue(id, out var job))
-        {
-            job.Stop.Cancel();
-        }
-    }
-
-    private sealed class Job(CancellationTokenSource stop)
-    {
-        public CancellationTokenSource Stop { get; } = stop;
-
-        public Task<NoteJobState>? Task { get; set; }
-
-        public DateTime? FinishedAt { get; set; }
-    }
+    public void Stop(string id) => _jobs.Stop(id);
 }
 
 /// <summary>

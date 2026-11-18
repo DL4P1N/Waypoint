@@ -1641,7 +1641,7 @@ public partial class NotesView : UserControl
             {
                 job.StartedAt = DateTime.Now;
                 ShowStatus();
-                outcome = await Task.Run(() => maker.WriteNotesAsync(noteId, request, replaceEdits: true, DateTime.Now, job.Stop.Token));
+                outcome = await Task.Run(() => NoteJobText.GuardNotes(() => maker.WriteNotesAsync(noteId, request, replaceEdits: true, DateTime.Now, job.Stop.Token), job.Stop.Token));
             }
             finally
             {
