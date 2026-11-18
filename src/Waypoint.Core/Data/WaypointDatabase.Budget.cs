@@ -132,6 +132,11 @@ public sealed partial class WaypointDatabase
     public IReadOnlyList<BudgetAccount> GetBudgetAccounts()
     {
         using var connection = Open();
+        return ReadBudgetAccounts(connection);
+    }
+
+    private static List<BudgetAccount> ReadBudgetAccounts(SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, kind, balance_cents, updated_on, limit_cents, close_day, autopay_day, alert_cents, set_at FROM budget_accounts ORDER BY position, name";
 
@@ -437,10 +442,10 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool AddToCushion(long cents, DateOnly today, string? messageId = null)
     {
-        var cushion = GetBudgetAccounts().FirstOrDefault(account => account.Kind == AccountKind.Cushion);
-
+        // The balance is read inside the write, so one saved from the Budget page meanwhile is added to, not replaced.
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var cushion = ReadBudgetAccounts(connection).FirstOrDefault(account => account.Kind == AccountKind.Cushion);
         if (!RecordBrokerageDeposit(connection, cents, today, string.IsNullOrWhiteSpace(messageId) ? null : messageId))
         {
             return false;

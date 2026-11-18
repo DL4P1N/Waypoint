@@ -209,6 +209,18 @@ public sealed class AtomicWriteTests : IDisposable
         Assert.Equal(40500, _database.GetBudgetAccounts().Single().BalanceCents);
     }
 
+    [Fact]
+    public void A_deposit_keeps_a_balance_saved_while_it_waited_to_write()
+    {
+        _database.SaveBudgetAccount(new BudgetAccount("Made Up Cushion", AccountKind.Cushion, 40000, Day));
+
+        WhileAnotherWriteIsOpen(
+            () => _database.AddToCushion(5000, Day, "made-up-email"),
+            "UPDATE budget_accounts SET balance_cents = 70000 WHERE kind = 'Cushion'");
+
+        Assert.Equal(75000, _database.GetBudgetAccounts().Single().BalanceCents);
+    }
+
     private StoredItem AddTask(string title)
     {
         _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(ItemKind.Task, title, null, null)]);
