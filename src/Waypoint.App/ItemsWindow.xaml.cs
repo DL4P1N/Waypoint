@@ -284,18 +284,7 @@ public partial class ItemsWindow : Window
     /// For closing: waits up to <paramref name="limit"/> in all for changes still on their way to the server, and
     /// returns those that didn't finish.
     /// </summary>
-    public IReadOnlyList<string> FinishWork(TimeSpan limit)
-    {
-        var until = DateTime.UtcNow + limit;
-        var left = new List<string>();
-        foreach (var work in _works)
-        {
-            var remaining = until - DateTime.UtcNow;
-            left.AddRange(work.Finish(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero));
-        }
-
-        return left;
-    }
+    public IReadOnlyList<string> FinishWork(TimeSpan limit) => PageWork.FinishAll(_works, limit);
 
     /// <summary>A quiet Saving... under the date while a change is on its way to a slow server, after a moment so a quick one shows nothing.</summary>
     private void ShowSaving()

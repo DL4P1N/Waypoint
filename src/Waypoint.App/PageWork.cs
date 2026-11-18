@@ -165,26 +165,36 @@ internal sealed class PageWork
     /// For closing: from now on everything runs straight away, and this waits up to <paramref name="limit"/> for the
     /// changes already on their way. Returns those still not done.
     /// </summary>
-    public IReadOnlyList<string> Finish(TimeSpan limit)
+    public IReadOnlyList<string> Finish(TimeSpan limit) => FinishAll([this], limit);
+
+    /// <summary>
+    /// For closing several pages: each is marked closing first, so a page whose queue waits on a drawing on the
+    /// window's thread carries straight on, and then all of them are waited for together, up to <paramref name="limit"/>
+    /// in all. Returns the changes still not done.
+    /// </summary>
+    public static IReadOnlyList<string> FinishAll(IReadOnlyList<PageWork> works, TimeSpan limit)
     {
-        _closed = true;
-        _closing.TrySetResult();
-        Task tail;
-        lock (_gate)
+        var tails = new List<Task>();
+        foreach (var work in works)
         {
-            tail = _tail;
+            work._closed = true;
+            work._closing.TrySetResult();
+            lock (work._gate)
+            {
+                tails.Add(work._tail);
+            }
         }
 
         try
         {
-            tail.Wait(limit);
+            Task.WhenAll(tails).Wait(limit);
         }
         catch (AggregateException)
         {
             // Each change hands its own problem to what asked for it.
         }
 
-        return Waiting;
+        return works.SelectMany(work => work.Waiting).ToList();
     }
 
     private Task<T> Queue<T>(Func<T> work, string what, bool change)
