@@ -303,6 +303,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     public Task<DiscordDelivery> DeliverOnceAsync(string? channel, DiscordCard card, string nonce) =>
         TrySendAsync(channel, card, nonce: nonce);
 
+    /// <summary>The bot's own user ID, once Discord has said it on connecting. Null before that.</summary>
+    public string? BotUserId { get; private set; }
+
     /// <summary>Where alerts go, or with <paramref name="toBudgetChannel"/>, where budget alerts go.</summary>
     public string? AlertsChannelFor(bool toBudgetChannel = false) => toBudgetChannel ? settings.BudgetChannelId : settings.AlertsChannelId;
 
@@ -486,6 +489,11 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             switch (type)
             {
                 case "READY":
+                    if (data.TryGetProperty("user", out var self) && Text(self, "id") is { } botId)
+                    {
+                        BotUserId = botId;
+                    }
+
                     if (data.TryGetProperty("application", out var application) && Text(application, "id") is { } applicationId)
                     {
                         await RegisterCommandsAsync(applicationId);

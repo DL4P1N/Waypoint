@@ -520,9 +520,11 @@ public sealed partial class WaypointWorker
         var sendKey = "post:" + key;
         var send = _database.BeginDiscordSend(sendKey, forum, _clock());
         var post = send.MessageId is { } known ? new ForumPost(known, known) : null;
+        var recovered = post is not null;
         if (post is null && !send.Fresh)
         {
             post = await FindMadePostAsync(discord, forum, wanted.Name);
+            recovered = post is not null;
         }
 
         if (post is null)
@@ -549,7 +551,10 @@ public sealed partial class WaypointWorker
 
         _newPostsThisRound++;
         _postBackoff.Remove(key);
-        var row = new DiscordThreadRow(post.Thread, wanted.Kind, wanted.Key, forum, WaypointDatabase.PostLive, false, Meta(wanted.Name, tags), [new DiscordThreadPart(post.Message, Hash(wanted.Parts[0]))], post.Message);
+        // A post made by an earlier try may show an older first part and older tags, so it's kept as needing both
+        // drawn again, and the sync just below brings it up to date.
+        var meta = recovered ? Hash(wanted.Name) + ":" : Meta(wanted.Name, tags);
+        var row = new DiscordThreadRow(post.Thread, wanted.Kind, wanted.Key, forum, WaypointDatabase.PostLive, false, meta, [new DiscordThreadPart(post.Message, recovered ? "" : Hash(wanted.Parts[0]))], post.Message);
         var replaced = _database.InOneWrite(() =>
         {
             var older = _database.AddDiscordThread(row);
@@ -578,10 +583,14 @@ public sealed partial class WaypointWorker
 
         var shown = DiscordBridge.ThreadName(name);
         return threads
-            .Where(thread => thread.ParentId == forum && thread.OwnerId != discord.OwnerUserId && thread.Name == shown && _database.FindDiscordThread(thread.Id) is null)
+            .Where(thread => thread.ParentId == forum && IsBots(discord, thread.OwnerId) && thread.Name == shown && _database.FindDiscordThread(thread.Id) is null)
             .Select(thread => new ForumPost(thread.Id, thread.Id))
             .FirstOrDefault();
     }
+
+    /// <summary>Whether the bot made a post: by its own user ID once Discord has said it, or else as not the owner's.</summary>
+    private static bool IsBots(DiscordBridge discord, string? owner) =>
+        discord.BotUserId is { } bot ? owner == bot : owner != discord.OwnerUserId;
 
     /// <summary>An older post that a new one took over from says where things are now, and is archived.</summary>
     private async Task PointToNewPostAsync(DiscordBridge discord, DiscordThreadRow old, string moved, string kind)

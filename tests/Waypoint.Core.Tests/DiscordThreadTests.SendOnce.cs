@@ -44,6 +44,56 @@ public sealed partial class DiscordThreadTests
     }
 
     [Fact]
+    public async Task A_note_post_found_after_a_crash_is_brought_up_to_date_with_what_the_note_says_now()
+    {
+        var id = _database.CreateNote("Made up field trip", "Bring the made up permit slip", _now);
+        FailPartway("BEFORE INSERT ON discord_posts");
+        var first = MakeWorker(lists: null);
+        first.StartDiscord();
+        await Record.ExceptionAsync(() => first.SyncDiscordThreadsAsync());
+        first.StopDiscord();
+        StopFailingPartway();
+
+        // The note changes before the next start, so the post made earlier shows older words.
+        Assert.True(_database.SaveNote(id, "Made up field trip", "Bring the made up permit slip and a made up snack", _now));
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.SyncDiscordThreadsAsync();
+
+        var post = Assert.Single(_discord.PostsIn(NotesForum));
+        Assert.Contains("a made up snack", post.Messages[0].Body);
+        Assert.Empty(_database.GetDiscordSends("post:"));
+    }
+
+    [Fact]
+    public async Task A_note_post_looked_for_after_a_crash_is_the_bots_own_and_not_someone_elses_with_the_same_name()
+    {
+        // Someone else in the server already has a post with the same name.
+        var other = _discord.UserPost(NotesForum, "Made up field trip", "Made up words of a friend", owner: "made-up-friend");
+        var id = _database.CreateNote("Made up field trip", "Bring the made up permit slip", _now);
+
+        // Discord makes the post, then Waypoint stops before it hears which post it is.
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        var first = MakeWorker(lists: null);
+        first.StartDiscord();
+        await first.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await Record.ExceptionAsync(() => first.SyncDiscordThreadsAsync());
+        first.StopDiscord();
+        StopFailingPartway();
+
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await second.SyncDiscordThreadsAsync();
+
+        var post = PostFor(id);
+        Assert.NotSame(other, post);
+        Assert.Equal("bot", post.Owner);
+        Assert.Null(_database.FindDiscordThread(other.Id));
+        Assert.Empty(_database.GetDiscordSends("post:"));
+    }
+
+    [Fact]
     public async Task A_notice_posted_just_before_a_crash_is_kept_and_cleared_away_like_any_other()
     {
         _database.CreateList("Made up packing", _now);
