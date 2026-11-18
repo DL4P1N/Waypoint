@@ -59,7 +59,13 @@ public sealed partial class DiscordPhoneTests
         new(id, "", SentFromPhone, [new DiscordAttachment($"a{id}", name, 2048, $"https://cdn.discordapp.com/attachments/1/2/{name}", type, seconds)]);
 
     private List<string> RepliesTo(string id) =>
-        _discord.Of(HttpMethod.Post).Where(post => post.Url.Contains("/channels/capture/messages") && post.Body.Contains($"\"message_id\":\"{id}\"")).Select(post => post.Body).ToList();
+        _discord.Of(HttpMethod.Post).Where(post => IsReplyTo(post, id)).Select(post => post.Body).ToList();
+
+    private static bool IsReplyTo((HttpMethod Method, string Url, string Body) request, string id) =>
+        request.Method == HttpMethod.Post && request.Url.Contains("/channels/capture/messages") && request.Body.Contains($"\"message_id\":\"{id}\"");
+
+    /// <summary>Finishes once that many replies to the message have gone out.</summary>
+    private Task Replied(string id, int count) => _discord.Made(request => IsReplyTo(request, id), count);
 
     /// <summary>Longer than <see cref="WaitFor"/>, since the download and reading run in the background.</summary>
     private static async Task Eventually(Func<bool> condition)
@@ -119,25 +125,29 @@ public sealed partial class DiscordPhoneTests
         var voice = new FakeVoice { IsReady = false };
         var worker = VoiceWorker(voice);
 
+        var told = Replied("v3", 1);
         worker.OnDiscordMessage(VoiceMessage("v3"));
-        await Eventually(() => RepliesTo("v3").Count == 1);
+        await told;
 
-        Assert.Contains("Voice note kept", RepliesTo("v3")[0]);
-        Assert.Contains("set up on the PC", RepliesTo("v3")[0]);
-        Assert.DoesNotContain("send", RepliesTo("v3")[0], StringComparison.OrdinalIgnoreCase);
+        // The reply goes out while the note's first read still has its turn, and the note is marked as told just
+        // after. Trying again waits for that turn, so once it's back the first read has finished, the files are as
+        // it left them, and, still not set up, it says nothing more.
+        await worker.ReadHeldVoiceNotesAsync();
+        var reply = Assert.Single(RepliesTo("v3"));
+        Assert.Contains("Voice note kept", reply);
+        Assert.Contains("set up on the PC", reply);
+        Assert.DoesNotContain("send", reply, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(_database.GetPendingCaptures());
         Assert.Empty(voice.Read);
 
         // Kept in the data folder, not the temp folder, with which message it answers.
         Assert.Equal(2, Directory.EnumerateFiles(VoiceFolder).Count());
 
-        // Trying again while still not set up says nothing more.
-        await worker.ReadHeldVoiceNotesAsync();
-        Assert.Single(RepliesTo("v3"));
-
+        // Its words are captured during the read, and the reply showing them is sent in the background after.
+        var heard = Replied("v3", 2);
         voice.IsReady = true;
         await worker.ReadHeldVoiceNotesAsync();
-        await Eventually(() => RepliesTo("v3").Count == 2);
+        await heard;
 
         var capture = Assert.Single(_database.GetPendingCaptures());
         Assert.Equal("Buy stamps on Friday", capture.Text);

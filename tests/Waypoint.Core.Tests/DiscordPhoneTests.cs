@@ -81,6 +81,32 @@ public sealed partial class DiscordPhoneTests : IDisposable
             }
         }
 
+        private readonly List<(Func<(HttpMethod Method, string Url, string Body), bool> Match, int Count, TaskCompletionSource Done)> _waiting = [];
+
+        /// <summary>
+        /// Finishes once that many matching requests have been made, counting those made already. It's woken by the
+        /// request itself, not by checking again and again, so a slow machine only makes it later, never wrong.
+        /// </summary>
+        public Task Made(Func<(HttpMethod Method, string Url, string Body), bool> match, int count = 1)
+        {
+            // Its continuation runs elsewhere, never inside the request that finished it.
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (Requests)
+            {
+                if (Requests.Count(match) >= count)
+                {
+                    done.SetResult();
+                }
+                else
+                {
+                    _waiting.Add((match, count, done));
+                }
+            }
+
+            // Only so a request that never comes fails the test rather than hanging it.
+            return done.Task.WaitAsync(TimeSpan.FromMinutes(2));
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
@@ -88,6 +114,11 @@ public sealed partial class DiscordPhoneTests : IDisposable
             lock (Requests)
             {
                 Requests.Add((request.Method, url, body));
+                foreach (var waiter in _waiting.Where(waiter => Requests.Count(waiter.Match) >= waiter.Count).ToList())
+                {
+                    _waiting.Remove(waiter);
+                    waiter.Done.SetResult();
+                }
             }
 
             if (FailWith is not null)
