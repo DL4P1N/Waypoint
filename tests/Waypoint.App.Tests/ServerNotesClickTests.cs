@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Controls;
 using Waypoint.App;
 using Waypoint.Core.Capture;
+using Waypoint.Core.Notes;
 using Waypoint.Core.Remote;
 
 namespace Waypoint.App.Tests;
@@ -34,6 +35,9 @@ public sealed class ServerNotesClickTests
 
         public ManualResetEventSlim ChangeArrived { get; } = new();
 
+        /// <summary>A class is on, so a new note started from All goes in its folder, titled with it.</summary>
+        public bool ClassOn { get; set; }
+
         /// <summary>The next note save is turned down, as a server does with a request it won't take.</summary>
         public bool RefuseNextSave { get; set; }
 
@@ -42,6 +46,14 @@ public sealed class ServerNotesClickTests
             lock (_gate)
             {
                 _notes[id] = (_notes[id].Title, body);
+            }
+        }
+
+        public string Title(long id)
+        {
+            lock (_gate)
+            {
+                return _notes[id].Title;
             }
         }
 
@@ -92,7 +104,19 @@ public sealed class ServerNotesClickTests
                 else if (path == "/api/notes" && request.Method == HttpMethod.Post)
                 {
                     NotesMade++;
+                    var made = JsonSerializer.Deserialize<NewNoteRequest>(sent, RemoteJson.Options)!;
+                    Changes.Add($"make {100 + NotesMade} {made.Title}: {made.Body} in {made.FolderId}");
+                    _notes[100 + NotesMade] = (made.Title, made.Body);
                     body = new Found<long>(100 + NotesMade);
+                }
+                else if (path == "/api/notes/place")
+                {
+                    body = ClassOn ? new NotePlacement(null, "Biology", "Biology 1 Apr") : new NotePlacement(null);
+                }
+                else if (path == "/api/notes/folder-for")
+                {
+                    Changes.Add("class folder");
+                    body = new Found<long?>(50);
                 }
                 else if (path is "/api/notes" or "/api/notes/in" || path.StartsWith("/api/notes/search", StringComparison.Ordinal))
                 {
@@ -185,6 +209,42 @@ public sealed class ServerNotesClickTests
         Assert.Equal(["save 7 radish, kale"], server.Changes);
         Assert.Equal("radish, kale", server.Body(7));
         Assert.Equal(0, server.NotesMade);
+    });
+
+    [Fact]
+    public void A_new_notes_first_save_and_its_class_folder_return_at_once_and_the_note_is_made_once() => Ui.Run(ui =>
+    {
+        var server = new NotesServer { ClassOn = true };
+        var (view, work, body, _) = OpenNotes(ui, server);
+        server.ChangeArrived.Reset();
+        server.ReleaseChanges.Reset();
+
+        // Where it goes is read while the first words are typed, then the first save places it and makes it, and
+        // more typed meanwhile is saved to it after. Each came back while the server still held the first.
+        UiTest.Call(view, "NewNote");
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Type(body, "cell walls");
+        UiTest.Call(view, "SaveSoon");
+        Type(body, "cell walls, mitochondria");
+        UiTest.Call(view, "SaveSoon");
+        Assert.Empty(server.Changes);
+        Assert.True(work.ChangesWaiting);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3 && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
+        Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
+        Assert.Equal(1, server.NotesMade);
+        Assert.Equal("Biology 1 Apr", server.Title(101));
+        Assert.Equal("Biology 1 Apr", UiTest.Named<TextBox>(view, "TitleBox").Text);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+
+        // Typed on, it goes on as that note.
+        Type(body, "cell walls, mitochondria, ribosomes");
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
+        Assert.Equal(1, server.NotesMade);
     });
 
     [Fact]

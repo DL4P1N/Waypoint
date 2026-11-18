@@ -92,6 +92,8 @@ public partial class NotesView : UserControl
     private TranscriptionQueue? _transcription;
     private IReadOnlyDictionary<long, TranscriptionJob> _transcribing = new Dictionary<long, TranscriptionJob>();
     private NotePlacement? _draftPlacement;
+    private NewNoteSave? _newNote;
+    private long _newNotes;
     private long? _extrasFor;
     private string _sourcesShown = "";
     private int _sourceCount;
@@ -1206,8 +1208,36 @@ public partial class NotesView : UserControl
     /// </summary>
     private readonly ConcurrentDictionary<long, long> _madeAgain = new();
 
-    /// <summary>In server mode, a note that's already there saves off the window's thread. A new note, or one being placed in a class folder, saves here.</summary>
-    private bool SavesAhead => _notes is Waypoint.Core.Remote.ServerNotesData && _draft.Id is not null && _draftPlacement is null;
+    /// <summary>
+    /// A new note in server mode, from its first save until it's back with an ID. Its saves go by <see cref="Key"/>
+    /// in the meantime, which <see cref="_madeAgain"/> turns into the note's ID once it's made, so the note is made
+    /// once, and anything typed while that was on its way is saved to it after.
+    /// </summary>
+    private sealed class NewNoteSave(long key)
+    {
+        public long Key { get; } = key;
+
+        /// <summary>Where it goes, while that's still being read from the server.</summary>
+        public Task<NotePlacement>? Placing { get; init; }
+
+        /// <summary>Set once its first save is queued, after which that save places it.</summary>
+        public bool Sent { get; set; }
+
+        /// <summary>Where it goes, as known when its first save was queued, or null to take it from <see cref="Placing"/>.</summary>
+        public NotePlacement? Placement { get; set; }
+
+        /// <summary>The folder it was made in, set by its first save.</summary>
+        public long? Folder { get; set; }
+
+        /// <summary>The class title its first save gave it, when no title was typed.</summary>
+        public string? Title { get; set; }
+    }
+
+    /// <summary>
+    /// In server mode, a note that's already there saves off the window's thread, and so does a new one while the
+    /// page's work isn't running straight away. Otherwise a new note, or one being placed in a class folder, saves here.
+    /// </summary>
+    private bool SavesAhead => _notes is Waypoint.Core.Remote.ServerNotesData && (_draft.Id is not null ? _draftPlacement is null : !Work.RunsNow);
 
     /// <summary>
     /// Once typing stops. In server mode an existing note is saved off the window's thread, and the rows are then
@@ -1239,9 +1269,11 @@ public partial class NotesView : UserControl
     /// </summary>
     private void SaveAhead()
     {
-        var id = _draft.Id!.Value;
+        var plan = _draft.Id is null ? _newNote ??= new NewNoteSave(long.MinValue + ++_newNotes) : null;
+        var id = _draft.Id ?? plan!.Key;
         var (title, body) = (_draft.Title, _draft.Body);
-        var last = _saves.LastOrDefault(save => save.Id == id);
+        var madeAgain = _madeAgain;
+        var last = _saves.LastOrDefault(save => save.Id == id || (madeAgain.TryGetValue(save.Id, out var again) && again == id));
         if (last is not null && last.Title == title && last.Body == body)
         {
             return;
@@ -1251,17 +1283,54 @@ public partial class NotesView : UserControl
         var notes = _notes;
         var folder = _draftFolder;
         var now = DateTime.Now;
-        var madeAgain = _madeAgain;
+        var maker = _maker;
+        if (plan is { Sent: false })
+        {
+            // Placed by its first save, by what's known now, or by the read of it still on its way.
+            plan.Sent = true;
+            plan.Placement = _draftPlacement;
+            _draftPlacement = null;
+            TitleBox.Tag = TitleHint;
+        }
+
         long Saving()
         {
             var target = madeAgain.TryGetValue(id, out var again) ? again : id;
-            if (NoteSaving.SaveKeepingOther(notes, target, title, body, expected, now))
+            if (plan is not null && target == id)
+            {
+                return MakeNew(plan);
+            }
+
+            // Typed in a new note while it was being made, with no title of its own, it keeps the class title it was given.
+            var saveTitle = plan?.Title is { } given && string.IsNullOrWhiteSpace(title) ? given : title;
+            if (NoteSaving.SaveKeepingOther(notes, target, saveTitle, body, expected, now))
             {
                 return target;
             }
 
-            var made = notes.CreateNote(title, body, now, folder);
+            var made = notes.CreateNote(saveTitle, body, now, plan?.Folder ?? folder);
             madeAgain[id] = made;
+            return made;
+        }
+
+        // A new note started during class goes in that class's folder, titled with the course and date unless a
+        // title was typed, as it would be saved here. The folder is only made once there's a note to put in it.
+        long MakeNew(NewNoteSave plan)
+        {
+            var into = folder;
+            var makeTitle = title;
+            if ((plan.Placement ?? Placed(plan.Placing)) is { Course: not null } placement && maker is not null)
+            {
+                into ??= maker.FolderFor(placement, now);
+                if (string.IsNullOrWhiteSpace(makeTitle) && placement.Title is { } classTitle)
+                {
+                    plan.Title = makeTitle = classTitle;
+                }
+            }
+
+            plan.Folder = into;
+            var made = notes.CreateNote(makeTitle, body, now, into);
+            madeAgain[plan.Key] = made;
             return made;
         }
 
@@ -1315,10 +1384,26 @@ public partial class NotesView : UserControl
         var savedTo = save.Saving.GetAwaiter().GetResult();
 
         // The editor may be on another note by now, such as the copy kept when the server changed this one too. A
-        // note made again goes on as the new one.
-        if (_draft.Id == save.Id || _draft.Id == savedTo)
+        // note made again goes on as the new one, and so does a new note once it's made.
+        var plan = _newNote is { } newNote && newNote.Key == save.Id ? newNote : null;
+        var made = _draft.Id is null ? plan : null;
+        if (_draft.Id == save.Id || _draft.Id == savedTo || made is not null)
         {
-            _draft.MarkSaved(savedTo, save.Title, save.Body);
+            // A new note sent with no title was given its class's title, which it shows unless a title has been typed since.
+            var title = plan?.Title is { } classTitle && string.IsNullOrWhiteSpace(save.Title) ? classTitle : save.Title;
+            if (made is not null)
+            {
+                _draftFolder = made.Folder;
+                if (title != save.Title && _draft.Title == save.Title)
+                {
+                    _loading = true;
+                    TitleBox.Text = title;
+                    _loading = false;
+                    _draft.Edit(title, _draft.Body);
+                }
+            }
+
+            _draft.MarkSaved(savedTo, title, save.Body);
         }
 
         Bar.Changed();
@@ -1378,6 +1463,12 @@ public partial class NotesView : UserControl
             // A new note started during class goes in that class's folder, titled with the course and date
             // unless a title was typed. The folder is only made once there's a note to put in it.
             var title = _draft.Title;
+            if (_draft.Id is null && _draftPlacement is null && _newNote is { Sent: false, Placing.IsCompletedSuccessfully: true } placing)
+            {
+                // Closing, with where it goes read but not taken up yet.
+                _draftPlacement = Placed(placing.Placing) is { Course: not null } read ? read : null;
+            }
+
             if (_draft.Id is null && _draftPlacement is { Course: not null } placement && _maker is { } maker)
             {
                 _draftFolder ??= maker.FolderFor(placement, now);
@@ -1412,6 +1503,7 @@ public partial class NotesView : UserControl
     private void Open(NoteDetail? note, bool keepMode = false)
     {
         _opening = null;
+        _newNote = null;
         _draft.Load(note);
         if (note is not null)
         {
@@ -1682,9 +1774,27 @@ public partial class NotesView : UserControl
         // started during class linked to that class and given its title.
         _draftFolder = SelectedFolder?.Folder.Id;
         var picked = Column.SelectedKey != AllKey;
-        _draftPlacement = _maker?.PlaceNewNote(_draftFolder, picked, DateTime.Now) is { Course: not null } placement ? placement : null;
+        Task<NotePlacement>? placing = null;
+        if (Work.RunsNow || _maker is not { } maker)
+        {
+            _draftPlacement = _maker?.PlaceNewNote(_draftFolder, picked, DateTime.Now) is { Course: not null } placement ? placement : null;
+        }
+        else
+        {
+            // In server mode it opens at once, and where it goes is read while the first words are typed.
+            _draftPlacement = null;
+            var folder = _draftFolder;
+            var now = DateTime.Now;
+            placing = Work.Read(() => maker.PlaceNewNote(folder, picked, now));
+        }
+
         _listAskedFor = false;
         Open(null);
+        if (placing is not null)
+        {
+            _newNote = new NewNoteSave(long.MinValue + ++_newNotes) { Placing = placing };
+            TakePlacement(_newNote);
+        }
         _loading = true;
         NotesList.SelectedItem = null;
         _loading = false;
@@ -1708,9 +1818,8 @@ public partial class NotesView : UserControl
 
     private bool _switchingToText;
 
-    private void OnDeleteClicked(object sender, RoutedEventArgs e)
+    private void OnDeleteClicked(object sender, RoutedEventArgs e) => FlushThen(() =>
     {
-        Flush();
         if (_draft.Id is not { } id)
         {
             CloseEditor();
@@ -1718,7 +1827,56 @@ public partial class NotesView : UserControl
         }
 
         DeleteNote(id);
+    });
+
+    /// <summary>
+    /// Saves what's typed, then carries on with the open note's ID: straight away, or in server mode once a new
+    /// note's first save is back with it. Nothing is done if another note was opened meanwhile.
+    /// </summary>
+    private void FlushThen(Action then)
+    {
+        Flush();
+        if (_draft.Id is null && _newNote is { } plan && _saves.LastOrDefault(save => save.Id == plan.Key) is { } making)
+        {
+            ThenOnceMade(plan, making, then);
+            return;
+        }
+
+        then();
     }
+
+    private async void ThenOnceMade(NewNoteSave plan, BackgroundSave making, Action then)
+    {
+        try
+        {
+            await making.Saving;
+        }
+        catch (Exception)
+        {
+            // Said once the save is marked done, the way any save's problem is.
+        }
+
+        // Marked saved first, since that was waiting on it before this.
+        if (_newNote == plan)
+        {
+            then();
+        }
+    }
+
+    /// <summary>A new note's place, once it's read, while nothing has been saved yet: its class title shows as the hint.</summary>
+    private async void TakePlacement(NewNoteSave plan)
+    {
+        var placement = await plan.Placing!.ContinueWith(Placed, TaskScheduler.Default);
+        if (_newNote == plan && _draft.Id is null && !plan.Sent)
+        {
+            _draftPlacement = placement is { Course: not null } ? placement : null;
+            TitleBox.Tag = _draftPlacement?.Title ?? TitleHint;
+        }
+    }
+
+    /// <summary>Where a read said a new note goes, or nowhere in particular if it couldn't be read.</summary>
+    private static NotePlacement? Placed(Task<NotePlacement>? placing) =>
+        placing is { IsCompletedSuccessfully: true } ? placing.Result : null;
 
     private async void DeleteNote(long id)
     {
@@ -1883,9 +2041,8 @@ public partial class NotesView : UserControl
         Bar.Show(string.Join(" ", lines));
     }
 
-    private void OnAttachClicked(object sender, RoutedEventArgs e)
+    private void OnAttachClicked(object sender, RoutedEventArgs e) => FlushThen(() =>
     {
-        Flush();
         if (_draft.Id is { } id)
         {
             PickFiles(id);
@@ -1895,7 +2052,7 @@ public partial class NotesView : UserControl
             // Nothing typed yet, so there's no note to add to. The file makes one instead.
             PickFiles(null);
         }
-    }
+    });
 
     private async void AttachFiles(long noteId, IReadOnlyList<string> paths)
     {
