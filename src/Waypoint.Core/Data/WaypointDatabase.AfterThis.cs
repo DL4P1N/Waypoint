@@ -144,15 +144,22 @@ public sealed partial class WaypointDatabase
                 heldAt = DateTime.Parse(reader.GetString(3), CultureInfo.InvariantCulture);
             }
 
-            // Taking the newest clears everything, so nothing older ever comes back after it.
+            // Taking the newest clears everything, so nothing older ever comes back after it. Each delete is its own
+            // command: in one command with a SELECT between, a failure after the first result would go unreported.
             using (var take = connection.CreateCommand())
             {
-                take.CommandText = "DELETE FROM after_this WHERE id = $id; SELECT changes(); DELETE FROM after_this;";
+                take.CommandText = "DELETE FROM after_this WHERE id = $id";
                 take.Parameters.AddWithValue("$id", id);
-                if ((long)take.ExecuteScalar()! != 1)
+                if (take.ExecuteNonQuery() != 1)
                 {
                     continue;
                 }
+            }
+
+            using (var clear = connection.CreateCommand())
+            {
+                clear.CommandText = "DELETE FROM after_this";
+                clear.ExecuteNonQuery();
             }
 
             var taken = FindItem(connection, source, itemId) is { Done: false } item && Activation.CanStart(item) && ItemRef.Format(item) != working

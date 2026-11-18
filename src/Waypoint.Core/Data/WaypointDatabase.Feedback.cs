@@ -28,7 +28,7 @@ public sealed partial class WaypointDatabase
         }
 
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO feedback (at, feature, item_ref, item_title, note) VALUES ($at, $feature, $ref, $title, $note); SELECT last_insert_rowid();";
+        command.CommandText = "INSERT INTO feedback (at, feature, item_ref, item_title, note) VALUES ($at, $feature, $ref, $title, $note) RETURNING id";
         command.Parameters.AddWithValue("$at", FormatReminder(now));
         command.Parameters.AddWithValue("$feature", feature);
         command.Parameters.AddWithValue("$ref", (object?)itemRef ?? DBNull.Value);
