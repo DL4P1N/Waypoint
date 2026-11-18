@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Waypoint.Core.Budget;
 using Waypoint.Core.Capture;
 
@@ -168,9 +169,8 @@ public sealed partial class WaypointDatabase
         return dates;
     }
 
-    private void ClearPayCalendar(long scheduleId)
+    private static void ClearPayCalendar(SqliteConnection connection, long scheduleId)
     {
-        using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM pay_calendar WHERE schedule_id = $id";
         command.Parameters.AddWithValue("$id", scheduleId);

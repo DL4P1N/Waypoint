@@ -108,8 +108,15 @@ public sealed partial class WaypointDatabase
         }
 
         var item = new ScheduledItem(current?.Label ?? MainPayLabel, amount, dayNumbers, current?.EarlierOnWeekend ?? true, kind, anchor, current?.Id ?? 0);
-        SavePaycheck(item);
-        ClearPayCalendar(item.Id);
+        // The new schedule and clearing the old one's pay dates land together, so neither is kept without the other.
+        using (var connection = Open())
+        using (var transaction = connection.BeginTransaction())
+        {
+            SavePaycheck(connection, item);
+            ClearPayCalendar(connection, item.Id);
+            transaction.Commit();
+        }
+
         var today = DateOnly.FromDateTime(DateTime.Now);
         return new OpReply($"{item.Label} is now {Briefing.Money(amount)} {Cadence(item)}, next expected {ShortDate(BudgetMath.NextOccurrence(item, today) ?? today)}");
     }
@@ -410,13 +417,18 @@ public sealed partial class WaypointDatabase
     /// <summary>Changes the main paycheck in place, so there's never a second one.</summary>
     private void SavePaycheck(ScheduledItem item)
     {
+        using var connection = Open();
+        SavePaycheck(connection, item);
+    }
+
+    private static void SavePaycheck(SqliteConnection connection, ScheduledItem item)
+    {
         if (item.Id == 0)
         {
-            AddScheduledItem(item);
+            AddScheduledItem(connection, item);
             return;
         }
 
-        using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE budget_schedule SET amount_cents = $amount, days = $days, pattern = $pattern, anchor = $anchor WHERE id = $id";
         command.Parameters.AddWithValue("$amount", item.AmountCents);

@@ -149,6 +149,30 @@ public sealed class PayScheduleTests : IDisposable
     }
 
     [Fact]
+    public void A_new_schedule_whose_pay_dates_cant_be_cleared_keeps_the_old_paycheck()
+    {
+        SeedLive();
+        var pay = _database.GetSchedule()[0];
+        Run($"INSERT INTO pay_calendar (schedule_id, pay_on) VALUES ({pay.Id}, '2026-11-14')");
+        Run("CREATE TRIGGER fail_partway BEFORE DELETE ON pay_calendar BEGIN SELECT RAISE(ABORT, 'made to fail partway'); END");
+
+        Assert.ThrowsAny<Microsoft.Data.Sqlite.SqliteException>(() => _database.SetPaySchedule("biweekly", [], 90000, new DateTime(2026, 11, 12)));
+
+        var kept = _database.GetSchedule()[0];
+        Assert.Equal(85000, kept.AmountCents);
+        Assert.Equal(PayPattern.MonthDays, kept.Pattern);
+        Assert.Equal([10, 25], kept.Days);
+    }
+
+    private void Run(string sql)
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void Changing_the_amount_keeps_the_schedule()
     {
         SeedLive();

@@ -406,6 +406,11 @@ public sealed partial class WaypointDatabase
     public void AddScheduledItem(ScheduledItem item, DateOnly? addedOn = null)
     {
         using var connection = Open();
+        AddScheduledItem(connection, item, addedOn);
+    }
+
+    private static void AddScheduledItem(SqliteConnection connection, ScheduledItem item, DateOnly? addedOn = null)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO budget_schedule (label, amount_cents, days, earlier_on_weekend, pattern, anchor, account, added_on) VALUES ($label, $amount, $days, $earlier, $pattern, $anchor, $account, $added)";
         command.Parameters.AddWithValue("$added", (addedOn ?? DateOnly.FromDateTime(DateTime.Now)).ToString("O", CultureInfo.InvariantCulture));
