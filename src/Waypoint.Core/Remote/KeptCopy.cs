@@ -25,4 +25,36 @@ public static class KeptCopy
         File.WriteAllText(file, text.ToString());
         return file;
     }
+
+    /// <summary>
+    /// Moves a file that couldn't be read out of the way, byte for byte, so whatever was typed in it can still be
+    /// found by hand, and returns where it went. One set aside before is never overwritten.
+    /// </summary>
+    public static string SetAside(string file)
+    {
+        var aside = $"{file}.unreadable-{DateTime.Now:yyyyMMddHHmmss}";
+        for (var next = 2; File.Exists(aside); next++)
+        {
+            aside = $"{file}.unreadable-{DateTime.Now:yyyyMMddHHmmss}-{next}";
+        }
+
+        File.Move(file, aside);
+        return aside;
+    }
+
+    /// <summary>The heading and text for a file set aside as unreadable, so a kept copy points to it and shows what it held.</summary>
+    public static (string Heading, string Text) SetAsideEntry(string what, string aside)
+    {
+        string text;
+        try
+        {
+            text = File.Exists(aside) ? File.ReadAllText(aside) : "";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            text = "";
+        }
+
+        return ($"{what} couldn't be read. The file is kept as it was at {aside}", text);
+    }
 }

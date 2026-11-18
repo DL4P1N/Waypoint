@@ -87,7 +87,13 @@ public sealed class ServerNotesData : INotesData
 
     public string? UnsavedPath => _offline?.UnsavedPath;
 
-    /// <summary>A plain text copy of the notes the server turned down, for opening. Null when there are none.</summary>
+    /// <summary>What to show while a file of notes typed while away was found damaged and set aside. Null when none was.</summary>
+    public string? Unreadable => _offline?.Unreadable;
+
+    /// <summary>
+    /// A plain text copy of the notes the server turned down, and of any file of them found damaged, for opening.
+    /// Null when there are none.
+    /// </summary>
     public string? WriteUnsavedCopy() => _offline?.WriteUnsavedCopy();
 
     private static string Text(string? value) => Uri.EscapeDataString(value ?? "");

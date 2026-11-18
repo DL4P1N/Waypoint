@@ -52,13 +52,47 @@ public sealed class CaptureQueue(string path)
     /// <summary>A plain text copy of what was turned down, for opening in a text editor.</summary>
     public const string RefusedCopyName = "Typed but not saved on the server.txt";
 
-    /// <summary>What to show while any capture has been turned down. Null when none has. Open shows them.</summary>
-    public string? Refused => RefusedCount switch
+    private readonly List<string> _setAside = [];
+
+    /// <summary>The files of captures found damaged and set aside since the app started, so the person can be told.</summary>
+    public IReadOnlyList<string> SetAsideFiles
     {
-        0 => null,
-        1 => "Something you typed couldn't be saved on the server. It's kept on this PC.",
-        var count => $"{count} things you typed couldn't be saved on the server. They're kept on this PC.",
-    };
+        get
+        {
+            lock (_gate)
+            {
+                // Read first, so a damaged file is found as soon as the status line is shown.
+                Read();
+                Read(RefusedPath);
+                return _setAside.ToList();
+            }
+        }
+    }
+
+    /// <summary>
+    /// What to show while any capture has been turned down, or a file of them was found damaged and set aside. Null
+    /// when neither. Open shows them.
+    /// </summary>
+    public string? Refused
+    {
+        get
+        {
+            var turnedDown = RefusedCount switch
+            {
+                0 => null,
+                1 => "Something you typed couldn't be saved on the server. It's kept on this PC.",
+                var count => $"{count} things you typed couldn't be saved on the server. They're kept on this PC.",
+            };
+            var damaged = SetAsideFiles switch
+            {
+                [] => null,
+                [var one] => $"Some things you typed couldn't be read, so they weren't saved on the server. They're kept on this PC in {Path.GetFileName(one)}.",
+                var files => $"Some things you typed couldn't be read, so they weren't saved on the server. They're kept on this PC in {files.Count} files, starting with {Path.GetFileName(files[0])}.",
+            };
+
+            return turnedDown is null && damaged is null ? null : string.Join(" ", new[] { turnedDown, damaged }.OfType<string>());
+        }
+    }
 
     /// <summary>
     /// Writes what was turned down as plain text beside the queue and returns where, so it can be opened and copied
@@ -67,12 +101,14 @@ public sealed class CaptureQueue(string path)
     public string? WriteRefusedCopy()
     {
         List<CaptureRequest> refused;
+        List<string> aside;
         lock (_gate)
         {
             refused = Read(RefusedPath);
+            aside = _setAside.ToList();
         }
 
-        if (refused.Count == 0)
+        if (refused.Count == 0 && aside.Count == 0)
         {
             return null;
         }
@@ -81,7 +117,8 @@ public sealed class CaptureQueue(string path)
             Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)) ?? "", RefusedCopyName),
             refused.Select(capture => (
                 $"Typed {KeptCopy.When(capture.WrittenAt.LocalDateTime)}{(capture.FileName is { } file ? $", from {file}" : "")}",
-                capture.Text)));
+                capture.Text))
+            .Concat(aside.Select(file => KeptCopy.SetAsideEntry("Things typed while waiting for the server", file))));
     }
 
     /// <summary>
@@ -145,23 +182,40 @@ public sealed class CaptureQueue(string path)
 
     private void Write(List<CaptureRequest> waiting) => Write(path, waiting);
 
-    private static List<CaptureRequest> Read(string file)
+    /// <summary>
+    /// Reads a kept file. One that can't be read, or that holds an entry that's empty or the wrong shape, is set
+    /// aside byte for byte, so whatever was typed can still be found by hand, and is told about. The whole entries
+    /// are kept in a new file, so they still go.
+    /// </summary>
+    private List<CaptureRequest> Read(string file)
     {
         if (!File.Exists(file))
         {
             return [];
         }
 
+        List<CaptureRequest?> entries;
         try
         {
-            return JsonSerializer.Deserialize<List<CaptureRequest>>(File.ReadAllText(file), RemoteJson.Options) ?? [];
+            entries = JsonSerializer.Deserialize<List<CaptureRequest?>>(File.ReadAllText(file), RemoteJson.Options) ?? [];
         }
         catch (JsonException)
         {
-            // Kept aside rather than thrown away, so whatever was typed can still be found by hand.
-            File.Move(file, $"{file}.unreadable-{DateTime.Now:yyyyMMddHHmmss}", overwrite: true);
+            _setAside.Add(KeptCopy.SetAside(file));
             return [];
         }
+
+        var good = entries.OfType<CaptureRequest>().Where(capture => capture is { Id: not null, Text: not null }).ToList();
+        if (good.Count != entries.Count)
+        {
+            _setAside.Add(KeptCopy.SetAside(file));
+            if (good.Count > 0)
+            {
+                Write(file, good);
+            }
+        }
+
+        return good;
     }
 
     private static void Write(string file, List<CaptureRequest> waiting)
