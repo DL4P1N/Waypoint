@@ -138,6 +138,51 @@ public sealed partial class WaypointDatabase
         return new RepaymentCard(waiting, true);
     }
 
+    /// <summary>
+    /// A short key for a payment that fits on a Discord button. It's worked out from the payment's own email ID, so
+    /// it's known before the card goes out and never needs saving.
+    /// </summary>
+    public static string RepaymentKey(string messageId) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(messageId)))[..16].ToLowerInvariant();
+
+    /// <summary>
+    /// The payment a card's button is about, by the key it carries. The card's ID is kept with it if it wasn't yet,
+    /// such as when Waypoint stopped right after sending the card, so a reply to the card finds it too.
+    /// </summary>
+    public RepaymentCard? FindRepaymentByKey(string key, string cardMessageId)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        RepaymentCard? found = null;
+        string? card = null;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT message_id, payer, cents, note, received_on, status, card_message_id FROM repayments";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (RepaymentKey(reader.GetString(0)) == key)
+                {
+                    found = new RepaymentCard(ReadRepayment(reader), reader.GetString(5) == RepaymentPending);
+                    card = reader.IsDBNull(6) ? null : reader.GetString(6);
+                    break;
+                }
+            }
+        }
+
+        if (found is not null && card is null)
+        {
+            using var keep = connection.CreateCommand();
+            keep.CommandText = "UPDATE repayments SET card_message_id = $card WHERE message_id = $id AND card_message_id IS NULL";
+            keep.Parameters.AddWithValue("$card", cardMessageId);
+            keep.Parameters.AddWithValue("$id", found.Repayment.MessageId);
+            keep.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return found;
+    }
+
     private static string? CardOf(SqliteConnection connection, string messageId)
     {
         using var command = connection.CreateCommand();

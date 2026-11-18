@@ -938,7 +938,7 @@ public sealed partial class WaypointWorker
         var waiting = _database.GetWaitingRepayments().FirstOrDefault(repayment => repayment.MessageId == outcome.MessageId);
         IReadOnlyList<RepaymentCandidate> candidates = waiting is null ? [] : _database.GetRepaymentCandidates(waiting, WaypointDatabase.MaxCardCandidates);
         var ask = candidates.Count > 0 ? "Pick the purchase below, or reply with its name." : "Reply with the purchase's name.";
-        var card = await SendNoticeAsync(BankProfiles.Current.PaymentApp.Name, $"{outcome.Text}\n{ask}", CardTone.Attention, toCaptureChannel: true, actions: PaymentAppButtons(candidates));
+        var card = await SendNoticeAsync(BankProfiles.Current.PaymentApp.Name, $"{outcome.Text}\n{ask}", CardTone.Attention, toCaptureChannel: true, actions: PaymentAppButtons(candidates, outcome.MessageId));
         if (card is not null && outcome.MessageId is { } payment)
         {
             _database.SetRepaymentCard(payment, card);

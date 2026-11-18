@@ -12,18 +12,45 @@ namespace Waypoint.Core.Background;
 /// </summary>
 public sealed partial class WaypointWorker
 {
-    /// <summary>A purchase button on a payment app card. The purchase's ID follows, and the card's own ID says which payment.</summary>
+    /// <summary>
+    /// A purchase button on a payment app card. The purchase's ID follows, then the payment's key after a colon. Cards
+    /// sent before keys were added have none, and the card's own ID says which payment.
+    /// </summary>
     public const string PaymentAppPick = "repay-pick:";
 
-    /// <summary>Not a repayment on a payment app card.</summary>
+    /// <summary>Not a repayment on a payment app card, with the payment's key after a colon on newer cards.</summary>
     public const string PaymentAppNone = "repay-none";
 
-    /// <summary>A button for each purchase it could be for, merchant, day and what's left, then Not a repayment last, as Skip is.</summary>
-    private static List<CardAction> PaymentAppButtons(IReadOnlyList<RepaymentCandidate> candidates) =>
-        candidates
-            .Select(candidate => new CardAction(WaypointDatabase.Describe(candidate), PaymentAppPick + candidate.ItemId.ToString(CultureInfo.InvariantCulture)))
-            .Append(new CardAction(CardLabels.NotARepayment, PaymentAppNone, ButtonRole.Skip))
+    /// <summary>
+    /// A button for each purchase it could be for, merchant, day and what's left, then Not a repayment last, as Skip is.
+    /// Each carries the payment's key, which is known before the card is sent, so the buttons work even if Waypoint
+    /// stopped before the card's ID was saved with the payment.
+    /// </summary>
+    private static List<CardAction> PaymentAppButtons(IReadOnlyList<RepaymentCandidate> candidates, string? payment)
+    {
+        var key = payment is null ? "" : ":" + WaypointDatabase.RepaymentKey(payment);
+        return candidates
+            .Select(candidate => new CardAction(WaypointDatabase.Describe(candidate), PaymentAppPick + candidate.ItemId.ToString(CultureInfo.InvariantCulture) + key))
+            .Append(new CardAction(CardLabels.NotARepayment, PaymentAppNone + key, ButtonRole.Skip))
             .ToList();
+    }
+
+    /// <summary>The purchase a button picks, if any, and the payment's key it carries, if any. Null when it isn't one of these.</summary>
+    private static (long? Picked, string? Key)? ReadPaymentAppButton(string action)
+    {
+        if (action.StartsWith(PaymentAppPick, StringComparison.Ordinal))
+        {
+            var parts = action[PaymentAppPick.Length..].Split(':', 2);
+            return long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var item) ? (item, parts.Length > 1 ? parts[1] : null) : null;
+        }
+
+        if (action == PaymentAppNone)
+        {
+            return (null, null);
+        }
+
+        return action.StartsWith(PaymentAppNone + ":", StringComparison.Ordinal) ? (null, action[(PaymentAppNone.Length + 1)..]) : null;
+    }
 
     /// <summary>
     /// A button on a payment app card, settled through the same matching as the Budget page. Null when the button isn't
@@ -31,13 +58,14 @@ public sealed partial class WaypointWorker
     /// </summary>
     private ButtonResult? OnPaymentAppButton(string action, string card)
     {
-        var picked = TakeId(action, PaymentAppPick);
-        if (picked is null && action != PaymentAppNone)
+        if (ReadPaymentAppButton(action) is not { } button)
         {
             return null;
         }
 
-        if (_database.FindRepaymentForCard(card) is not { } asked)
+        // Newer cards carry their payment's key. Older ones are known by the card's ID kept with the payment.
+        var (picked, key) = button;
+        if (((key is null ? null : _database.FindRepaymentByKey(key, card)) ?? _database.FindRepaymentForCard(card)) is not { } asked)
         {
             return new ButtonResult(Outcome: "Couldn't tell which payment this card is about. Match it on the Budget page.");
         }
@@ -56,7 +84,7 @@ public sealed partial class WaypointWorker
 
         // That purchase was paid back meanwhile, so the card is drawn again with what's left to pick.
         var candidates = _database.GetRepaymentCandidates(still, WaypointDatabase.MaxCardCandidates);
-        return new ButtonResult(DiscordText.Notice(BankProfiles.Current.PaymentApp.Name, $"{reply.Text}\nPick another, or reply with its name.", CardTone.Attention) with { Actions = PaymentAppButtons(candidates) });
+        return new ButtonResult(DiscordText.Notice(BankProfiles.Current.PaymentApp.Name, $"{reply.Text}\nPick another, or reply with its name.", CardTone.Attention) with { Actions = PaymentAppButtons(candidates, payment) });
     }
 
     /// <summary>Typed replies that mean the payment wasn't paying anything back. Apostrophes and end marks are taken off first.</summary>

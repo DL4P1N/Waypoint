@@ -53,6 +53,32 @@ public sealed partial class DiscordPhoneTests
         Assert.Equal(["dishes", "laundry"], _database.GetListEntries("Made up chores").Select(entry => entry.Text));
     }
 
+    [Fact]
+    public async Task Buttons_on_a_payment_card_whose_id_was_never_kept_still_settle_that_payment()
+    {
+        Spend("Made up taqueria", 3000);
+        var worker = await Started();
+
+        // The card goes out, then Waypoint stops before its ID is kept with the payment.
+        FailPartway("BEFORE UPDATE OF card_message_id ON repayments");
+        await Assert.ThrowsAnyAsync<SqliteException>(() => worker.PostPaymentAppAsync(Owed()));
+        StopFailingPartway();
+        var card = $"m{_discord.Of(HttpMethod.Post).Count()}";
+        Assert.Null(_database.FindRepaymentForCard(card));
+
+        var sent = _discord.Of(HttpMethod.Post).Single(request => request.Url.EndsWith("/channels/capture/messages") && request.Body.Contains("Tailspin Pay"));
+        var pick = Buttons(sent.Body).First(button => button.Label.StartsWith("Made up taqueria", StringComparison.OrdinalIgnoreCase)).Id;
+        var result = await worker.OnButtonActedAsync(new ButtonPress(pick, null, card, "capture"));
+
+        Assert.Equal("Marked $6.40 from Riley Park repaid on Made up taqueria", result?.Outcome);
+        Assert.Empty(_database.GetWaitingRepayments());
+
+        // The card's ID is kept now, so a reply to it is about the same payment.
+        Assert.NotNull(_database.FindRepaymentForCard(card));
+        var none = Buttons(sent.Body).Last().Id;
+        Assert.Equal("That repayment is already settled", (await worker.OnButtonActedAsync(new ButtonPress(none, null, card, "capture")))?.Outcome);
+    }
+
     private void FailPartway(string when)
     {
         using var connection = _database.Open();
