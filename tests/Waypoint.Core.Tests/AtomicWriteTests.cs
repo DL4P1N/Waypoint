@@ -250,6 +250,138 @@ public sealed class AtomicWriteTests : IDisposable
         Assert.Equal(0, Scalar("SELECT reimbursed_cents FROM items WHERE kind = 'Expense'"));
     }
 
+    [Fact]
+    public void A_database_from_before_deposit_email_ids_upgrades_and_keeps_working()
+    {
+        // Made the way an older copy left it: deposits with no email column, a note sent under an id, and a waiting payment.
+        _database.SaveBudgetAccount(new BudgetAccount("Made Up Cushion", AccountKind.Cushion, 40000, Day));
+        _database.AddToCushion(5000, Day);
+        _database.AddToCushion(5000, Day);
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP BAKERY", 3000)]);
+        _database.AddRepayment("made-up-payment", new PaymentAppPayment("A Made Up Friend", 1500, null), Day);
+        var note = _database.CreateNoteOnce("made-up-client", "Made up note", "Made up body", DateTime.Now, null);
+        Run("DROP INDEX brokerage_deposits_message; ALTER TABLE brokerage_deposits DROP COLUMN message_id");
+        Assert.Equal(0, Count("pragma_table_info('brokerage_deposits')", "name = 'message_id'"));
+        SqliteConnection.ClearAllPools();
+
+        var upgraded = new WaypointDatabase(_path);
+        _ = new WaypointDatabase(_path);
+
+        Assert.Equal(1, Count("pragma_table_info('brokerage_deposits')", "name = 'message_id'"));
+        Assert.Equal(1, Count("sqlite_master", "name = 'brokerage_deposits_message'"));
+        Assert.Equal(2, Count("brokerage_deposits", "message_id IS NULL"));
+        Assert.True(upgraded.AddToCushion(100, Day, "made-up-email"));
+        Assert.False(upgraded.AddToCushion(100, Day, "made-up-email"));
+        Assert.True(upgraded.AddToCushion(100, Day));
+        Assert.Equal(50200, upgraded.GetBudgetAccounts().Single().BalanceCents);
+        Assert.Equal(note, upgraded.CreateNoteOnce("made-up-client", "Made up note", "Made up body", DateTime.Now, null));
+        Assert.Equal(1, Count("items", "kind = 'Note'"));
+
+        var purchase = Scalar("SELECT id FROM items WHERE kind = 'Expense'");
+        Assert.StartsWith("Marked", upgraded.MatchRepaymentTo("made-up-payment", purchase).Text);
+        Assert.Equal("That repayment is already settled", upgraded.MatchRepaymentTo("made-up-payment", purchase).Text);
+    }
+
+    [Fact]
+    public void Preferences_set_together_are_kept_together_or_not_at_all()
+    {
+        FailWhen("BEFORE INSERT ON preferences WHEN NEW.key = 'made-up-second'");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.SetPreferences(("made-up-first", "1"), ("made-up-second", "2")));
+
+        Assert.Null(_database.GetPreference("made-up-first"));
+    }
+
+    [Fact]
+    public void Holding_unanswered_cards_that_fails_leaves_them_to_be_held_later()
+    {
+        var item = AddTask("Call the made up shop");
+        _database.TrackSentReminder("made-up-card", item.Id, sentAt: DateTime.Now.AddHours(-1));
+        FailWhen("BEFORE INSERT ON after_this");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.HoldUnansweredReminders(DateTime.Now));
+
+        Assert.Equal(0, Scalar("SELECT held FROM sent_reminders WHERE message_id = 'made-up-card'"));
+    }
+
+    [Fact]
+    public void Taking_a_hold_that_fails_keeps_every_hold()
+    {
+        var expired = AddTask("Fold the made up laundry");
+        var held = AddTask("Sort the made up mail");
+        Run($"""
+            INSERT INTO after_this (item_id, source, held_at) VALUES ({expired.Id}, 'Capture', '{DateTime.Now.AddHours(-30):yyyy-MM-ddTHH:mm:ss}');
+            INSERT INTO after_this (item_id, source, held_at) VALUES ({held.Id}, 'Capture', '{DateTime.Now.AddHours(-1):yyyy-MM-ddTHH:mm:ss}');
+            """);
+        FailWhen($"BEFORE DELETE ON after_this WHEN OLD.item_id = {held.Id}");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.TakeAfterThis(DateTime.Now));
+
+        Assert.Equal(2, Count("after_this"));
+    }
+
+    [Fact]
+    public void A_snooze_that_fails_keeps_the_hold_for_after_this()
+    {
+        var item = AddTask("Book the made up visit");
+        Run($"INSERT INTO reminders (item_id, remind_at) VALUES ({item.Id}, '{DateTime.Now.AddMinutes(-5):yyyy-MM-ddTHH:mm:ss}')");
+        var reminder = _database.GetDueReminders(DateTime.Now).Single(due => due.Item.Id == item.Id);
+        Assert.True(_database.HoldAfterThis(item, DateTime.Now));
+        FailWhen("BEFORE UPDATE OF remind_at ON reminders");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.SnoozeReminder(reminder, DateTime.Now.AddMinutes(10)));
+
+        Assert.Equal(1, Count("after_this"));
+    }
+
+    [Fact]
+    public void A_purchase_added_by_hand_that_fails_leaves_no_capture()
+    {
+        _database.AddCategory("Made Up Treats", null, BudgetPeriod.Month);
+        FailWhen("BEFORE UPDATE OF category ON items");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.AddExpense("Made up cone", 450, "Made Up Treats", Day, DateTime.Now));
+
+        Assert.Equal(0, Count("items"));
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_note_whose_text_fails_isnt_made()
+    {
+        FailWhen("BEFORE UPDATE OF body ON items");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.CreateNote("Made up title", "Made up body", DateTime.Now));
+
+        Assert.Equal(0, Count("items"));
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_list_rename_whose_posts_fail_keeps_its_name()
+    {
+        _database.CreateList("Made up errands", DateTime.Now);
+        Run("INSERT INTO discord_posts (thread_id, kind, item_key, forum_id, state) VALUES ('made-up-thread', 'list', 'Made up errands', 'made-up-forum', 'live')");
+        FailWhen("BEFORE UPDATE ON discord_posts");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.RenameList("Made up errands", "Made up chores", DateTime.Now));
+
+        Assert.Contains("Made up errands", _database.GetListNames());
+        Assert.DoesNotContain("Made up chores", _database.GetListNames());
+    }
+
+    [Fact]
+    public void A_second_match_of_the_same_repayment_says_already_settled()
+    {
+        _database.ImportTransactions("Made Up Card", [new ImportedTransaction(Day, "MADE UP BAKERY", 3000)]);
+        _database.AddRepayment("made-up-payment", new PaymentAppPayment("A Made Up Friend", 1500, null), Day);
+        var purchase = Scalar("SELECT id FROM items WHERE kind = 'Expense'");
+
+        Assert.StartsWith("Marked", _database.MatchRepaymentTo("made-up-payment", purchase).Text);
+        Assert.Equal("That repayment is already settled", _database.MatchRepaymentTo("made-up-payment", purchase).Text);
+        Assert.Equal(1500, Scalar("SELECT reimbursed_cents FROM items WHERE kind = 'Expense'"));
+    }
+
     private StoredItem AddTask(string title)
     {
         _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(ItemKind.Task, title, null, null)]);
