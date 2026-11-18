@@ -33,7 +33,9 @@ public sealed partial class WaypointDatabase
 
     public WaypointDatabase(string path)
     {
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = path }.ToString();
+        // Asked for on every open, so it doesn't rest on how the bundled SQLite was built or on what a pooled
+        // connection was last set to. None of the keys cascade: a row still pointed at can't be deleted.
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = path, ForeignKeys = true }.ToString();
         RenameOldRepaymentsTable();
         Execute("""
             CREATE TABLE IF NOT EXISTS captures (
@@ -1492,8 +1494,11 @@ public sealed partial class WaypointDatabase
     /// SQLite's own busy wait is set on every connection. The library only retries a locked database while a statement
     /// steps, but an INSERT ... RETURNING commits when its reader closes, so a read running at the same moment (a
     /// Discord view refresh, say) would fail it straight away with "database is locked" instead of waiting.
+    /// Foreign keys are checked on every connection too (see the constructor), so a row can't point at one that
+    /// isn't there. Rows from older copies that already do are left alone: SQLite doesn't recheck them, and the
+    /// reads join to what they point at, so they stay out of sight.
     /// </summary>
-    private SqliteConnection Open()
+    internal SqliteConnection Open()
     {
         var connection = new SqliteConnection(_connectionString);
         connection.Open();

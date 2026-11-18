@@ -11,4 +11,8 @@
     <PackageReference Include="PdfPig" Version="0.1.16" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Waypoint.Core.Tests" />
+  </ItemGroup>
+
 </Project>
