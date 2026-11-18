@@ -33,6 +33,10 @@ internal static class Ui
         ExceptionDispatchInfo? failure = null;
         Thread.Value.Invoke(() =>
         {
+            // Work an earlier test left queued runs first, so a problem it raises late isn't put down to this test.
+            var frame = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => frame.Continue = false);
+            Dispatcher.PushFrame(frame);
             Unhandled.Clear();
             var returned = UiTest.ForegroundReturned;
             var test = new UiTest();
