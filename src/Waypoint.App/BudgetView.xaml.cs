@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Text.Json;
@@ -75,6 +77,22 @@ public partial class BudgetView : UserControl
 
     public BudgetView() => InitializeComponent();
 
+    private PageWork _work = PageWork.Local;
+
+    /// <summary>How the page reads and changes its data: straight away on this PC, or in order without holding the window in server mode.</summary>
+    internal PageWork Work
+    {
+        get => _work;
+        set
+        {
+            _work = value;
+            Column.Work = value;
+        }
+    }
+
+    /// <summary>Draws the page again, at once from what was kept in server mode, then from what's read.</summary>
+    private void ShowSoon() => Work.Show(() => Refresh(force: true), () => Refresh(force: false));
+
     /// <summary>
     /// <paramref name="database"/> is this PC's database or the server. Forms open with what the page last read, so
     /// while the server is away they still open, and saving says it has to wait.
@@ -90,8 +108,8 @@ public partial class BudgetView : UserControl
         Column.SelectionChanged += _ => ShowPage();
         Column.SearchChanged += OnSearchChanged;
         Column.AddChosen += OnAddChosen;
-        Scroll.LostKeyboardFocus += (_, _) => Refresh();
-        Refresh();
+        Scroll.LostKeyboardFocus += (_, _) => Work.Show(Refresh);
+        Work.Show(Refresh);
     }
 
     public void Refresh() => Refresh(force: false);
@@ -102,7 +120,7 @@ public partial class BudgetView : UserControl
         _month = FirstOfMonth(row.Date);
         Column.Select(PurchasesKey);
         Column.SetSearch(MerchantName.Clean(row.Title));
-        Refresh(force: true);
+        ShowSoon();
     }
 
     /// <summary>
@@ -113,7 +131,7 @@ public partial class BudgetView : UserControl
     {
         if (ReferenceEquals(_shown, BudgetPage.Empty))
         {
-            Refresh(force: true);
+            Work.Peek(() => Refresh(force: true));
         }
 
         SetPaySchedule();
@@ -124,7 +142,7 @@ public partial class BudgetView : UserControl
     {
         _month = FirstOfMonth(Today);
         Column.Select(PurchasesKey);
-        Refresh(force: true);
+        ShowSoon();
     }
 
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
@@ -420,13 +438,13 @@ public partial class BudgetView : UserControl
             Column.Select(PurchasesKey);
         }
 
-        Refresh(force: true);
+        ShowSoon();
     }
 
     private void OnPreviousMonth(object sender, RoutedEventArgs e)
     {
         _month = _month.AddMonths(-1);
-        Refresh(force: true);
+        ShowSoon();
     }
 
     private void OnNextMonth(object sender, RoutedEventArgs e)
@@ -434,7 +452,7 @@ public partial class BudgetView : UserControl
         if (_month < FirstOfMonth(Today))
         {
             _month = _month.AddMonths(1);
-            Refresh(force: true);
+            ShowSoon();
         }
     }
 
@@ -448,23 +466,29 @@ public partial class BudgetView : UserControl
             Bar.Show(reply);
         }
 
-        Refresh(force: true);
+        Work.ShowAfterChanges(nameof(Refresh), () => Refresh(force: true), () => Refresh(force: false));
     }
 
     /// <summary>
-    /// A change from a button or menu. In server mode with the server away it can't be made, so the page says so
-    /// and keeps showing what it last had. False if it wasn't made.
+    /// A change from a button or menu. In server mode with the server away, or too slow to answer, it can't be made,
+    /// so the page says so and keeps showing what it last had. False if it wasn't made. In server mode it's made off
+    /// the window's thread, after the page's earlier changes.
     /// </summary>
-    private bool Change(Func<string?> change)
+    private async Task<bool> Change(Func<string?> change, [CallerMemberName] string what = "")
     {
         string? reply;
         try
         {
-            reply = change();
+            reply = await Work.Run(change, what);
         }
         catch (ServerUnavailableException)
         {
             Bar.Show(BudgetFormWindow.ServerAway);
+            return false;
+        }
+        catch (ServerTimedOutException slow)
+        {
+            Bar.Show(slow.Message);
             return false;
         }
 
@@ -472,7 +496,10 @@ public partial class BudgetView : UserControl
         return true;
     }
 
-    private BudgetFormWindow Form(string heading, string button) => new(OwnerWindow, heading, button, Today);
+    /// <summary>A change nothing waits on, such as from a menu. Any other problem is said the way one from a click is.</summary>
+    private async void Fire(Func<string?> change, [CallerMemberName] string what = "") => await Change(change, what);
+
+    private BudgetFormWindow Form(string heading, string button) => new(OwnerWindow, heading, button, Today) { Work = Work };
 
     private void Open(BudgetFormWindow form)
     {
@@ -551,8 +578,8 @@ public partial class BudgetView : UserControl
         }
 
         // A slip of the amount or the date is easiest to fix straight away, so the message offers to take it back.
-        Bar.Show(form.Reply ?? "Added it", () => Change(() => _database.DeletePurchase(id, DateTime.Now) is null ? "That purchase is already gone" : "Took it back off the budget"));
-        Refresh(force: true);
+        Bar.Show(form.Reply ?? "Added it", () => Fire(() => _database.DeletePurchase(id, DateTime.Now) is null ? "That purchase is already gone" : "Took it back off the budget"));
+        Work.ShowAfterChanges(nameof(Refresh), () => Refresh(force: true), () => Refresh(force: false));
     }
 
     private void AddIncome()
@@ -624,17 +651,21 @@ public partial class BudgetView : UserControl
     }
 
     /// <summary>Only a question, so nothing changes. It's asked fresh, so in server mode it needs the server.</summary>
-    private void OnPatternsClicked(object sender, RoutedEventArgs e)
+    private async void OnPatternsClicked(object sender, RoutedEventArgs e)
     {
         try
         {
-            var lines = _database.GetSpendingPatterns(Today);
+            var lines = await Work.Read(() => _database.GetSpendingPatterns(Today));
             Patterns.Text = lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "Nothing stands out yet.";
             Patterns.Visibility = Visibility.Visible;
         }
         catch (ServerUnavailableException)
         {
             Bar.Show(BudgetFormWindow.ServerAway);
+        }
+        catch (ServerTimedOutException slow)
+        {
+            Bar.Show(slow.Message);
         }
     }
 
@@ -893,7 +924,7 @@ public partial class BudgetView : UserControl
     private void OnImportClicked(object sender, RoutedEventArgs e)
     {
         _import();
-        Refresh(force: true);
+        ShowSoon();
     }
 
     // Tailspin Pay
@@ -902,7 +933,7 @@ public partial class BudgetView : UserControl
     {
         if (sender is FrameworkElement { DataContext: CandidateRow candidate })
         {
-            Change(() => _database.MatchRepaymentTo(candidate.MessageId, candidate.ItemId).Text);
+            Fire(() => _database.MatchRepaymentTo(candidate.MessageId, candidate.ItemId).Text);
         }
     }
 
@@ -910,7 +941,7 @@ public partial class BudgetView : UserControl
     {
         if (sender is FrameworkElement { DataContext: RepaymentCard card })
         {
-            Change(() => _database.ClearRepayment(card.MessageId).Text);
+            Fire(() => _database.ClearRepayment(card.MessageId).Text);
         }
     }
 
@@ -923,7 +954,7 @@ public partial class BudgetView : UserControl
         RowMenu.Open(row, e, entries, () =>
         {
             _menuOpen = false;
-            Refresh();
+            Work.Show(Refresh);
         });
     }
 
@@ -960,14 +991,15 @@ public partial class BudgetView : UserControl
     }
 
     private void SetPeriod(BudgetCategory category, string period) =>
-        Change(() => _database.ApplyBudgetOp(new BudgetOp(BudgetOpKind.SetPeriod, category.Name, null, period), Today));
+        Fire(() => _database.ApplyBudgetOp(new BudgetOp(BudgetOpKind.SetPeriod, category.Name, null, period), Today));
 
     private void RenameCategory(BudgetCategory category)
     {
         var rename = new RenameWindow(OwnerWindow, category.Name, heading: "Rename category");
         if (rename.ShowDialog() == true && rename.NewName != category.Name)
         {
-            Change(() => _database.ApplyBudgetOp(new BudgetOp(BudgetOpKind.RenameCategory, category.Name, null, rename.NewName), Today));
+            var newName = rename.NewName;
+            Fire(() => _database.ApplyBudgetOp(new BudgetOp(BudgetOpKind.RenameCategory, category.Name, null, newName), Today));
         }
     }
 
@@ -982,7 +1014,7 @@ public partial class BudgetView : UserControl
 
         var categories = BudgetCategories
             .Where(category => category.Name != purchase.Category)
-            .Select(category => new RowMenuEntry(category.Name, () => Change(() => _database.CategorizePurchase(purchase.Id, category.Name).Text)))
+            .Select(category => new RowMenuEntry(category.Name, () => Fire(() => _database.CategorizePurchase(purchase.Id, category.Name).Text)))
             .ToList();
         var entries = new List<RowMenuEntry>();
         if (categories.Count > 0)
@@ -991,8 +1023,8 @@ public partial class BudgetView : UserControl
         }
 
         entries.Add(purchase.OneOff
-            ? new RowMenuEntry("Count against budgets again", () => Change(() => _database.MarkPurchaseOneOff(purchase.Id, false).Text))
-            : new RowMenuEntry("Mark one-off", () => Change(() => _database.MarkPurchaseOneOff(purchase.Id, true).Text)));
+            ? new RowMenuEntry("Count against budgets again", () => Fire(() => _database.MarkPurchaseOneOff(purchase.Id, false).Text))
+            : new RowMenuEntry("Mark one-off", () => Fire(() => _database.MarkPurchaseOneOff(purchase.Id, true).Text)));
         if (purchase.NetCents > 0)
         {
             entries.Add(new RowMenuEntry("Record repayment", () => RecordRepayment(purchase)));
@@ -1007,10 +1039,10 @@ public partial class BudgetView : UserControl
     /// Takes the purchase off the budget, and undo puts it back. An imported one stays known to the import, so the
     /// next CSV import or email poll doesn't add it again.
     /// </summary>
-    private void DeletePurchase(SpendingRow purchase)
+    private async void DeletePurchase(SpendingRow purchase)
     {
         DeletedItem? deleted = null;
-        if (!Change(() =>
+        if (!await Change(() =>
         {
             deleted = _database.DeletePurchase(purchase.Id, DateTime.Now);
             return deleted is null ? "That purchase is already gone" : null;
@@ -1020,7 +1052,7 @@ public partial class BudgetView : UserControl
         }
 
         var name = MerchantName.Clean(purchase.Title);
-        Bar.Show($"Deleted {Briefing.Money(purchase.AmountCents)} for {name}", () => Change(() =>
+        Bar.Show($"Deleted {Briefing.Money(purchase.AmountCents)} for {name}", () => Fire(() =>
         {
             _database.UndoDeletePurchase(deleted, DateTime.Now);
             return null;
@@ -1048,15 +1080,15 @@ public partial class BudgetView : UserControl
         OpenMenu(row, e,
         [
             new RowMenuEntry("Bought it", () => Bought(item)),
-            new RowMenuEntry("Let it go", () => Change(() => _database.ResolveWaitItem(item.Id, "skipped").Text)),
+            new RowMenuEntry("Let it go", () => Fire(() => _database.ResolveWaitItem(item.Id, "skipped").Text)),
             new RowMenuEntry("Copy", () => RowMenu.Copy(item.Description)),
         ]);
     }
 
     /// <summary>Settles the wait, then offers the expense, the same as typing "I bought it" does. A later import won't count it twice.</summary>
-    private void Bought(WaitItem item)
+    private async void Bought(WaitItem item)
     {
-        if (Change(() => _database.ResolveWaitItem(item.Id, "bought").Text))
+        if (await Change(() => _database.ResolveWaitItem(item.Id, "bought").Text))
         {
             AddExpense(item.Description, item.PriceCents);
         }

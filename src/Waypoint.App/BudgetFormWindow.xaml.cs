@@ -44,8 +44,17 @@ public partial class BudgetFormWindow : Window
         Loaded += (_, _) => _fields.Values.Select(field => field.Input).OfType<TextBox>().FirstOrDefault()?.Focus();
     }
 
-    /// <summary>Runs on Save. Null or a reply that isn't an answer closes the form.</summary>
+    /// <summary>
+    /// Runs on Save, with what was typed read first, so in server mode it runs off the window's thread through
+    /// <see cref="Work"/>. Null or a reply that isn't an answer closes the form.
+    /// </summary>
     public Func<BudgetFormWindow, OpReply?>? Submit { get; set; }
+
+    /// <summary>How Save reaches the data: straight away on this PC, or without holding the window in server mode.</summary>
+    internal PageWork Work { get; set; } = PageWork.Local;
+
+    /// <summary>What was typed, as Save read it, while that save is on its way. Null otherwise, when the fields are read as they are.</summary>
+    private Dictionary<string, (string Text, object? Choice, DateOnly? Date)>? _typed;
 
     /// <summary>What the last save said, for the page to show once the form closes.</summary>
     public string? Reply { get; private set; }
@@ -147,13 +156,13 @@ public partial class BudgetFormWindow : Window
 
     public void SetCancelText(string text) => CancelButton.Content = text;
 
-    public string Text(string key) => _fields[key].Input is TextBox box ? box.Text.Trim() : "";
+    public string Text(string key) => _typed is { } typed ? typed[key].Text : _fields[key].Input is TextBox box ? box.Text.Trim() : "";
 
     public long? Cents(string key) => ParseCents(Text(key));
 
-    public object? Choice(string key) => _fields[key].Input is ListBox { SelectedItem: FormChoice choice } ? choice.Value : null;
+    public object? Choice(string key) => _typed is { } typed ? typed[key].Choice : _fields[key].Input is ListBox { SelectedItem: FormChoice choice } ? choice.Value : null;
 
-    public DateOnly Date(string key) => _fields[key].Input is Button { Tag: DateOnly date } ? date : _today;
+    public DateOnly Date(string key) => _typed is { } typed ? typed[key].Date ?? _today : _fields[key].Input is Button { Tag: DateOnly date } ? date : _today;
 
     /// <summary>Reads "$1,250.50", "12", or "12.5" as cents. Anything else, or nothing, is null.</summary>
     public static long? ParseCents(string text)
@@ -200,27 +209,48 @@ public partial class BudgetFormWindow : Window
             return;
         }
 
-        OpReply? reply;
-        try
+        _typed = null;
+        _typed = _fields.ToDictionary(field => field.Key, field => (Text(field.Key), Choice(field.Key), field.Value.Input is Button { Tag: DateOnly date } ? date : (DateOnly?)null));
+        var submit = Submit;
+        var saving = Work.Run<(OpReply? Reply, string? Problem)>(() =>
         {
-            reply = Submit?.Invoke(this);
-        }
-        catch (ServerUnavailableException)
+            try
+            {
+                return (submit?.Invoke(this), null);
+            }
+            catch (ServerUnavailableException)
+            {
+                // In server mode, with the server away. What was typed stays in the form, so it can be saved once it's back.
+                return (null, $"{ServerAway} What you typed is still here.");
+            }
+            catch (ServerTimedOutException slow)
+            {
+                return (null, slow.Message);
+            }
+            finally
+            {
+                _typed = null;
+            }
+        }, $"Saving {Title}");
+        FormSaving.Then(this, DoneButton, saving, saved =>
         {
-            // In server mode, with the server away. What was typed stays in the form, so it can be saved once it's back.
-            Show($"{ServerAway} What you typed is still here.");
-            return;
-        }
+            if (saved.Problem is { } problem)
+            {
+                Show(problem);
+                return;
+            }
 
-        Reply = reply?.Text;
-        AddedId = reply?.ItemId;
-        if (reply is { IsAnswer: true })
-        {
-            Show(reply.Text);
-            return;
-        }
+            var reply = saved.Reply;
+            Reply = reply?.Text;
+            AddedId = reply?.ItemId;
+            if (reply is { IsAnswer: true })
+            {
+                Show(reply.Text);
+                return;
+            }
 
-        DialogResult = true;
+            DialogResult = true;
+        });
     }
 
     /// <summary>
