@@ -6,7 +6,6 @@ using System.Text.Json;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 using Waypoint.Core.Discord;
-using Waypoint.Core.Files;
 using Waypoint.Core.Notes;
 
 namespace Waypoint.Core.Background;

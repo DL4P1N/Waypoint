@@ -1,9 +1,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Waypoint.Core.Budget;
-using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
-using Waypoint.Core.Discord;
 
 namespace Waypoint.Core.Data;
 

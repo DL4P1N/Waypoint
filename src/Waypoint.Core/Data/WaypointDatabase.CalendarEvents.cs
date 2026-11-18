@@ -1,5 +1,4 @@
 using System.Globalization;
-using Microsoft.Data.Sqlite;
 using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
 
