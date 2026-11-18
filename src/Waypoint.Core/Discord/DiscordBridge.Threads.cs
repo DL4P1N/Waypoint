@@ -169,15 +169,18 @@ public sealed partial class DiscordBridge
         }
     }
 
-    /// <summary>Sends a message in a post. Missing comes back when the post itself is gone.</summary>
-    public async Task<(string? Id, ThreadChange Outcome)> SendInThreadAsync(string thread, DiscordCard card)
+    /// <summary>
+    /// Sends a message in a post. Missing comes back when the post itself is gone. A post noted beforehand carries its
+    /// note's nonce, so trying again soon after never makes a second.
+    /// </summary>
+    public async Task<(string? Id, ThreadChange Outcome)> SendInThreadAsync(string thread, DiscordCard card, string? nonce = null)
     {
         try
         {
             using var response = await SendWithLimitsAsync(() =>
             {
                 var request = NewRequest(HttpMethod.Post, $"{ApiBase}/channels/{thread}/messages");
-                request.Content = JsonContent.Create(MessageBody(card, flags: SuppressNotifications));
+                request.Content = JsonContent.Create(WithNonce(MessageBody(card, flags: SuppressNotifications), nonce));
                 return request;
             });
             if (response.StatusCode == HttpStatusCode.NotFound)

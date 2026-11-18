@@ -414,17 +414,77 @@ public sealed partial class WaypointWorker
     /// A notice in a post, such as a file that couldn't be added. It's cleared away after an hour, or sooner when a new
     /// part of the note has to go under it, so the post stays the note and not a trail of replies.
     /// </summary>
+    /// <remarks>
+    /// It's noted before it's sent, with Discord's nonce, so a crash before it's kept doesn't leave one that's never
+    /// cleared away, and the same notice sent again finds the one already there instead of adding a second.
+    /// </remarks>
     private async Task NoticeAsync(DiscordBridge discord, string thread, DiscordCard card)
     {
-        var (sent, _) = await discord.SendInThreadAsync(thread, card);
-        if (sent is not null)
+        var key = NoticeSendPrefix(thread) + Hash(card);
+        var send = _database.BeginDiscordSend(key, thread, _clock());
+        var sent = send.MessageId;
+        if (sent is null && !send.Fresh)
         {
-            _database.AddDiscordNotice(thread, sent, _clock());
+            sent = await FindNoticeAsync(discord, thread, send.Nonce, card);
         }
+
+        if (sent is null)
+        {
+            (sent, var outcome) = await discord.SendInThreadAsync(thread, card, send.Nonce);
+            if (sent is null)
+            {
+                // Turned away for sure, so there's nothing to look for. A try that failed some other way stays noted.
+                if (outcome is ThreadChange.Missing or ThreadChange.NotAllowed)
+                {
+                    _database.FinishDiscordSend(key);
+                }
+
+                return;
+            }
+
+            _database.SetDiscordSendMessage(key, sent);
+        }
+
+        KeepNotice(thread, key, sent, _clock());
+    }
+
+    private static string NoticeSendPrefix(string thread) => $"notice:{thread}:";
+
+    /// <summary>A notice is kept to be cleared away later, and its note goes, in one write.</summary>
+    private void KeepNotice(string thread, string key, string message, DateTime sentAt) =>
+        _database.InOneWrite(() =>
+        {
+            _database.AddDiscordNotice(thread, message, sentAt);
+            _database.FinishDiscordSend(key);
+            return 0;
+        });
+
+    /// <summary>A notice of Waypoint's in a post that isn't one of the post's parts or a notice already kept.</summary>
+    private async Task<string?> FindNoticeAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card)
+    {
+        var known = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
+            .Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message))
+            .Append(thread)
+            .ToHashSet(StringComparer.Ordinal);
+        var after = known.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
+        return (await discord.FindSentAfterAsync(thread, after, nonce, card, known)).MessageId;
     }
 
     private async Task ClearNoticesAsync(DiscordBridge discord, string thread, bool all)
     {
+        // A notice sent just before a crash, before it was kept, is kept now so it's cleared away like the rest.
+        foreach (var send in _database.GetDiscordSends(NoticeSendPrefix(thread)))
+        {
+            if (send.MessageId is { } sent)
+            {
+                KeepNotice(thread, send.Key, sent, send.StartedAt);
+            }
+            else if (_clock() - send.StartedAt >= NoticeGiveUp)
+            {
+                _database.FinishDiscordSend(send.Key);
+            }
+        }
+
         foreach (var (message, sentAt) in _database.GetDiscordNotices(thread))
         {
             var age = _clock() - sentAt;
@@ -455,29 +515,72 @@ public sealed partial class WaypointWorker
             return;
         }
 
-        var made = await discord.CreateForumPostAsync(forum, wanted.Name, tags, wanted.Parts[0]);
-        if (made.Post is not { } post)
+        // The post is noted before it's made, so a crash before it's saved finds the post already made instead of
+        // making a second. Discord takes no nonce for a new post, so it's looked for among the forum's posts.
+        var sendKey = "post:" + key;
+        var send = _database.BeginDiscordSend(sendKey, forum, _clock());
+        var post = send.MessageId is { } known ? new ForumPost(known, known) : null;
+        if (post is null && !send.Fresh)
         {
-            var wait = _postBackoff.TryGetValue(key, out var before) ? TimeSpan.FromTicks(Math.Min(before.Wait.Ticks * 2, LongestBackoff.Ticks)) : FirstBackoff;
-            _postBackoff[key] = (_clock() + wait, wait);
-            if (made.TurnedDown)
+            post = await FindMadePostAsync(discord, forum, wanted.Name);
+        }
+
+        if (post is null)
+        {
+            var made = await discord.CreateForumPostAsync(forum, wanted.Name, tags, wanted.Parts[0]);
+            if (made.Post is not { } fresh)
             {
-                // A tag may have been deleted by hand, so the forum's tags are read again next time.
-                _forumTags = null;
+                var wait = _postBackoff.TryGetValue(key, out var before) ? TimeSpan.FromTicks(Math.Min(before.Wait.Ticks * 2, LongestBackoff.Ticks)) : FirstBackoff;
+                _postBackoff[key] = (_clock() + wait, wait);
+                if (made.TurnedDown)
+                {
+                    // A tag may have been deleted by hand, so the forum's tags are read again next time. Nothing was
+                    // made, so there's nothing to look for.
+                    _forumTags = null;
+                    _database.FinishDiscordSend(sendKey);
+                }
+
+                return;
             }
 
-            return;
+            post = fresh;
+            _database.SetDiscordSendMessage(sendKey, post.Thread);
         }
 
         _newPostsThisRound++;
         _postBackoff.Remove(key);
         var row = new DiscordThreadRow(post.Thread, wanted.Kind, wanted.Key, forum, WaypointDatabase.PostLive, false, Meta(wanted.Name, tags), [new DiscordThreadPart(post.Message, Hash(wanted.Parts[0]))], post.Message);
-        foreach (var old in _database.AddDiscordThread(row))
+        var replaced = _database.InOneWrite(() =>
+        {
+            var older = _database.AddDiscordThread(row);
+            _database.FinishDiscordSend(sendKey);
+            return older;
+        });
+        foreach (var old in replaced)
         {
             await PointToNewPostAsync(discord, old, post.Thread, wanted.Kind);
         }
 
         await SyncPostAsync(discord, forum, wanted, row);
+    }
+
+    /// <summary>
+    /// A post of the bot's in this forum with this name that no record knows, made by a try that went through before
+    /// it could be saved. Its first message has the post's own ID. Null when there's none or the posts can't be read.
+    /// </summary>
+    private async Task<ForumPost?> FindMadePostAsync(DiscordBridge discord, string forum, string name)
+    {
+        _guildId ??= (await discord.GetForumAsync(forum))?.GuildId;
+        if (_guildId is not { } guild || await discord.ActiveThreadsAsync(guild) is not { } threads)
+        {
+            return null;
+        }
+
+        var shown = DiscordBridge.ThreadName(name);
+        return threads
+            .Where(thread => thread.ParentId == forum && thread.OwnerId != discord.OwnerUserId && thread.Name == shown && _database.FindDiscordThread(thread.Id) is null)
+            .Select(thread => new ForumPost(thread.Id, thread.Id))
+            .FirstOrDefault();
     }
 
     /// <summary>An older post that a new one took over from says where things are now, and is archived.</summary>

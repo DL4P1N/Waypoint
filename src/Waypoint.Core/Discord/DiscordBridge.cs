@@ -311,11 +311,17 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// since <paramref name="since"/> and carrying this nonce or showing this card. Read is false when the channel
     /// couldn't be read, so it isn't known.
     /// </summary>
-    public async Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card)
+    public Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card) =>
+        FindSentAfterAsync(channel, SnowflakeAt(since - SentLookBack), nonce, card, new HashSet<string>());
+
+    /// <summary>
+    /// The same, among the messages after <paramref name="after"/>, leaving out any already <paramref name="known"/>.
+    /// </summary>
+    public async Task<(bool Read, string? MessageId)> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known)
     {
         try
         {
-            using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?limit={MaxFetched}&after={SnowflakeAt(since - SentLookBack)}"));
+            using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?limit={MaxFetched}&after={after}"));
             if (!response.IsSuccessStatusCode)
             {
                 return (false, null);
@@ -330,7 +336,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
             var found = document.RootElement.EnumerateArray()
                 .Where(message => IsFromBot(message) && (NonceOf(message) == nonce || Shows(message, card)))
                 .Select(message => Text(message, "id"))
-                .FirstOrDefault(id => id is not null);
+                .FirstOrDefault(id => id is not null && !known.Contains(id));
             return (true, found);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException)
