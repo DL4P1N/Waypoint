@@ -186,6 +186,27 @@ public sealed class CaptureStepsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_short_reply_whose_action_fails_is_tried_again_instead_of_being_called_cut_off()
+    {
+        var task = _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", null), Now).Item!;
+        _database.StartActivation(ItemRef.Format(task), "Made up first", ["Made up second", "Made up third"], Activation.TypedMethod, Now);
+        var outcomes = new List<CaptureOutcome>();
+        var service = Service(null, outcomes);
+        service.Capture("did it");
+
+        // Nothing closes. The action itself fails once, the way a busy database would.
+        FailWhen("BEFORE UPDATE ON activation_sessions");
+        await service.ProcessPendingAsync();
+        Assert.Equal(0, Count("capture_progress"));
+        StopFailing();
+        await service.ProcessPendingAsync();
+
+        Assert.Equal("Made up second", _database.GetActiveSession(Now)!.Action);
+        Assert.NotEqual(CaptureService.CutOff, Assert.Single(outcomes).Answer);
+        Assert.Empty(_database.GetPendingCaptures());
+    }
+
+    [Fact]
     public async Task A_short_reply_with_nothing_to_act_on_goes_on_to_the_sorter_and_keeps_nothing()
     {
         var sorter = new Sorter(new CaptureResult([new SortedItem(ItemKind.Note, "did it", null, null)]));

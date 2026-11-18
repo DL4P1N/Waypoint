@@ -245,12 +245,24 @@ public sealed class CaptureService(
     /// Runs a short reply's action, such as "done" on a session, and finishes the capture. A note is saved first that
     /// it started, so if Waypoint stops before the capture is finished, it isn't done a second time when the capture
     /// comes round again. It's answered with <see cref="CutOff"/> instead. False, with nothing kept, when the action
-    /// had nothing to act on and the capture should go on to the sorter.
+    /// had nothing to act on and the capture should go on to the sorter. An action that fails, such as on a busy
+    /// database, takes the note away again, so only a real stop leaves it and the capture is tried again as usual.
     /// </summary>
     private bool Act(PendingCapture capture, Func<OpReply?> action)
     {
         database.SetCaptureProgress(capture.Id, new StepProgress(StepProgress.Word, Started: true).Save());
-        if (action() is not { } reply)
+        OpReply? done;
+        try
+        {
+            done = action();
+        }
+        catch
+        {
+            database.ClearCaptureProgress(capture.Id);
+            throw;
+        }
+
+        if (done is not { } reply)
         {
             database.ClearCaptureProgress(capture.Id);
             return false;
