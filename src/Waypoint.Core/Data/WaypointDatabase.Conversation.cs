@@ -15,7 +15,9 @@ public sealed partial class WaypointDatabase
     /// <summary>Saves a note and its reply, and drops the oldest once there are plenty.</summary>
     public void AddExchange(CaptureOrigin origin, string note, string reply, IReadOnlyList<string> refs, DateTime now)
     {
+        // Saving and trimming land together, so a trim that fails doesn't leave one more exchange than is kept.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO conversation (origin, at, note, reply, refs) VALUES ($origin, $at, $note, $reply, $refs);
@@ -28,6 +30,7 @@ public sealed partial class WaypointDatabase
         command.Parameters.AddWithValue("$refs", JsonSerializer.Serialize(refs));
         command.Parameters.AddWithValue("$kept", MaxExchangesKept);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>The last few exchanges typed in one place, oldest first. Older talk has gone cold, so it's left out.</summary>

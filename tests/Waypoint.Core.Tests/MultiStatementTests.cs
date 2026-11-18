@@ -38,6 +38,21 @@ public sealed class MultiStatementTests : IDisposable
     }
 
     [Fact]
+    public void A_reply_whose_trimming_of_old_talk_fails_isnt_kept()
+    {
+        // As many exchanges as are kept, so saving one more trims the oldest, which the trigger refuses.
+        Run("""
+            WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+            INSERT INTO conversation (origin, at, note, reply, refs) SELECT 'Discord', '2030-01-01T09:00:00', 'made up note', 'made up reply', '[]' FROM n
+            """);
+        FailWhen("BEFORE DELETE ON conversation");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.AddExchange(CaptureOrigin.Discord, "made up last note", "made up reply", [], DateTime.Now));
+
+        Assert.Equal(200, Count("conversation"));
+    }
+
+    [Fact]
     public void Feedback_whose_saving_fails_throws_instead_of_returning_an_id()
     {
         FailWhen("BEFORE INSERT ON feedback");
