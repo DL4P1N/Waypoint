@@ -10,7 +10,7 @@ using Waypoint.Core.Remote;
 
 namespace Waypoint.App.Tests;
 
-/// <summary>Typing in a note in server mode, with a server slow to answer the save.</summary>
+/// <summary>Typing in a note, and in Find, in server mode, with a server slow to answer.</summary>
 public sealed class ServerNoteSaveTests
 {
     private const long NoteId = 7;
@@ -62,7 +62,12 @@ public sealed class ServerNoteSaveTests
             {
                 body = new[] { Note() };
             }
-            else if (path is "/api/notes/folders" or "/api/notes/spots" or "/api/notes/classes" or "/api/items/open" or "/api/lists"
+            else if (path == "/api/items/open")
+            {
+                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(2)), cancellationToken);
+                body = new[] { new StoredItem(1, ItemKind.Task, "Repot the basil", null, null, false) };
+            }
+            else if (path is "/api/notes/folders" or "/api/notes/spots" or "/api/notes/classes" or "/api/lists"
                 || path.EndsWith("/sources", StringComparison.Ordinal) || path.EndsWith("/suggestions", StringComparison.Ordinal))
             {
                 body = Array.Empty<object>();
@@ -147,5 +152,33 @@ public sealed class ServerNoteSaveTests
         view.Leave();
         Assert.Equal(["radish and leeks"], server.Saves);
         Assert.Equal(0, server.NotesMade);
+    });
+
+    [Fact]
+    public void Find_searches_off_the_window_thread_once_typing_pauses_and_shows_what_came_back() => Ui.Run(ui =>
+    {
+        var server = new SlowNotesServer();
+        var client = new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token");
+        var view = new FindView();
+        view.Connect(new FindSources(new ServerToDoData(client), null, null, null, null));
+        ui.Host(view);
+        ui.Pump();
+        var results = UiTest.Named<ListBox>(view, "Results");
+
+        server.Release.Reset();
+        UiTest.Named<TextBox>(view, "SearchBox").Text = "basil";
+        var watch = Stopwatch.StartNew();
+        UiTest.Call(view, "SearchSoon");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+        Assert.Empty(results.Items);
+
+        server.Release.Set();
+        for (var tries = 0; tries < 100 && results.Items.Count == 0; tries++)
+        {
+            Thread.Sleep(20);
+            ui.Pump();
+        }
+
+        Assert.Equal(["Repot the basil"], results.Items.Cast<FoundThing>().Select(thing => thing.Title));
     });
 }
