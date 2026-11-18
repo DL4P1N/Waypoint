@@ -272,4 +272,18 @@ public sealed class DamagedOfflineFilesTests : IDisposable
         File.WriteAllText(Path.Combine(_folder, KeptCopy.SeenName), "{ not a list");
         Assert.Equal([first], new CaptureQueue(QueueFile).SetAsideFiles);
     }
+
+    [Fact]
+    public void A_list_of_dismissals_holding_nothing_but_null_only_tells_again_and_can_be_dismissed()
+    {
+        File.WriteAllText(QueueFile, "[{");
+        var first = Assert.Single(new CaptureQueue(QueueFile).SetAsideFiles);
+        File.WriteAllText(Path.Combine(_folder, KeptCopy.SeenName), "[null]");
+
+        var queue = new CaptureQueue(QueueFile);
+        Assert.NotNull(queue.Refused);
+        Assert.Equal([first], queue.SetAsideFiles);
+        queue.MarkSetAsideSeen();
+        Assert.Null(new CaptureQueue(QueueFile).Refused);
+    }
 }

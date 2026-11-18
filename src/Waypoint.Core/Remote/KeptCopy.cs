@@ -110,7 +110,7 @@ public static class KeptCopy
             try
             {
                 return File.Exists(file)
-                    ? new HashSet<string>(JsonSerializer.Deserialize<List<string>>(File.ReadAllText(file)) ?? [], StringComparer.OrdinalIgnoreCase)
+                    ? new HashSet<string>((JsonSerializer.Deserialize<List<string?>>(File.ReadAllText(file)) ?? []).OfType<string>(), StringComparer.OrdinalIgnoreCase)
                     : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
