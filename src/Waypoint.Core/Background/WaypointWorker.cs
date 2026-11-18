@@ -401,6 +401,7 @@ public sealed partial class WaypointWorker
         var bridge = new DiscordBridge(client, _database, settings)
         {
             Clock = _clock,
+            StillWorking = IsDiscordWorking,
             Downloads = _downloads(),
             Captured = message => _host.Post(() => OnDiscordMessage(message)),
             AlertActed = action =>
@@ -1024,6 +1025,11 @@ public sealed partial class WaypointWorker
     /// <summary>A file not already dealt with the last time the message was handed over.</summary>
     private async Task ReadDiscordFileOnceAsync(DiscordMessage message, DiscordAttachment attachment)
     {
+        if (!StartDiscordFile(message, attachment))
+        {
+            return;
+        }
+
         try
         {
             if (_database.IsDiscordPartDone(message.Id, attachment.Id))
@@ -1038,7 +1044,20 @@ public sealed partial class WaypointWorker
             // Not marked as dealt with, so the message is handed over again later.
             _logError(exception);
         }
+        finally
+        {
+            _discordFilesWorking.TryRemove((message.Id, attachment.Id), out _);
+        }
     }
+
+    // Files on Discord messages being read right now, so one handed over again meanwhile isn't read a second time.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Message, string File), bool> _discordFilesWorking = new();
+
+    /// <summary>False when the file is already being read here.</summary>
+    private bool StartDiscordFile(DiscordMessage message, DiscordAttachment attachment) =>
+        _discordFilesWorking.TryAdd((message.Id, attachment.Id), true);
+
+    private bool IsDiscordWorking(string messageId) => _discordFilesWorking.Keys.Any(working => working.Message == messageId);
 
     /// <summary>
     /// A file sent from the phone goes through the same reading as a dropped one, so it can add things but never

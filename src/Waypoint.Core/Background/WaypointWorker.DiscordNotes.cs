@@ -236,6 +236,12 @@ public sealed partial class WaypointWorker
 
     private async Task MakeNotesFromDiscordAsync(DiscordBridge discord, DiscordMessage message, DiscordAttachment attachment)
     {
+        // A file already being made into a note here isn't made into a second one.
+        if (!StartDiscordFile(message, attachment))
+        {
+            return;
+        }
+
         // Run aside from the message handler, so anything that goes wrong is answered here or nobody ever hears.
         try
         {
@@ -255,6 +261,10 @@ public sealed partial class WaypointWorker
             {
                 _logError(replyFailure);
             }
+        }
+        finally
+        {
+            _discordFilesWorking.TryRemove((message.Id, attachment.Id), out _);
         }
     }
 

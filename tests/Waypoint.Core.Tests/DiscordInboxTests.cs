@@ -361,6 +361,49 @@ public sealed class DiscordInboxTests : IDisposable
     }
 
     [Fact]
+    public async Task A_file_still_being_read_after_a_few_minutes_is_not_read_a_second_time()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "made up words", withFile: true);
+        var reads = 0;
+        using var reading = new SemaphoreSlim(0);
+        var settings = new WaypointSettings(Discord: new DiscordSettings("token", "owner", "capture", "alerts"));
+        var worker = new WaypointWorker(_database, settings, _folder, new Host(), _ => { }, new WorkerParts(
+            _ => new NoTokens(),
+            Clock: () => _now,
+            Http: () => new HttpClient(_discord),
+            CaptureSorter: new NullSorter(),
+            ReadFile: path =>
+            {
+                Interlocked.Increment(ref reads);
+                var text = File.ReadAllText(path);
+                reading.Wait(TimeSpan.FromSeconds(20));
+                return new FileText("made-up-list.txt", text);
+            },
+            ConnectGateway: false))
+        {
+            RetryWait = _ => Task.CompletedTask,
+        };
+        worker.StartDiscord();
+        await PollUntil(worker, () => Volatile.Read(ref reads) >= 1);
+
+        // A slow read is still going when the claim would count as cut off.
+        for (var poll = 0; poll < 3; poll++)
+        {
+            _now = _now.AddMinutes(4);
+            await worker.Discord!.PollAsync();
+        }
+
+        reading.Release(5);
+        await PollUntil(worker, () => _database.IsDiscordMessageFinished("7"));
+
+        Assert.Equal(1, Volatile.Read(ref reads));
+        Assert.Equal(["made up words", "made up thing one\nmade up thing two"], PendingTexts());
+        Assert.DoesNotContain(_discord.Asked, asked => asked.EndsWith("/channels/capture/messages/7"));
+        worker.StopDiscord();
+    }
+
+    [Fact]
     public async Task A_reply_to_a_capture_saved_before_a_restart_still_goes_under_its_message()
     {
         _database.SetPreference(DiscordBridge.LastMessageKey, "5");

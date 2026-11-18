@@ -237,6 +237,12 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// <summary>The time claims on messages are kept by. Tests swap it to move past <see cref="UnfinishedAfter"/>.</summary>
     public Func<DateTime> Clock { get; init; } = () => DateTime.Now;
 
+    /// <summary>
+    /// Whether a message's work is still running here, such as a slow file. One that is isn't handed over again
+    /// however long it takes, and its claim is kept fresh instead.
+    /// </summary>
+    public Func<string, bool>? StillWorking { get; set; }
+
     /// <summary>The owner's new messages in the capture channel, live or polled.</summary>
     public Action<DiscordMessage>? Captured { get; set; }
 
@@ -1574,6 +1580,12 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     {
         foreach (var (id, channel) in database.GetUnfinishedDiscordMessages(Clock(), UnfinishedAfter))
         {
+            if (StillWorking?.Invoke(id) == true)
+            {
+                database.KeepDiscordClaim(id, Clock());
+                continue;
+            }
+
             try
             {
                 using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages/{id}"), cancellationToken);
