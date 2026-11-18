@@ -84,7 +84,7 @@ public static class NotesRoutes
         group.MapPost("/", (NewNoteRequest request) => new Found<long>(request.ClientId is { Length: > 0 } client
             ? notes.Value.Database.CreateNoteOnce(client, request.Title, request.Body, DateTime.Now, request.FolderId)
             : notes.Value.Data.CreateNote(request.Title, request.Body, DateTime.Now, request.FolderId)));
-        group.MapPut("/{id:long}", (long id, SaveNoteRequest request) => new FlagValue(notes.Value.Data.SaveNote(id, request.Title, request.Body, DateTime.Now)));
+        group.MapPut("/{id:long}", (long id, SaveNoteRequest request) => SaveNote(notes.Value.Data, id, request));
         group.MapDelete("/{id:long}", (long id) =>
         {
             notes.Value.Data.DeleteNote(id, DateTime.Now);
@@ -161,6 +161,21 @@ public static class NotesRoutes
             notes.Value.Stop(job);
             return Results.NoContent();
         });
+    }
+
+    /// <summary>
+    /// A save with the text the PC expects the note to have is checked against it and saved in one write. One
+    /// without, from a PC from before, saves as it always has.
+    /// </summary>
+    private static NoteSaveReply SaveNote(LocalNotesData data, long id, SaveNoteRequest request)
+    {
+        if (request.ExpectedBody is not { } expected)
+        {
+            return new NoteSaveReply(data.SaveNote(id, request.Title, request.Body, DateTime.Now));
+        }
+
+        var result = data.SaveNoteIfUnchanged(id, request.Title, request.Body, expected, DateTime.Now);
+        return new NoteSaveReply(result.Outcome == NoteSaveOutcome.Saved, Checked: true, result.Stored);
     }
 
     /// <summary>The new job, or 429 when the server is already writing as many as it will at once.</summary>

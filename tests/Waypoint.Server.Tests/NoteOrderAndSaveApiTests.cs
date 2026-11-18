@@ -103,13 +103,54 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
             path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out _);
     }
 
+    /// <summary>
+    /// Stands between the PC and the server, writing down each request. It can add a reply to a note just before a
+    /// save of it reaches the server, the way the Discord worker adds one, after anything the PC read first. It can
+    /// also make the server unreachable.
+    /// </summary>
+    private sealed class Line(HttpMessageHandler inner, WaypointDatabase database) : DelegatingHandler(inner)
+    {
+        public List<string> Requests { get; } = [];
+
+        public string? Reply { get; set; }
+
+        public bool Down { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            lock (Requests)
+            {
+                Requests.Add($"{request.Method} {path}");
+            }
+
+            if (Down)
+            {
+                throw new HttpRequestException("No route to host");
+            }
+
+            if (request.Method == HttpMethod.Put && Reply is { } reply && path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
+            {
+                Reply = null;
+                var note = database.GetNote(id)!;
+                Assert.True(database.SaveNoteIfUnchanged(id, note.Title, $"{note.Body}\n\n{reply}", note.Body, DateTime.Now));
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private Line NewLine() => new(_factory.Server.CreateHandler(), Database);
+
     private ServerClient Client(HttpMessageHandler? handler = null) =>
         new(new HttpClient(handler ?? _factory.Server.CreateHandler()) { BaseAddress = _factory.Server.BaseAddress }, _token, "this-pc");
 
-    private (ServerNotesData Notes, OldServer Line) OldPc()
+    /// <summary>A PC talking to a server from before. Old writes down what the PC sent, and Line is next to the server.</summary>
+    private (ServerNotesData Notes, OldServer Old, Line Line) OldPc()
     {
-        var line = new OldServer(_factory.Server.CreateHandler());
-        return (new ServerNotesData(Client(line)), line);
+        var line = NewLine();
+        var old = new OldServer(line);
+        return (new ServerNotesData(Client(old)), old, line);
     }
 
     private WaypointDatabase Database => _factory.Services.GetRequiredService<WaypointServer>().Database;
@@ -119,8 +160,9 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
     [Fact]
     public void Folders_are_put_in_a_new_order_in_one_request()
     {
-        var requests = new List<string>();
-        INotesData notes = new ServerNotesData(Client(new PassThrough(_factory.Server.CreateHandler(), requests)));
+        var line = NewLine();
+        var requests = line.Requests;
+        INotesData notes = new ServerNotesData(Client(line));
         var a = notes.CreateNoteFolder("Garden", null, DateTime.Now).Id;
         var b = notes.CreateNoteFolder("Recipes", null, DateTime.Now).Id;
         var c = notes.CreateNoteFolder("Trips", null, DateTime.Now).Id;
@@ -151,8 +193,8 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
     [Fact]
     public void A_server_from_before_gets_the_new_order_one_folder_at_a_time()
     {
-        var (old, line) = OldPc();
-        INotesData notes = old;
+        var (server, line, _) = OldPc();
+        INotesData notes = server;
         var a = notes.CreateNoteFolder("Garden", null, DateTime.Now).Id;
         var b = notes.CreateNoteFolder("Recipes", null, DateTime.Now).Id;
         var c = notes.CreateNoteFolder("Trips", null, DateTime.Now).Id;
@@ -166,17 +208,115 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
             line.Requests);
     }
 
-    /// <summary>Writes down each request on its way to the server, which answers as it is.</summary>
-    private sealed class PassThrough(HttpMessageHandler inner, List<string> requests) : DelegatingHandler(inner)
+    [Fact]
+    public void A_reply_from_Discord_landing_between_the_pcs_read_and_its_save_is_kept()
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            lock (requests)
-            {
-                requests.Add($"{request.Method} {request.RequestUri!.AbsolutePath}");
-            }
+        var line = NewLine();
+        INotesData notes = new ServerNotesData(Client(line));
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Assert.Equal("radish", notes.GetNote(id)!.Body);
 
-            return base.SendAsync(request, cancellationToken);
-        }
+        // The first save reads the note first, since this PC hasn't heard yet that the server checks. The reply
+        // lands after that read, just before the save.
+        line.Reply = "beets too";
+        line.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+
+        Assert.Equal("radish, kale", Database.GetNote(id)!.Body);
+        var kept = Assert.Single(Database.GetNotes(), note => note.Id != id);
+        Assert.Equal("Seed list" + NoteDraft.ElsewhereSuffix, kept.Title);
+        Assert.Equal("radish\n\nbeets too", kept.Body);
+        Assert.Equal([$"GET /api/notes/{id}", $"PUT /api/notes/{id}", "POST /api/notes", $"PUT /api/notes/{id}"], line.Requests);
+
+        // Now that the server has said it checks, the save goes straight to it, and still catches a reply.
+        line.Reply = "and onions";
+        line.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", DateTime.Now));
+
+        Assert.Equal("radish, kale, leeks", Database.GetNote(id)!.Body);
+        Assert.Contains(Database.GetNotes(), note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix && note.Body == "radish, kale\n\nand onions");
+        Assert.Equal([$"PUT /api/notes/{id}", "POST /api/notes", $"PUT /api/notes/{id}"], line.Requests);
+    }
+
+    [Fact]
+    public void A_save_checked_against_text_that_changed_saves_nothing_and_says_what_it_is_now()
+    {
+        INotesData notes = new ServerNotesData(Client());
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Database.SaveNote(id, "Seed list", "radish\n\nbeets too", DateTime.Now);
+
+        var result = notes.SaveNoteIfUnchanged(id, "Seed list", "radish, kale", "radish", DateTime.Now);
+
+        Assert.Equal(NoteSaveOutcome.Changed, result.Outcome);
+        Assert.Equal("radish\n\nbeets too", result.Stored!.Body);
+        Assert.Equal("radish\n\nbeets too", Database.GetNote(id)!.Body);
+
+        Database.DeleteNote(id, DateTime.Now);
+        Assert.Equal(NoteSaveOutcome.Gone, notes.SaveNoteIfUnchanged(id, "Seed list", "radish, kale", "radish\n\nbeets too", DateTime.Now).Outcome);
+    }
+
+    [Fact]
+    public async Task A_pc_from_before_still_saves_to_this_server_and_reads_the_answer_it_always_did()
+    {
+        var id = Database.CreateNote("Seed list", "radish", DateTime.Now);
+        Database.SaveNote(id, "Seed list", "radish\n\nbeets too", DateTime.Now);
+        using var http = new HttpClient(_factory.Server.CreateHandler()) { BaseAddress = _factory.Server.BaseAddress };
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+
+        // What a PC from before sends: no text expected, so it saves as it always has.
+        using var response = await http.PutAsync($"/api/notes/{id}", new StringContent("""{"title":"Seed list","body":"radish, kale"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(JsonSerializer.Deserialize<FlagValue>(await response.Content.ReadAsStringAsync(), RemoteJson.Options)!.Value);
+        Assert.Equal("radish, kale", Database.GetNote(id)!.Body);
+    }
+
+    [Fact]
+    public void Saving_to_a_server_from_before_reads_the_note_first_each_time_and_keeps_a_change_found()
+    {
+        var (notes, old, _) = OldPc();
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        // Changed after the editor loaded it and before it saved: the read before the save finds it, as before.
+        Database.SaveNote(id, "Seed list", "radish\n\nbeets too", DateTime.Now);
+        old.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+
+        Assert.Equal("radish, kale", Database.GetNote(id)!.Body);
+        Assert.Contains(Database.GetNotes(), note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix && note.Body == "radish\n\nbeets too");
+        Assert.Equal([$"GET /api/notes/{id}", "POST /api/notes", $"GET /api/notes/{id}", $"PUT /api/notes/{id}"], old.Requests);
+
+        // It never says it checks, so the next save reads first too.
+        old.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", DateTime.Now));
+        Assert.Equal("radish, kale, leeks", Database.GetNote(id)!.Body);
+        Assert.Equal([$"GET /api/notes/{id}", $"PUT /api/notes/{id}"], old.Requests);
+        Assert.Equal(2, Database.GetNotes().Count);
+    }
+
+    [Fact]
+    public async Task Typing_kept_while_away_remembers_the_text_the_editor_loaded_so_a_reply_meanwhile_is_kept_too()
+    {
+        var line = NewLine();
+        var client = Client(line);
+        var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_folder, "pc-notes.json")));
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        // A reply is added on the server, and the page reads it, but the editor had typing it hadn't saved, so it
+        // still has the text it loaded.
+        Assert.True(Database.SaveNoteIfUnchanged(id, "Seed list", "radish\n\nbeets too", "radish", DateTime.Now));
+        Assert.Equal("radish\n\nbeets too", notes.GetNote(id)!.Body);
+
+        line.Down = true;
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now));
+        Assert.Equal(1, notes.WaitingToSave);
+
+        line.Down = false;
+        await client.CheckAsync();
+        var sent = Assert.Single(await notes.SendOfflineAsync());
+
+        Assert.True(sent.KeptBoth);
+        Assert.Equal("radish\n\nbeets too", Database.GetNote(id)!.Body);
+        Assert.Equal("radish, kale", Database.GetNote(sent.NoteId)!.Body);
     }
 }

@@ -60,6 +60,13 @@ public interface INotesData : INoteFileStore, IPreferences
 
     IReadOnlyList<NoteDetail> GetNotes(string? filter = null);
 
+    /// <summary>
+    /// Saves the note only if its text is still <paramref name="expectedBody"/>, checked and saved in one step where
+    /// the note is kept, so a change landing in between, such as a reply added from Discord, is never overwritten.
+    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>.
+    /// </summary>
+    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now);
+
     void RestoreNote(long id, DateTime now);
 
     IReadOnlyList<NoteDetail> SearchNotes(string? words);
@@ -203,6 +210,11 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public long CreateNote(string title, string body, DateTime now, long? folderId = null) => database.CreateNote(title, body, now, folderId);
 
     public bool SaveNote(long id, string title, string body, DateTime now) => database.SaveNote(id, title, body, now);
+
+    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now) =>
+        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now) ? NoteSaveResult.Saved
+        : database.GetNote(id) is { } stored ? NoteSaveResult.Changed(stored)
+        : NoteSaveResult.Gone;
 
     public void DeleteNote(long id, DateTime now) => database.DeleteNote(id, now);
 

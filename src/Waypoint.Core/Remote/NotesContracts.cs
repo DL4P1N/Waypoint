@@ -1,3 +1,4 @@
+using Waypoint.Core.Capture;
 using Waypoint.Core.Files;
 using Waypoint.Core.Notes;
 using Waypoint.Core.Recording;
@@ -10,7 +11,18 @@ public sealed record Found<T>(T? Value);
 /// <summary>ClientId, when given, makes sending it again after a lost answer give the same note rather than another.</summary>
 public sealed record NewNoteRequest(string Title, string Body, long? FolderId, string? ClientId = null);
 
-public sealed record SaveNoteRequest(string Title, string Body);
+/// <summary>
+/// With ExpectedBody, the server saves only if the note's text is still that. A server from before ignores it and
+/// saves anyway, and a PC from before never sends it.
+/// </summary>
+public sealed record SaveNoteRequest(string Title, string Body, string? ExpectedBody = null);
+
+/// <summary>
+/// The answer to a note save. Value is the same as the plain answer a PC from before reads. Checked says the server
+/// compared ExpectedBody first, which a server from before never says. Stored is the note as it is now, when it
+/// had changed, and is missing when it's gone.
+/// </summary>
+public sealed record NoteSaveReply(bool Value, bool Checked = false, NoteDetail? Stored = null);
 
 public sealed record NewFolderRequest(string Name, long? ParentId);
 

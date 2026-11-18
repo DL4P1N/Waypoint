@@ -39,6 +39,10 @@ public sealed class ServerNotesData : INotesData
     // Notes made while away and deleted before they were sent, kept for undo while the app is open.
     private readonly ConcurrentDictionary<long, OfflineNote> _deletedNew = new();
 
+    // Whether the server's last answer to a note save said it checked the text expected, which a server from
+    // before never says. Until one has, a save reads the note first, as before.
+    private volatile bool _serverChecksSaves;
+
     /// <param name="offline">Where typing waits while the server is away. Without it, typing then says it can't be saved.</param>
     /// <param name="marks">The moments marked while recording a note's lecture, kept in this PC's recordings.</param>
     public ServerNotesData(ServerClient server, OfflineNotes? offline = null, Func<long, IReadOnlyList<RecordingMark>>? marks = null)
@@ -244,6 +248,64 @@ public sealed class ServerNotesData : INotesData
         // Once one edit is waiting, later ones wait behind it, so they're saved in the order they were typed.
         _offline!.Keep(id, title, body, _serverBodies.TryGetValue(id, out var basedOn) ? basedOn : null, null, now);
         return true;
+    }
+
+    /// <summary>
+    /// The server checks the note still has <paramref name="expectedBody"/> and saves it in one write. A server from
+    /// before can't, so the note is read first and compared here, as the editor used to, and the save then goes
+    /// ahead as it always has. A note made while away, one kept as a copy, or one with typing still waiting to be
+    /// sent, saves as before: what's waiting keeps the text it started from, and both versions are kept when it's
+    /// sent if the note changed meanwhile.
+    /// </summary>
+    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now)
+    {
+        var asked = id;
+        id = Real(id);
+        if (id < 0 || _keptBoth.ContainsKey(id) || _offline?.Find(id) is not null)
+        {
+            return SaveNote(asked, title, body, now) ? NoteSaveResult.Saved : NoteSaveResult.Gone;
+        }
+
+        try
+        {
+            if (!_serverChecksSaves)
+            {
+                var stored = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{id}").Value;
+                if (stored is null)
+                {
+                    return NoteSaveResult.Gone;
+                }
+
+                _serverBodies[id] = stored.Body;
+                if (stored.Body != expectedBody)
+                {
+                    return NoteSaveResult.Changed(stored);
+                }
+            }
+
+            var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{id}", new SaveNoteRequest(title, body, expectedBody));
+            _serverChecksSaves = reply.Checked;
+            if (reply.Value)
+            {
+                RememberSaved(id, title, body);
+                return NoteSaveResult.Saved;
+            }
+
+            if (reply.Stored is { } changed)
+            {
+                _serverBodies[id] = changed.Body;
+                return NoteSaveResult.Changed(changed);
+            }
+
+            return NoteSaveResult.Gone;
+        }
+        catch (ServerUnavailableException) when (_offline is not null)
+        {
+            // Kept with the text the editor started from, so a change made on the server meanwhile is noticed when
+            // it's sent, and both versions are kept.
+            _offline.Keep(id, title, body, expectedBody, null, now);
+            return NoteSaveResult.Saved;
+        }
     }
 
     /// <summary>A note made while away and not sent yet is only on this PC, so it's taken out of what's waiting.</summary>

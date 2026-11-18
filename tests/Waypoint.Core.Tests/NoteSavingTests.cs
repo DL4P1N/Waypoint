@@ -1,0 +1,161 @@
+using System.Reflection;
+using Microsoft.Data.Sqlite;
+using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
+using Waypoint.Core.Notes;
+
+namespace Waypoint.Core.Tests;
+
+/// <summary>The note editor's save, which only goes over the text it loaded, with this PC's own notes.</summary>
+public sealed class NoteSavingTests : IDisposable
+{
+    private static readonly DateTime Now = new(2030, 5, 2, 18, 0, 0);
+
+    private readonly string _path = Path.Combine(Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid()}.db");
+    private readonly WaypointDatabase _database;
+
+    public NoteSavingTests() => _database = new WaypointDatabase(_path);
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools();
+        File.Delete(_path);
+    }
+
+    /// <summary>
+    /// The notes, with a reply added from Discord landing just before a save reaches them, after anything the editor
+    /// read or checked, the same way the Discord worker adds one.
+    /// </summary>
+    public class AppendBeforeSave : DispatchProxy
+    {
+        public INotesData Inner { get; set; } = null!;
+
+        public WaypointDatabase Database { get; set; } = null!;
+
+        /// <summary>The text added the next time a save arrives, if any.</summary>
+        public string? Reply { get; set; }
+
+        public List<string> Calls { get; } = [];
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            Calls.Add(targetMethod!.Name);
+            if (targetMethod.Name is nameof(INotesData.SaveNote) or nameof(INotesData.SaveNoteIfUnchanged) && Reply is { } reply)
+            {
+                Reply = null;
+                var id = (long)args![0]!;
+                var note = Database.GetNote(id)!;
+                Assert.True(Database.SaveNoteIfUnchanged(id, note.Title, $"{note.Body}\n\n{reply}", note.Body, Now));
+            }
+
+            try
+            {
+                return targetMethod.Invoke(Inner, args);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is { } inner)
+            {
+                throw inner;
+            }
+        }
+
+        public static (INotesData Notes, AppendBeforeSave Line) Over(WaypointDatabase database)
+        {
+            var notes = Create<INotesData, AppendBeforeSave>();
+            var line = (AppendBeforeSave)(object)notes;
+            line.Inner = new LocalNotesData(database);
+            line.Database = database;
+            return (notes, line);
+        }
+    }
+
+    [Fact]
+    public void A_save_goes_over_the_text_it_expected()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+
+        Assert.Equal(NoteSaveOutcome.Saved, notes.SaveNoteIfUnchanged(id, "Seed list", "radish, kale", "radish", Now).Outcome);
+        Assert.Equal("radish, kale", _database.GetNote(id)!.Body);
+    }
+
+    [Fact]
+    public void A_save_over_text_that_changed_saves_nothing_and_says_what_it_is_now()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Seed list", "radish\n\nbeets too", Now);
+
+        var result = notes.SaveNoteIfUnchanged(id, "Seed list", "radish, kale", "radish", Now);
+
+        Assert.Equal(NoteSaveOutcome.Changed, result.Outcome);
+        Assert.Equal("radish\n\nbeets too", result.Stored!.Body);
+        Assert.Equal("radish\n\nbeets too", _database.GetNote(id)!.Body);
+
+        _database.DeleteNote(id, Now);
+        Assert.Equal(NoteSaveOutcome.Gone, notes.SaveNoteIfUnchanged(id, "Seed list", "radish, kale", "radish\n\nbeets too", Now).Outcome);
+    }
+
+    [Fact]
+    public void A_reply_from_Discord_landing_just_before_the_editor_saves_is_kept()
+    {
+        var (notes, line) = AppendBeforeSave.Over(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        line.Reply = "beets too";
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+
+        Assert.Equal("radish, kale", _database.GetNote(id)!.Body);
+        var kept = Assert.Single(_database.GetNotes(), note => note.Id != id);
+        Assert.Equal("Seed list" + NoteDraft.ElsewhereSuffix, kept.Title);
+        Assert.Equal("radish\n\nbeets too", kept.Body);
+    }
+
+    [Fact]
+    public void A_save_with_nothing_changed_elsewhere_makes_no_copy()
+    {
+        var (notes, line) = AppendBeforeSave.Over(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", Now));
+
+        Assert.Equal("radish, kale, leeks", Assert.Single(_database.GetNotes()).Body);
+        Assert.Equal(["CreateNote", "SaveNoteIfUnchanged", "SaveNoteIfUnchanged"], line.Calls);
+    }
+
+    [Fact]
+    public void A_change_elsewhere_to_the_same_text_makes_no_copy()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Seed list", "radish, kale", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+
+        Assert.Equal("radish, kale", Assert.Single(_database.GetNotes()).Body);
+    }
+
+    [Fact]
+    public void A_note_deleted_elsewhere_says_so_so_the_editor_keeps_its_text_as_a_new_note()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.DeleteNote(id, Now);
+
+        Assert.False(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        Assert.False(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", null, Now));
+        Assert.Empty(_database.GetNotes());
+    }
+
+    [Fact]
+    public void With_nothing_loaded_to_compare_with_the_save_goes_ahead_as_before()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Seed list", "radish\n\nbeets too", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", null, Now));
+
+        Assert.Equal("radish, kale", Assert.Single(_database.GetNotes()).Body);
+    }
+}
