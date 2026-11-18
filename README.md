@@ -618,6 +618,10 @@ What lives where:
 - **Heartbeat.** Make a check at healthchecks.io (or similar) that notifies your phone, and put its ping link in `Waypoint__HeartbeatUrl`. The server only pings while reminders are running and, when Discord is set up, while it works: sends that keep failing or a Discord connection that stays down for more than 10 minutes hold the ping back, so the phone hears about a bad bot token too. `BACKUP_PING_URL` does the same for backups. `/health` answers without a token and says only whether the server is doing its job. Server logs go to the journal (`journalctl -u waypoint`), never to the Windows event log.
 - Keep phone alarms for mornings that matter until the server has proven itself.
 
+### Not built yet
+
+**A phone token that can only read.** Today the one pairing token can do everything, so a phone holding it would be as trusted as the PC. A second token could be made beside it, say with a tray item **Make a phone token...**, and kept the same way, only its hash on the server, in a file of its own. Requests with it would get the `GET` routes for the day's pages and nothing else: no captures, edits, settings, restores, or backups, and no `/api/notes` writes. The check would sit in the same place the pairing token is checked, before routing, as a short list of allowed method and path pairs, so a new route is closed to the phone until it's added on purpose. It could be withdrawn on its own by deleting its file, without pairing the PC again. A later step could let it mark a reminder done, as its own allowed route.
+
 ## Project layout
 
 | Path | What's there |
