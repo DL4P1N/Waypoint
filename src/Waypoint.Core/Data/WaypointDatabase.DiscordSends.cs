@@ -78,6 +78,29 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Messages already kept as something: a reminder's card, or the post of a note other than <paramref name="exceptKey"/>.
+    /// A post looked for by how it looks is never one of these.
+    /// </summary>
+    public HashSet<string> GetTrackedMessages(string exceptKey)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT message_id FROM sent_reminders WHERE message_id IS NOT NULL
+            UNION SELECT message_id FROM discord_sends WHERE message_id IS NOT NULL AND send_key <> $key
+            """;
+        command.Parameters.AddWithValue("$key", exceptKey);
+        using var reader = command.ExecuteReader();
+        var messages = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            messages.Add(reader.GetString(0));
+        }
+
+        return messages;
+    }
+
     /// <summary>The note for one post, or null.</summary>
     public DiscordSend? GetDiscordSend(string key)
     {

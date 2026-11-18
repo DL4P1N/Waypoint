@@ -246,6 +246,27 @@ public sealed partial class DiscordPhoneTests
         Assert.Empty(_database.GetDiscordSends("held:"));
     }
 
+    [Fact]
+    public async Task A_reminder_card_looked_for_after_a_crash_never_takes_a_card_already_kept_for_another_reminder()
+    {
+        DueReminderFor("Made up phone call");
+        var worker = Worker(toDo: null, lists: null);
+        worker.CheckAlerts();
+        await Until(() => Rows("sent_reminders") == 1);
+
+        // A second reminder that looks the same was noted, then Waypoint stopped before its card was made.
+        var (_, key) = DueReminderFor("Made up phone call");
+        _database.BeginDiscordSend(key, "alerts", _now);
+        _discord.ListMade = true;
+        var second = Worker(toDo: null, lists: null);
+        second.CheckAlerts();
+        await Until(() => Rows("sent_reminders") == 2);
+
+        var cards = CardsAbout("Made up phone call");
+        Assert.Equal(2, cards.Select(card => card.Id).Distinct().Count());
+        Assert.All(cards, card => Assert.Equal(1, Rows("sent_reminders", $"message_id = '{card.Id}'")));
+    }
+
     /// <summary>The messages Discord made in the views channel, by their title.</summary>
     private List<string> ViewsMade()
     {

@@ -164,7 +164,9 @@ public sealed class PinnedViews(WaypointDatabase database)
         var shown = hash;
         if (message is null && !send.Fresh)
         {
-            message = (await bridge.FindSentAsync(view.Channel, send.StartedAt, send.Nonce, view.Card, sameTitleOnly: true)).MessageId;
+            var known = database.GetTrackedMessages(key);
+            known.UnionWith(PlacedMessages());
+            message = (await bridge.FindSentAsync(view.Channel, send.StartedAt, send.Nonce, view.Card, sameTitleOnly: true, known: known)).MessageId;
         }
 
         if (message is null)
@@ -201,6 +203,15 @@ public sealed class PinnedViews(WaypointDatabase database)
         {
             Load()[key] = placed;
             Save();
+        }
+    }
+
+    /// <summary>The messages of the views already placed, so none is taken for another.</summary>
+    public IReadOnlyList<string> PlacedMessages()
+    {
+        lock (_lock)
+        {
+            return Load().Values.Select(placed => placed.Message).ToList();
         }
     }
 

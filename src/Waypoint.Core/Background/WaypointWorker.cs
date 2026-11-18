@@ -702,7 +702,7 @@ public sealed partial class WaypointWorker
         var messageId = send.MessageId;
         if (messageId is null && !send.Fresh && channel is not null)
         {
-            messageId = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card)).MessageId;
+            messageId = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(key))).MessageId;
         }
 
         var sent = messageId is not null;
@@ -763,6 +763,14 @@ public sealed partial class WaypointWorker
         $"{ReminderSendPrefix}{(reminder.Item.Source == ItemSource.Calendar ? "event" : "item")}:{reminder.Id}:{reminder.Item.Id}:{reminder.RemindAt}";
 
     private const string ReminderSendPrefix = "reminder:";
+
+    /// <summary>Messages already kept as another card, note, or view, so a post looked for by its look never takes one.</summary>
+    private HashSet<string> KnownMessages(string key)
+    {
+        var known = _database.GetTrackedMessages(key);
+        known.UnionWith(Views.PlacedMessages());
+        return known;
+    }
 
     /// <summary>
     /// A card's note whose reminder is no longer due (finished, put off, or gone elsewhere) is let go, so it can't
@@ -1502,7 +1510,7 @@ public sealed partial class WaypointWorker
         }
         else if (send is { Fresh: false, Channel: { } channel })
         {
-            id = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card)).MessageId;
+            id = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(send.Key))).MessageId;
         }
 
         var sent = id is not null || await AlertRetry.RunAsync(

@@ -312,8 +312,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// couldn't be read, so it isn't known.
     /// </summary>
     /// <param name="sameTitleOnly">For a card whose words change, such as a pinned view, the title alone is enough.</param>
-    public Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card, bool sameTitleOnly = false) =>
-        FindSentAfterAsync(channel, SnowflakeAt(since - SentLookBack), nonce, card, new HashSet<string>(), sameTitleOnly);
+    /// <param name="known">Messages already kept as something else, so one that looks the same is never taken.</param>
+    public Task<(bool Read, string? MessageId)> FindSentAsync(string channel, DateTime since, string nonce, DiscordCard card, bool sameTitleOnly = false, IReadOnlySet<string>? known = null) =>
+        FindSentAfterAsync(channel, SnowflakeAt(since - SentLookBack), nonce, card, known ?? new HashSet<string>(), sameTitleOnly);
 
     /// <summary>
     /// The same, among the messages after <paramref name="after"/>, leaving out any already <paramref name="known"/>.
