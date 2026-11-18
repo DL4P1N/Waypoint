@@ -75,6 +75,49 @@ public sealed class CaptureStepsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_monthly_budget_is_saved_with_the_items_or_not_at_all_and_comes_through_on_the_next_try()
+    {
+        var sorter = new Sorter(new CaptureResult([new SortedItem(ItemKind.Task, "Made up errand", null, null)], MonthlyBudgetCents: 123400));
+        var outcomes = new List<CaptureOutcome>();
+        Service(sorter, outcomes).Capture("made up budget is 1234 a month");
+
+        FailWhen("BEFORE INSERT ON preferences WHEN NEW.key = 'monthly_budget_cents'");
+        await Service(sorter, outcomes).ProcessPendingAsync();
+        Assert.Empty(_database.GetOpenItems());
+        Assert.Single(_database.GetPendingCaptures());
+        Assert.Null(_database.GetPreference("monthly_budget_cents"));
+
+        StopFailing();
+        await Service(sorter, outcomes).ProcessPendingAsync();
+
+        Assert.Equal("123400", _database.GetPreference("monthly_budget_cents"));
+        Assert.Equal(["Made up errand"], _database.GetOpenItems().Select(item => item.Title));
+        Assert.Empty(_database.GetPendingCaptures());
+        Assert.Single(outcomes);
+    }
+
+    [Fact]
+    public async Task A_category_cap_still_to_run_when_waypoint_stopped_is_set_on_the_next_try()
+    {
+        var cap = new BudgetOp(BudgetOpKind.SetCap, "Made up snacks", 5000, null);
+        var sorter = new Sorter(new CaptureResult([], Answer: "Okay", BudgetOps: [Wait, cap]));
+        var outcomes = new List<CaptureOutcome>();
+        Service(sorter, outcomes).Capture("made up lamp and a snack budget");
+
+        // The first step is noted as done, then Waypoint stops before the cap is begun.
+        FailWhen("BEFORE UPDATE ON capture_progress WHEN NEW.progress LIKE '%\"Next\":1,\"Started\":true%'");
+        await Service(sorter, outcomes).ProcessPendingAsync();
+        Assert.DoesNotContain(_database.GetCategories(), category => category.Name == "Made up snacks");
+
+        StopFailing();
+        await Service(sorter, outcomes).ProcessPendingAsync();
+
+        Assert.Equal(5000, _database.GetCategories().Single(category => category.Name == "Made up snacks").MonthlyCents);
+        Assert.Equal(1, Count("wait_list"));
+        Assert.DoesNotContain(CaptureService.CutOff, Assert.Single(outcomes).BudgetReplies!);
+    }
+
+    [Fact]
     public async Task A_step_that_fails_leaves_the_rest_to_run_and_the_reply_still_comes()
     {
         var sorter = new Sorter(new CaptureResult([], Answer: "Okay", BudgetOps: [Wait, Income]));
