@@ -39,6 +39,11 @@ var app = builder.Build();
 
 // Made now rather than on the first request, so the pairing token and any time zone warning show at startup.
 app.Services.GetRequiredService<WaypointServer>();
+if (options.PublicHttpWarning() is { } publicHttp)
+{
+    app.Logger.LogWarning("{Warning}", publicHttp);
+}
+
 Api.UseToken(app);
 Api.Map(app);
 ListsRoutes.Map(Api.Protected(app));

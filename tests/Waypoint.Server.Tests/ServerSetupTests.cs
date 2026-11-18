@@ -125,7 +125,9 @@ public sealed class ServerSetupTests : IDisposable
     public void Every_network_at_once_is_refused_unless_asked_for(string listen)
     {
         Assert.Throws<InvalidOperationException>(() => new ServerOptions { Listen = listen }.CheckedListen());
-        Assert.Equal(listen, new ServerOptions { Listen = listen, AllowAllInterfaces = true }.CheckedListen());
+        // Every network includes the public ones, so plain HTTP there needs both settings.
+        Assert.Throws<InvalidOperationException>(() => new ServerOptions { Listen = listen, AllowAllInterfaces = true }.CheckedListen());
+        Assert.Equal(listen, new ServerOptions { Listen = listen, AllowAllInterfaces = true, AllowPublicHttp = true }.CheckedListen());
     }
 
     [Theory]
@@ -134,7 +136,8 @@ public sealed class ServerSetupTests : IDisposable
     public void A_host_name_is_refused_since_it_would_listen_on_every_network(string listen)
     {
         Assert.Throws<InvalidOperationException>(() => new ServerOptions { Listen = listen }.CheckedListen());
-        Assert.Equal(listen, new ServerOptions { Listen = listen, AllowAllInterfaces = true }.CheckedListen());
+        Assert.Throws<InvalidOperationException>(() => new ServerOptions { Listen = listen, AllowAllInterfaces = true }.CheckedListen());
+        Assert.Equal(listen, new ServerOptions { Listen = listen, AllowAllInterfaces = true, AllowPublicHttp = true }.CheckedListen());
     }
 
     [Theory]
@@ -144,7 +147,54 @@ public sealed class ServerSetupTests : IDisposable
     [InlineData("http://100.101.102.103:5280")]
     public void This_machine_or_the_tailscale_address_is_fine(string listen)
     {
+        var options = new ServerOptions { Listen = listen };
+
+        Assert.Equal(listen, options.CheckedListen());
+        Assert.Empty(options.PublicHttpAddresses());
+        Assert.Null(options.PublicHttpWarning());
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.2:5280")]
+    [InlineData("http://[::1]:5280")]
+    [InlineData("http://[::ffff:127.0.0.1]:5280")]
+    [InlineData("http://100.64.0.1:5280")]
+    [InlineData("http://100.127.255.254:5280")]
+    [InlineData("http://[fd7a:115c:a1e0:ab12::5]:5280")]
+    public void Loopback_and_the_whole_tailscale_range_are_fine_over_http(string listen)
+    {
         Assert.Equal(listen, new ServerOptions { Listen = listen }.CheckedListen());
+    }
+
+    [Theory]
+    [InlineData("http://192.168.1.20:5280")]
+    [InlineData("http://10.0.0.5:5280")]
+    [InlineData("http://203.0.113.7:5280")]
+    [InlineData("http://100.63.255.255:5280")]
+    [InlineData("http://100.128.0.1:5280")]
+    [InlineData("http://[2001:db8::7]:5280")]
+    [InlineData("http://[fd7a:115c:a1e1::1]:5280")]
+    [InlineData("http://127.0.0.1:5280;http://192.168.1.20:5281")]
+    public void A_home_network_or_public_address_over_http_is_refused_unless_asked_for(string listen)
+    {
+        var refused = Assert.Throws<InvalidOperationException>(() => new ServerOptions { Listen = listen }.CheckedListen());
+        Assert.Contains("Waypoint__AllowPublicHttp=true", refused.Message);
+        Assert.Null(new ServerOptions { Listen = listen }.PublicHttpWarning());
+
+        var allowed = new ServerOptions { Listen = listen, AllowPublicHttp = true };
+        Assert.Equal(listen, allowed.CheckedListen());
+        Assert.Contains("plain HTTP", allowed.PublicHttpWarning());
+    }
+
+    [Theory]
+    [InlineData("https://192.168.1.20:5280")]
+    [InlineData("https://203.0.113.7:5280")]
+    public void A_home_network_or_public_address_over_https_is_fine(string listen)
+    {
+        var options = new ServerOptions { Listen = listen };
+
+        Assert.Equal(listen, options.CheckedListen());
+        Assert.Null(options.PublicHttpWarning());
     }
 
     [Fact]

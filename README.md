@@ -34,6 +34,20 @@ A personal daily assistant for Windows. It sits in the system tray, keeps everyt
 
 This builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in. Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
 
+An update can't leave a half-copied install behind:
+
+- Each build is copied whole into `versions\<time>-<commit>` and checked byte for byte against what was built before anything is stopped. A copy installed before versions were kept becomes the first version, so it can be gone back to.
+- The running app is asked to close the usual way, so drafts are saved and a recording is finished, and is only stopped by force if it hasn't closed within 20 seconds.
+- The new `Waypoint.exe` is copied beside the old one, checked, and switched in by rename, keeping the old one as `Waypoint.previous.exe`. The shortcut and sign-in entry always start the same `Waypoint.exe`. Files the new version doesn't have are removed, and `current.txt` names the version in use.
+- If the new version isn't still running after 8 seconds, it's removed and the previous version is put back and started, and the installer says so.
+- The last two versions are kept. To go back to the other one at any time:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Rollback
+  ```
+
+To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
+
 Left-click the tray icon, or choose **Open Waypoint**, to open the window. A fresh copy shows a **Getting set up** card on To do with four steps: add a first task, add work hours, say how you're paid, and connect Discord. Each line opens the right place and goes away once it's done. **Hide this** puts the card away for good.
 
 ## Ask
@@ -482,7 +496,7 @@ Two things it leaves off until you're ready:
 
 Then, by hand:
 
-1. **Tailscale.** `curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up` and sign in. Put the address from `tailscale ip -4` in `/etc/waypoint/waypoint.env` as `Waypoint__Listen=http://100.x.y.z:5280`, then `sudo systemctl restart waypoint`. Until then it only answers on the server itself. Use the IP, not the MagicDNS name: a name or `0.0.0.0` would listen on every network, so they're refused unless `Waypoint__AllowAllInterfaces=true`. No public ports are needed.
+1. **Tailscale.** `curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up` and sign in. Put the address from `tailscale ip -4` in `/etc/waypoint/waypoint.env` as `Waypoint__Listen=http://100.x.y.z:5280`, then `sudo systemctl restart waypoint`. Until then it only answers on the server itself. Use the IP, not the MagicDNS name: a name or `0.0.0.0` would listen on every network, so they're refused unless `Waypoint__AllowAllInterfaces=true`. Plain HTTP on any address other than the server itself or Tailscale (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`), such as a home network or public address, a name, or `0.0.0.0`, is refused too, since anyone who could reach it would see what's sent, the pairing token included. `Waypoint__AllowPublicHttp=true` allows it, and the server then warns about it at every start and in `/health`. No public ports are needed.
 2. **Claude Code.** Sorting runs `claude -p` as the service user: `sudo -u waypoint -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'`, then `sudo -u waypoint -H bash -lc 'claude'` and sign in. If it's installed somewhere unusual, set `WAYPOINT_CLAUDE_PATH`, inside `/home/waypoint` or a system folder. Check it stays signed in after a reboot, and watch `journalctl -u waypoint` after sending a capture.
 
    **Claude sign-in, if it doesn't last unattended:** run `sudo -u waypoint -H bash -lc 'claude setup-token'`, which signs in with your plan and prints a long-lived token. Put it in `/etc/waypoint/waypoint.env` as `CLAUDE_CODE_OAUTH_TOKEN=<the token>` (that file is readable only by root and the `waypoint` group), then `sudo systemctl restart waypoint`. Waypoint keeps that variable when it runs `claude`, and still removes `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so nothing is ever billed to an API key. Never put the token in `settings.json` or anything that's backed up unencrypted.
@@ -603,6 +617,10 @@ What lives where:
 - **Test a restore** before relying on it, and again every few months. On the machine with the key, copy a backup over and run `deploy/linux/waypoint-restore-test.sh waypoint-backup.key waypoint-2026-01-01-0315.tar.gz.age`. It decrypts into a temporary folder, runs SQLite's integrity check, prints how many items and captures it holds to compare with the app, and cleans up. It ends non-zero if anything fails. To look around further, open the restored `waypoint.db` with the PC app pointed at a copy by `WAYPOINT_DATA_DIR`, with `WAYPOINT_TRIAL=1` so it sends nothing.
 - **Heartbeat.** Make a check at healthchecks.io (or similar) that notifies your phone, and put its ping link in `Waypoint__HeartbeatUrl`. The server only pings while reminders are running and, when Discord is set up, while it works: sends that keep failing or a Discord connection that stays down for more than 10 minutes hold the ping back, so the phone hears about a bad bot token too. `BACKUP_PING_URL` does the same for backups. `/health` answers without a token and says only whether the server is doing its job. Server logs go to the journal (`journalctl -u waypoint`), never to the Windows event log.
 - Keep phone alarms for mornings that matter until the server has proven itself.
+
+### Not built yet
+
+**A phone token that can only read.** Today the one pairing token can do everything, so a phone holding it would be as trusted as the PC. A second token could be made beside it, say with a tray item **Make a phone token...**, and kept the same way, only its hash on the server, in a file of its own. Requests with it would get the `GET` routes for the day's pages and nothing else: no captures, edits, settings, restores, or backups, and no `/api/notes` writes. The check would sit in the same place the pairing token is checked, before routing, as a short list of allowed method and path pairs, so a new route is closed to the phone until it's added on purpose. It could be withdrawn on its own by deleting its file, without pairing the PC again. A later step could let it mark a reminder done, as its own allowed route.
 
 ## Project layout
 

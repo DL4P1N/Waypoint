@@ -15,10 +15,15 @@ public static class Api
 {
     public static void Map(WebApplication app)
     {
+        // Plain HTTP allowed outside this machine and Tailscale is said here too, so a check of /health shows it.
         app.MapGet("/health", (WaypointServer server, IOptions<ServerOptions> options) =>
-            server.IsHealthy(DateTime.Now, options.Value.RunBackground)
-                ? Results.Ok(new { status = "ok" })
-                : Results.Json(new { status = "stalled" }, statusCode: StatusCodes.Status503ServiceUnavailable));
+            (server.IsHealthy(DateTime.Now, options.Value.RunBackground), options.Value.PublicHttpWarning()) switch
+            {
+                (true, null) => Results.Ok(new { status = "ok" }),
+                (true, var warning) => Results.Ok(new { status = "ok", warning }),
+                (false, null) => Results.Json(new { status = "stalled" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+                (false, var warning) => Results.Json(new { status = "stalled", warning }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            });
 
         var api = app.MapGroup("/api");
 

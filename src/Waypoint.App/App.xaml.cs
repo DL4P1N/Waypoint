@@ -41,6 +41,7 @@ public partial class App : System.Windows.Application
     private ThemePalette? _palette;
     private Mutex? _singleInstance;
     private EventWaitHandle _showList = null!;
+    private EventWaitHandle? _exitRequest;
     private WaypointWorker _worker = null!;
     private ClassSchedule? _schedule;
     private DispatcherTimer? _calendarTimer;
@@ -394,6 +395,12 @@ public partial class App : System.Windows.Application
         })
         { IsBackground = true };
         showListThread.Start();
+
+        // install.ps1 sets this to close the app the usual way, saving drafts and finishing a recording, before it
+        // switches versions. Only the copy that holds this name's single-instance lock listens for it.
+        _exitRequest = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.Exit");
+        ThreadPool.RegisterWaitForSingleObject(
+            _exitRequest, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
         if (_server is null)
         {

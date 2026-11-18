@@ -23,6 +23,13 @@ public sealed class ServerOptions
 
     public bool AllowAllInterfaces { get; set; }
 
+    /// <summary>
+    /// Allows plain HTTP on an address that isn't this machine or Tailscale, such as a home network or public address.
+    /// Off, the server refuses to start there, since anyone who could reach it would see what's sent, the pairing
+    /// token included. Every network at once over HTTP counts too, so it needs this as well as <see cref="AllowAllInterfaces"/>.
+    /// </summary>
+    public bool AllowPublicHttp { get; set; }
+
     /// <summary>The largest request body for every route but the one that keeps a file with a note, which has its own limit.</summary>
     public long MaxRequestBytes { get; set; } = 10L * 1024 * 1024;
 
@@ -58,12 +65,9 @@ public sealed class ServerOptions
     /// </summary>
     public string CheckedListen()
     {
-        foreach (var address in Listen.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var address in Addresses())
         {
-            var host = address.Split("://", 2).Last().Split('/')[0];
-            host = host.StartsWith('[') ? host[..(host.IndexOf(']') + 1)] : host.Split(':')[0];
-            // The address is compared by value, so spellings such as 0, [::0], and [0:0::0] are caught too.
-            var literal = IPAddress.TryParse(host.Trim('[', ']'), out var ip) ? ip : null;
+            var (host, literal) = Host(address);
             var wildcard = host is "*" or "+" || (literal is not null && IsEveryNetwork(literal));
             var named = !host.Equals("localhost", StringComparison.OrdinalIgnoreCase) && literal is null;
             if ((wildcard || named) && !AllowAllInterfaces)
@@ -73,7 +77,65 @@ public sealed class ServerOptions
             }
         }
 
+        if (PublicHttpAddresses() is [var first, ..] && !AllowPublicHttp)
+        {
+            throw new InvalidOperationException(
+                $"Waypoint won't listen over plain HTTP on {first}, which isn't this machine or a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48), since anyone who can reach it would see what's sent, the pairing token included. Set Waypoint__Listen to the Tailscale IP address (from tailscale ip -4), or set Waypoint__AllowPublicHttp=true if that's really meant.");
+        }
+
         return Listen;
+    }
+
+    /// <summary>
+    /// The listen addresses that take plain HTTP somewhere other than this machine or Tailscale: a home network or
+    /// public address, every network at once, or a host name, which Kestrel takes to mean every network.
+    /// </summary>
+    public IReadOnlyList<string> PublicHttpAddresses() =>
+        Addresses()
+            .Where(address => !address.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            .Where(address => Host(address) switch
+            {
+                (var host, null) => !host.Equals("localhost", StringComparison.OrdinalIgnoreCase),
+                (_, var literal) => !IsThisMachineOrTailscale(literal),
+            })
+            .ToList();
+
+    /// <summary>Said in the log at startup and by /health while plain HTTP is allowed outside this machine and Tailscale.</summary>
+    public string? PublicHttpWarning() =>
+        AllowPublicHttp && PublicHttpAddresses().Count > 0
+            ? "Waypoint__AllowPublicHttp is on and the server takes plain HTTP outside this machine and Tailscale, so anyone who can reach it sees what's sent, the pairing token included. Listen on the Tailscale address instead."
+            : null;
+
+    private IEnumerable<string> Addresses() =>
+        Listen.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>The host part of a listen address, and the IP address it names, if it's one.</summary>
+    private static (string Host, IPAddress? Literal) Host(string address)
+    {
+        var host = address.Split("://", 2).Last().Split('/')[0];
+        host = host.StartsWith('[') ? host[..(host.IndexOf(']') + 1)] : host.Split(':')[0];
+        // The address is compared by value, so spellings such as 0, [::0], and [0:0::0] are caught too.
+        return (host, IPAddress.TryParse(host.Trim('[', ']'), out var ip) ? ip : null);
+    }
+
+    private static bool IsThisMachineOrTailscale(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        if (IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        var bytes = address.GetAddressBytes();
+        return address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+            // 100.64.0.0/10, the shared range Tailscale gives its IPv4 addresses from.
+            ? bytes[0] == 100 && (bytes[1] & 0xC0) == 64
+            // fd7a:115c:a1e0::/48, Tailscale's IPv6 range.
+            : bytes is [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0, ..];
     }
 
     private static bool IsEveryNetwork(IPAddress address) =>
