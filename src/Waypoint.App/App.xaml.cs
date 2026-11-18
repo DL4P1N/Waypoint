@@ -42,6 +42,7 @@ public partial class App : System.Windows.Application
     private Mutex? _singleInstance;
     private EventWaitHandle _showList = null!;
     private WaypointWorker _worker = null!;
+    private PostedWork? _posted;
     private ClassSchedule? _schedule;
     private DispatcherTimer? _calendarTimer;
     private DispatcherTimer? _statusTimer;
@@ -142,11 +143,12 @@ public partial class App : System.Windows.Application
         var voice = new Waypoint.Core.Transcription.WhisperVoiceTranscriber(_database, whisper, audio, new Waypoint.Core.Transcription.ChildProcessRunner(), dataDirectory);
 
         // The reminders, alerts, Discord, calendar, and email live in Core, so a server can run the same logic.
+        _posted = new PostedWork(Dispatcher, LogError);
         _worker = new WaypointWorker(
             _database,
             settings,
             dataDirectory,
-            new WindowHost(this),
+            new WindowHost(this, _posted),
             LogError,
             new WorkerParts(path => new ProtectedTokenStore(path), TextRecognizer: ImageText.Recognizer, Runner: DiscordRunner.Pc, Idle: PcIdle, Voice: voice))
         {
@@ -570,6 +572,12 @@ public partial class App : System.Windows.Application
         {
             System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait();
         }
+
+        // What those events handed to this thread runs now, since the dispatcher stops once closing is done. A typed
+        // capture is one: it's marked as read in Discord before it's handed over, so skipping it would lose it. Files
+        // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
+        // the window or reads Discord again.
+        _posted?.RunLeft();
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
         _worker?.ForgetLateNight();
@@ -1082,7 +1090,7 @@ public partial class App : System.Windows.Application
     }
 
     /// <summary>The worker's fallbacks shown on this PC: a tray toast, a reminder card, and the status refresh.</summary>
-    private sealed class WindowHost(App app) : IWorkerHost
+    private sealed class WindowHost(App app, PostedWork posted) : IWorkerHost
     {
         public void ShowNotice(string title, string text) => OnUiThread(() => app.ShowToast(title, text));
 
@@ -1092,7 +1100,7 @@ public partial class App : System.Windows.Application
 
         public void Changed() => OnUiThread(app.RefreshStatus);
 
-        public void Post(Action action) => app.Dispatcher.BeginInvoke(action);
+        public void Post(Action action) => posted.Post(action);
 
         private void OnUiThread(Action action)
         {
