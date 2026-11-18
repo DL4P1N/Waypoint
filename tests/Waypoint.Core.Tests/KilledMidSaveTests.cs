@@ -269,6 +269,13 @@ public sealed class KilledMidSaveTests : IDisposable
         _database = new WaypointDatabase(_path);
         _holdsLog = new SqliteConnection($"Data Source={_path};Pooling=False");
         _holdsLog.Open();
+        using (var read = _holdsLog.CreateCommand())
+        {
+            // A connection only takes its share of the log once it reads.
+            read.CommandText = "SELECT COUNT(*) FROM sqlite_master";
+            read.ExecuteScalar();
+        }
+
         return new Saved(before, tables, Read(_path, tables));
     }
 
