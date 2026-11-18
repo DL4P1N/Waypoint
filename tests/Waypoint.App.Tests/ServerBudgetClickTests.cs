@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -83,10 +82,11 @@ public sealed class ServerBudgetClickTests
         server.Release.Reset();
         view.UpdateLayout();
         var rows = UiTest.Descendants<Grid>(view).Where(grid => grid.DataContext?.GetType().Name == "WaitRow").ToList();
-        var watch = Stopwatch.StartNew();
         ui.Choose(ui.RightClick(rows.First(row => UiTest.Prop<string>(row.DataContext!, "Title") == "headphones"))!, "Let it go");
         ui.Choose(ui.RightClick(rows.First(row => UiTest.Prop<string>(row.DataContext!, "Title") == "bike lights"))!, "Let it go");
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+        // Both clicks came back while the server still held the first change.
+        Assert.Empty(server.Changes);
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
         Assert.True(work.ChangesWaiting);
 
@@ -128,9 +128,10 @@ public sealed class ServerBudgetClickTests
             UiTest.Descendants<TextBox>(form).First().Text = "Made up snacks";
             var done = UiTest.Named<Button>(form, "DoneButton");
             server.Release.Reset();
-            var watch = Stopwatch.StartNew();
             UiTest.Call(form, "OnDoneClicked", form, new RoutedEventArgs());
-            Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+            // It came back while the server still held the save.
+            Assert.Empty(server.Changes);
             Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
 
             // It can't be pressed again meanwhile, so it's saved once.

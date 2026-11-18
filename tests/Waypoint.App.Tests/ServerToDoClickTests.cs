@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -170,12 +169,7 @@ public sealed class ServerToDoClickTests
         Rows(view).Single(box => AutomationProperties.GetName(box).StartsWith(title, StringComparison.Ordinal));
 
     /// <summary>A click on a done box, the way it changes for the page: the box's own state, which raises Checked or Unchecked.</summary>
-    private static TimeSpan Click(CheckBox box)
-    {
-        var watch = Stopwatch.StartNew();
-        box.IsChecked = box.IsChecked != true;
-        return watch.Elapsed;
-    }
+    private static void Click(CheckBox box) => box.IsChecked = box.IsChecked != true;
 
     [Fact]
     public void A_click_returns_at_once_while_the_server_holds_the_change_and_shows_it_once_saved() => Ui.Run(ui =>
@@ -184,9 +178,10 @@ public sealed class ServerToDoClickTests
         var (view, work) = Open(ui, server);
         server.ReleaseChanges.Reset();
 
-        var took = Click(Box(view, "Email advisor"));
+        Click(Box(view, "Email advisor"));
 
-        Assert.True(took < TimeSpan.FromMilliseconds(500), $"The window waited {took.TotalMilliseconds:0} ms for the server");
+        // It came back while the server still held the change.
+        Assert.Empty(server.Changes);
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
         Assert.True(work.ChangesWaiting);
         Assert.True(Box(view, "Email advisor").IsChecked);

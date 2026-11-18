@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -81,10 +80,11 @@ public sealed class ServerHistoryClickTests
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Boxes().Count == 2, "the rows");
 
         server.Release.Reset();
-        var watch = Stopwatch.StartNew();
         Boxes()[0].IsChecked = false;
         Boxes()[1].IsChecked = false;
-        Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+        // Both clicks came back while the server still held the first change.
+        Assert.Empty(server.Reopened);
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
 
         server.Release.Set();

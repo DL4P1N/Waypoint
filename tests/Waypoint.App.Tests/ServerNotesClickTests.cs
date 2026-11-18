@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -156,12 +155,10 @@ public sealed class ServerNotesClickTests
 
     private static List<object> Rows(NotesView view) => UiTest.Named<ListBox>(view, "NotesList").Items.Cast<object>().ToList();
 
-    private static TimeSpan Pick(NotesView view, long id)
+    private static void Pick(NotesView view, long id)
     {
-        var watch = Stopwatch.StartNew();
         var list = UiTest.Named<ListBox>(view, "NotesList");
         list.SelectedItem = list.Items.Cast<object>().Single(row => UiTest.Prop<long>(row, "Id") == id);
-        return watch.Elapsed;
     }
 
     [Fact]
@@ -173,11 +170,14 @@ public sealed class ServerNotesClickTests
         // The save once typing stops is held. Picking another note saves the same text, which is already on its way,
         // so it isn't sent twice.
         Type(body, "radish, kale");
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
-        var took = Pick(view, 8);
-        Assert.True(took < TimeSpan.FromMilliseconds(500), $"The window waited {took.TotalMilliseconds:0} ms for the server");
+        Pick(view, 8);
+
+        // It came back while the server still held the save.
+        Assert.Empty(server.Changes);
 
         server.ReleaseChanges.Set();
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "tent", "the other note");
@@ -193,13 +193,15 @@ public sealed class ServerNotesClickTests
         var server = new NotesServer();
         var (view, work, body, _) = OpenNotes(ui, server);
 
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         Type(body, "radish, kale");
         UiTest.Call(view, "SaveSoon");
         Type(body, "radish, kale, beets");
-        var watch = Stopwatch.StartNew();
         UiTest.Call(view, "SaveSoon");
-        Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+        // Both came back while the server still held the first save.
+        Assert.Empty(server.Changes);
 
         server.ReleaseChanges.Set();
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
@@ -243,6 +245,7 @@ public sealed class ServerNotesClickTests
         var (view, work, body, _) = OpenNotes(ui, server);
 
         Type(body, "radish, kale");
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
@@ -271,12 +274,14 @@ public sealed class ServerNotesClickTests
         CheckBox Box(string text) => UiTest.Descendants<CheckBox>(entries).Single(box => UiTest.Prop<string>(box.DataContext, "Text") == text);
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
 
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
-        var watch = Stopwatch.StartNew();
         Box("eggs").IsChecked = true;
         Box("eggs").IsChecked = false;
         Box("oat milk").IsChecked = true;
-        Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+        // All three came back while the server still held the first change.
+        Assert.Empty(server.Changes);
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
 
         server.ReleaseChanges.Set();
@@ -293,6 +298,7 @@ public sealed class ServerNotesClickTests
         var (view, work, body, _) = OpenNotes(ui, server);
 
         Type(body, "radish, kale");
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
         Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
@@ -323,6 +329,7 @@ public sealed class ServerNotesClickTests
         var (view, work, body, _) = OpenNotes(ui, server);
 
         Type(body, "radish, kale");
+        server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         server.RefuseNextSave = true;
         UiTest.Call(view, "SaveSoon");

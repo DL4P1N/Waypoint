@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -86,10 +85,11 @@ public sealed class ServerSettingsClickTests
         server.Release.Reset();
         rate.Text = "21.50";
         commute.Text = "25";
-        var watch = Stopwatch.StartNew();
         UiTest.Call(view, "OnHourlyRateSaved", view, new RoutedEventArgs());
         UiTest.Call(view, "OnCommuteSaved", view, new RoutedEventArgs());
-        Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+
+        // Both came back while the server still held the first save.
+        Assert.Empty(server.Saves);
         Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
 
         server.Release.Set();
