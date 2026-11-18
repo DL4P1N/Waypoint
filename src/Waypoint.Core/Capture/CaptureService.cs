@@ -273,9 +273,11 @@ public sealed class CaptureService(
     }
 
     /// <summary>
-    /// Runs a sorted capture's budget changes, then its actions, from where they got to, noting each before and after
-    /// so none runs twice. One that was running when Waypoint stopped is skipped with <see cref="CutOff"/>, except
-    /// reading email, which is safe to run again. Then the capture is finished and the reply goes out.
+    /// Runs a sorted capture's budget changes, then its actions, from where they got to. Each one that only changes
+    /// what's saved here runs in one write with the note that it's done, so a crash keeps both or neither and it's
+    /// done once. Reading email reaches outside, so it's noted before it starts and is read again if cut off, since
+    /// that's safe. A step noted as begun by an older copy is skipped with <see cref="CutOff"/>, as it can't be told
+    /// whether it went through. Then the capture is finished with its reply kept, and the reply goes out.
     /// No write is held open while email is read.
     /// </summary>
     private async Task RunStepsAsync(PendingCapture capture, StepProgress progress, AssistantContext? context, CancellationToken cancellationToken)
@@ -293,21 +295,27 @@ public sealed class CaptureService(
             {
                 AddReply(op is null ? null : new OpReply(CutOff, true), CutOff);
             }
-            else
+            else if (!emailCheck)
             {
-                database.SetCaptureProgress(capture.Id, (progress with { Next = step, Started = true, BudgetReplies = budgetReplies, OpReplies = opReplies }).Save());
                 try
                 {
-                    if (op is null)
+                    var current = step;
+                    var (budgetReply, opReply) = database.InOneWrite(() =>
                     {
-                        budgetReplies.Add(database.ApplyBudgetOp(budgetOps[step], DateOnly.FromDateTime(Now)));
-                    }
-                    else
-                    {
-                        opReplies.Add(emailCheck
-                            ? await CheckEmailAsync(CheckEmail!, cancellationToken)
-                            : AssistantOps.Apply(op, database, capture.Id, Now, capture.Text, bedtime));
-                    }
+                        var replies = op is null
+                            ? (database.ApplyBudgetOp(budgetOps[current], DateOnly.FromDateTime(Now)), (OpReply?)null)
+                            : ((string?)null, AssistantOps.Apply(op, database, capture.Id, Now, capture.Text, bedtime));
+                        database.SetCaptureProgress(capture.Id, (progress with
+                        {
+                            Next = current + 1,
+                            Started = false,
+                            BudgetReplies = [.. budgetReplies, .. replies.Item1 is null ? [] : new[] { replies.Item1 }],
+                            OpReplies = [.. opReplies, .. replies.Item2 is null ? [] : new[] { replies.Item2 }],
+                        }).Save());
+                        return replies;
+                    });
+                    AddReply(opReply, budgetReply!);
+                    continue;
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -316,28 +324,49 @@ public sealed class CaptureService(
                     AddReply(op is null ? null : new OpReply(StepFailed, true), StepFailed);
                 }
             }
+            else
+            {
+                database.SetCaptureProgress(capture.Id, (progress with { Next = step, Started = true, BudgetReplies = budgetReplies, OpReplies = opReplies }).Save());
+                try
+                {
+                    opReplies.Add(await CheckEmailAsync(CheckEmail!, cancellationToken));
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    LastError = exception.Message;
+                    opReplies.Add(new OpReply(StepFailed, true));
+                }
+            }
 
             database.SetCaptureProgress(capture.Id, (progress with { Next = step + 1, Started = false, BudgetReplies = budgetReplies, OpReplies = opReplies }).Save());
         }
 
-        if (total > 0)
-        {
-            database.CompleteCapture(capture.Id, []);
-        }
-
         var answers = new[] { progress.Answer }.Concat(opReplies.Where(reply => reply.IsAnswer).Select(reply => reply.Text)).Where(text => !string.IsNullOrWhiteSpace(text));
         var answer = string.Join("\n", answers);
+        var focus = FocusOf(progress.FocusRef, answer, Shown(context));
 
-        Changed?.Invoke();
-        Publish(capture, new CaptureOutcome(
-            progress.Stored ?? [],
-            progress.Applied ?? [],
-            answer.Length > 0 ? answer : null,
-            progress.MonthlyBudget,
-            capture.Origin,
-            budgetReplies,
-            opReplies.Where(reply => !reply.IsAnswer).Select(reply => reply.Text).ToList(),
-            ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? database.GetActiveSession(Now) : null), FocusOf(progress.FocusRef, answer, Shown(context)));
+        // Finished and kept together, so a crash between can't leave the reply kept for a capture that comes round again.
+        var outcome = database.InOneWrite(() =>
+        {
+            if (total > 0)
+            {
+                database.CompleteCapture(capture.Id, []);
+            }
+
+            var finished = new CaptureOutcome(
+                progress.Stored ?? [],
+                progress.Applied ?? [],
+                answer.Length > 0 ? answer : null,
+                progress.MonthlyBudget,
+                capture.Origin,
+                budgetReplies,
+                opReplies.Where(reply => !reply.IsAnswer).Select(reply => reply.Text).ToList(),
+                ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? database.GetActiveSession(Now) : null);
+            Keep(capture, finished, focus);
+            return finished;
+        });
+
+        Announce(capture, outcome);
 
         void AddReply(OpReply? forOp, string forBudget)
         {
@@ -400,10 +429,15 @@ public sealed class CaptureService(
     /// <summary>The reply that's kept is a plain one, since words from a file must never be what a later yes answers.</summary>
     private void FinishFile(PendingCapture capture, IReadOnlyList<SortedItem> items, string answer, bool asked = false)
     {
-        database.CompleteCapture(capture.Id, items);
-        Changed?.Invoke();
         var added = items.Count(item => item.Kind != ItemKind.Note);
-        Publish(capture, new CaptureOutcome(items.Where(item => item.Kind != ItemKind.Note).ToList(), [], answer.Length > 0 ? answer : null, Origin: capture.Origin), kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
+        var outcome = new CaptureOutcome(items.Where(item => item.Kind != ItemKind.Note).ToList(), [], answer.Length > 0 ? answer : null, Origin: capture.Origin);
+        database.InOneWrite(() =>
+        {
+            database.CompleteCapture(capture.Id, items);
+            Keep(capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
+            return 0;
+        });
+        Announce(capture, outcome);
     }
 
     /// <summary>A yes or no to waiting pay dates, if that's what was just asked.</summary>
@@ -523,20 +557,14 @@ public sealed class CaptureService(
         return outcome;
     }
 
-    /// <summary>Says what came of a short reply once it's saved.</summary>
+    /// <summary>Says what came of a capture once it's saved.</summary>
     private void Announce(PendingCapture capture, CaptureOutcome outcome)
     {
         Changed?.Invoke();
         Sorted?.Invoke(outcome with { CaptureId = capture.Id });
     }
 
-    /// <summary>Keeps the exchange before showing it, so the next note can follow on from this one.</summary>
-    private void Publish(PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
-    {
-        Keep(capture, outcome, focus, kept);
-        Sorted?.Invoke(outcome with { CaptureId = capture.Id });
-    }
-
+    /// <summary>Keeps the exchange, in the same write that finishes the capture, so the next note can follow on from this one.</summary>
     private void Keep(PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
     {
         var acted = outcome.Changes.Where(change => change.Applied).Select(change => ItemRef.Format(change.Change.Source, change.Change.ItemId));

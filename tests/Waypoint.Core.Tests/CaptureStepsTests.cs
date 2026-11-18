@@ -46,18 +46,18 @@ public sealed class CaptureStepsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_capture_cut_off_after_a_step_ran_does_the_rest_without_doing_that_step_again()
+    public async Task A_capture_cut_off_as_a_step_finishes_keeps_neither_and_does_that_step_once_on_the_next_try()
     {
         var sorter = new Sorter(new CaptureResult([new SortedItem(ItemKind.Task, "Made up errand", null, null)], Answer: "Okay", BudgetOps: [Wait, Income]));
         var outcomes = new List<CaptureOutcome>();
         Service(sorter, outcomes).Capture("made up note with money in it");
 
-        // The first step goes through, then Waypoint stops before noting it was done.
+        // The first step runs, then Waypoint stops while noting it was done, so the step goes with the note.
         FailWhen("BEFORE UPDATE ON capture_progress WHEN NEW.progress LIKE '%\"Next\":1,\"Started\":false%'");
         await Service(sorter, outcomes).ProcessPendingAsync();
         Assert.Empty(outcomes);
         Assert.Single(_database.GetPendingCaptures());
-        Assert.Equal(1, Count("wait_list"));
+        Assert.Equal(0, Count("wait_list"));
 
         StopFailing();
         await Service(sorter, outcomes).ProcessPendingAsync();
@@ -69,9 +69,36 @@ public sealed class CaptureStepsTests : IDisposable
         Assert.Equal(["Made up errand"], _database.GetOpenItems().Select(item => item.Title));
         var outcome = Assert.Single(outcomes);
         Assert.Equal("Okay", outcome.Answer);
-        Assert.Equal(CaptureService.CutOff, outcome.BudgetReplies![0]);
-        Assert.Equal(2, outcome.BudgetReplies.Count);
+        Assert.DoesNotContain(CaptureService.CutOff, outcome.BudgetReplies!);
+        Assert.DoesNotContain(CaptureService.StepFailed, outcome.BudgetReplies!);
+        Assert.Equal(2, outcome.BudgetReplies!.Count);
         Assert.Equal(0, Count("capture_progress"));
+    }
+
+    [Fact]
+    public async Task A_step_noted_as_begun_by_an_older_copy_is_skipped_as_cut_off()
+    {
+        var sorter = new Sorter(new CaptureResult([], Answer: "Okay", BudgetOps: [Wait, Income]));
+        var outcomes = new List<CaptureOutcome>();
+        var id = Service(sorter, outcomes).Capture("made up note with money in it")!.Value;
+        _database.SetCaptureProgress(id, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Kind = "sorted",
+            Next = 0,
+            Started = true,
+            Stored = Array.Empty<object>(),
+            Applied = Array.Empty<object>(),
+            Answer = "Okay",
+            BudgetOps = new[] { Wait },
+            Ops = Array.Empty<object>(),
+        }));
+
+        await Service(sorter, outcomes).ProcessPendingAsync();
+
+        Assert.Equal(0, sorter.Calls);
+        Assert.Equal(0, Count("wait_list"));
+        Assert.Equal([CaptureService.CutOff], Assert.Single(outcomes).BudgetReplies);
+        Assert.Empty(_database.GetPendingCaptures());
     }
 
     [Fact]
@@ -104,10 +131,11 @@ public sealed class CaptureStepsTests : IDisposable
         var outcomes = new List<CaptureOutcome>();
         Service(sorter, outcomes).Capture("made up lamp and a snack budget");
 
-        // The first step is noted as done, then Waypoint stops before the cap is begun.
-        FailWhen("BEFORE UPDATE ON capture_progress WHEN NEW.progress LIKE '%\"Next\":1,\"Started\":true%'");
+        // The first step is noted as done, then Waypoint stops as the cap is noted, so the cap goes with the note.
+        FailWhen("BEFORE UPDATE ON capture_progress WHEN NEW.progress LIKE '%\"Next\":2,%'");
         await Service(sorter, outcomes).ProcessPendingAsync();
         Assert.DoesNotContain(_database.GetCategories(), category => category.Name == "Made up snacks");
+        Assert.Equal(1, Count("wait_list"));
 
         StopFailing();
         await Service(sorter, outcomes).ProcessPendingAsync();
