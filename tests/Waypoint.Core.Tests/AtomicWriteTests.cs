@@ -62,6 +62,61 @@ public sealed class AtomicWriteTests : IDisposable
         Assert.Equal(0, Scalar($"SELECT done FROM items WHERE id = {item.Id}"));
     }
 
+    [Fact]
+    public void A_list_check_whose_history_fails_stays_unchecked()
+    {
+        _database.AddToList("Made up packing", ["Spare socks"], 0, DateTime.Now);
+        var entry = _database.GetListEntries("Made up packing").Single();
+        FailWhen("BEFORE INSERT ON item_history");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.SetEntryDone(entry, true, DateTime.Now));
+
+        Assert.False(_database.GetListEntries("Made up packing").Single().Done);
+    }
+
+    [Fact]
+    public void A_shopping_entry_whose_item_fails_leaves_no_capture()
+    {
+        FailWhen("BEFORE INSERT ON items WHEN NEW.kind = 'Shopping'");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.AddListEntry("Shopping", "Made up oats", DateTime.Now));
+
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_note_sent_once_whose_mark_fails_isnt_made()
+    {
+        FailWhen("BEFORE UPDATE OF client_id ON items WHEN NEW.client_id IS NOT NULL");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.CreateNoteOnce("made-up-client", "Made up title", "Made up body", DateTime.Now, null));
+
+        Assert.Equal(0, Count("items"));
+        Assert.Equal(0, Count("captures"));
+    }
+
+    [Fact]
+    public void A_transcript_sent_once_whose_mark_fails_isnt_kept()
+    {
+        var note = _database.CreateNote("Made up lecture", "", DateTime.Now);
+        FailWhen("BEFORE UPDATE OF client_id ON note_sources WHEN NEW.client_id IS NOT NULL");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.AddTranscriptSource(note, "Made up recording", "Made up words", "[]", DateTime.Now, null, "made-up-client"));
+
+        Assert.Equal(0, Count("note_sources"));
+    }
+
+    [Fact]
+    public void A_wait_whose_record_fails_leaves_no_task_behind()
+    {
+        FailWhen("BEFORE INSERT ON waiting_on");
+
+        Assert.ThrowsAny<SqliteException>(() => _database.MarkWaiting("A Made Up Office", "Hear back about the form", null, null, null, null, DateTime.Now));
+
+        Assert.Equal(0, Count("items"));
+        Assert.Equal(0, Count("captures"));
+    }
+
     private StoredItem AddTask(string title)
     {
         _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(ItemKind.Task, title, null, null)]);

@@ -328,15 +328,21 @@ public sealed partial class WaypointDatabase
         }
 
         var current = GetListEntries(name);
+
+        // One write, so the lines are on the list whole or not at all.
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         foreach (var finished in current.Where(entry => entry.Done && clean.Any(text => Same(text, entry.Text))))
         {
-            SetEntryDone(finished, false, now);
+            SetEntryDone(connection, finished, false, now);
         }
 
         var added = clean.Where(text => !current.Any(entry => Same(entry.Text, text))).ToList();
         if (added.Count > 0)
         {
-            AddToList(name, added, IsShopping(name) ? AddHandTyped(string.Join(", ", added), now) : 0, now);
+            AddToList(connection, name, added, null, now);
         }
+
+        transaction.Commit();
     }
 }

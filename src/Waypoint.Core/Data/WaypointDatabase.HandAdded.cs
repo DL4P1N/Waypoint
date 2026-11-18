@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Waypoint.Core.Capture;
 
 namespace Waypoint.Core.Data;
@@ -28,6 +29,16 @@ public sealed partial class WaypointDatabase
     /// note, so it gets the same reminders and history, and nothing goes to the sorter.
     /// </summary>
     public HandAddResult AddByHand(HandAddedItem input, DateTime now)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        var added = AddByHand(connection, input, now);
+        transaction.Commit();
+        return added;
+    }
+
+    /// <summary>The same, inside the caller's write. The capture, the item, and its filter land together or not at all.</summary>
+    private static HandAddResult AddByHand(SqliteConnection connection, HandAddedItem input, DateTime now)
     {
         var title = input.Title.Trim();
         if (title.Length == 0)
@@ -71,10 +82,9 @@ public sealed partial class WaypointDatabase
         var course = string.IsNullOrWhiteSpace(input.Course) ? null : input.Course.Trim();
         var sorted = new SortedItem(input.Kind, title, input.Date, null, input.Time, reminders, EndTime: end, Course: course);
 
-        var captureId = AddHandTyped(title, now);
-        CompleteCapture(captureId, [sorted]);
+        var captureId = InsertHandTyped(connection, title, now);
+        CompleteCapture(connection, captureId, [sorted], null);
 
-        using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id FROM items WHERE capture_id = $captureId ORDER BY id LIMIT 1";
         command.Parameters.AddWithValue("$captureId", captureId);
@@ -83,7 +93,7 @@ public sealed partial class WaypointDatabase
 
         if (course is null && input.FilterId is { } filterId)
         {
-            AssignToFilter(item, filterId);
+            AssignToFilter(connection, item, filterId);
         }
 
         return new HandAddResult(item);

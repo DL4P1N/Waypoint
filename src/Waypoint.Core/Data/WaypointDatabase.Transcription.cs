@@ -110,10 +110,22 @@ public sealed partial class WaypointDatabase
                 return kept;
             }
 
-            var id = AddTranscriptSourceNow(noteId, name, text, timestampsJson, now, filePath);
+            // The source, its timestamps, and the id it was sent under are one write, so a failure between can't
+            // leave one without its timestamps, or one the PC sends again and gets twice.
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            var id = AddNoteSource(connection, noteId, NoteSourceKind.Transcript, name, text, now, filePath);
+            if (id != 0 && timestampsJson is not null)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE note_sources SET timestamps = $json WHERE id = $id";
+                command.Parameters.AddWithValue("$json", timestampsJson);
+                command.Parameters.AddWithValue("$id", id);
+                command.ExecuteNonQuery();
+            }
+
             if (id != 0 && clientId is not null)
             {
-                using var connection = Open();
                 using var command = connection.CreateCommand();
                 command.CommandText = "UPDATE note_sources SET client_id = $client WHERE id = $id";
                 command.Parameters.AddWithValue("$client", clientId);
@@ -121,6 +133,7 @@ public sealed partial class WaypointDatabase
                 command.ExecuteNonQuery();
             }
 
+            transaction.Commit();
             return id;
         }
     }
@@ -135,21 +148,6 @@ public sealed partial class WaypointDatabase
         return command.ExecuteScalar() is long id ? id : null;
     }
 
-    private long AddTranscriptSourceNow(long noteId, string name, string text, string? timestampsJson, DateTime now, string? filePath)
-    {
-        var id = AddNoteSource(noteId, NoteSourceKind.Transcript, name, text, now, filePath);
-        if (id != 0 && timestampsJson is not null)
-        {
-            using var connection = Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "UPDATE note_sources SET timestamps = $json WHERE id = $id";
-            command.Parameters.AddWithValue("$json", timestampsJson);
-            command.Parameters.AddWithValue("$id", id);
-            command.ExecuteNonQuery();
-        }
-
-        return id;
-    }
 
     public string? GetSourceTimestamps(long sourceId)
     {

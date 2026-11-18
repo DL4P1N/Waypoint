@@ -81,17 +81,34 @@ public sealed partial class WaypointDatabase
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var reply = AddToList(connection, name, entries, captureId, now);
+        transaction.Commit();
+        return reply;
+    }
+
+    /// <summary>
+    /// The same, in the caller's write. A shopping entry is an item, and an item needs a capture, so with no
+    /// capture given one is made here for what's added, and only when something is.
+    /// </summary>
+    private static string AddToList(SqliteConnection connection, string name, IReadOnlyList<string> entries, long? captureId, DateTime now)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "Which list?";
+        }
+
         var clean = CleanName(name);
         var shopping = IsShopping(clean);
         var existing = (shopping ? ReadShopping(connection) : ReadEntries(connection, clean)).Select(entry => entry.Text).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var added = entries.Select(entry => entry.Trim()).Where(entry => entry.Length > 0 && existing.Add(entry)).ToList();
 
         var listId = shopping ? 0 : EnsureList(connection, clean, now);
+        var shoppingCapture = shopping && added.Count > 0 ? captureId ?? InsertHandTyped(connection, string.Join(", ", added), now) : 0;
         foreach (var entry in added)
         {
             if (shopping)
             {
-                InsertItem(connection, captureId, new SortedItem(ItemKind.Shopping, entry, null, null), null, null);
+                InsertItem(connection, shoppingCapture, new SortedItem(ItemKind.Shopping, entry, null, null), null, null);
             }
             else
             {
@@ -99,7 +116,6 @@ public sealed partial class WaypointDatabase
             }
         }
 
-        transaction.Commit();
         var label = shopping ? ShoppingList : clean;
         return added.Count > 0 ? $"Added {string.Join(", ", added)} to {label}" : $"{label} is ready";
     }
@@ -131,22 +147,28 @@ public sealed partial class WaypointDatabase
     public string SetEntryDone(string? name, string text, bool done, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var candidates = FindEntries(connection, name, text).Where(entry => entry.Done != done).ToList();
         if (Pick(candidates, text) is not { } entry)
         {
             return NoSingleMatch(candidates, text);
         }
 
-        return SetEntryDone(connection, entry, done, now);
+        var reply = SetEntryDone(connection, entry, done, now);
+        transaction.Commit();
+        return reply;
     }
 
     /// <summary>Checks or unchecks the exact entry that was clicked, so there's nothing to ask about.</summary>
     public void SetEntryDone(ListEntry entry, bool done, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         SetEntryDone(connection, entry, done, now);
+        transaction.Commit();
     }
 
+    /// <summary>The check and its History entry, in the caller's write, so neither is ever kept without the other.</summary>
     private static string SetEntryDone(SqliteConnection connection, ListEntry entry, bool done, DateTime now)
     {
         if (entry.List == ShoppingList)
@@ -224,6 +246,7 @@ public sealed partial class WaypointDatabase
     public string RemoveEntry(string? name, string text, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         var candidates = FindEntries(connection, name, text);
         if (Pick(candidates, text) is not { } entry)
         {
@@ -231,6 +254,7 @@ public sealed partial class WaypointDatabase
         }
 
         RemoveEntry(connection, entry, now);
+        transaction.Commit();
         return $"Took {entry.Text} off {entry.List}";
     }
 
@@ -238,22 +262,28 @@ public sealed partial class WaypointDatabase
     public void DeleteEntry(ListEntry entry, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         RemoveEntry(connection, entry, now);
+        transaction.Commit();
     }
 
     public void RestoreEntry(ListEntry entry, DateTime now)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         if (entry.List == ShoppingList)
         {
             RestoreItem(connection, entry.Id, now);
-            return;
+        }
+        else
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE list_entries SET removed_at = NULL WHERE id = $id";
+            command.Parameters.AddWithValue("$id", entry.Id);
+            command.ExecuteNonQuery();
         }
 
-        using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE list_entries SET removed_at = NULL WHERE id = $id";
-        command.Parameters.AddWithValue("$id", entry.Id);
-        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>Adds one thing from the Lists page. Anything already checked off goes back on, and nothing goes to the sorter.</summary>
@@ -271,8 +301,11 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        // A shopping entry is an item, and an item has to belong to a capture.
-        AddToList(name, [clean], IsShopping(name) ? AddHandTyped(clean, now) : 0, now);
+        // A shopping entry is an item, and an item has to belong to a capture, which is made in the same write.
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        AddToList(connection, name, [clean], null, now);
+        transaction.Commit();
     }
 
     public void EditEntry(ListEntry entry, string text)
@@ -343,7 +376,9 @@ public sealed partial class WaypointDatabase
             return new ListEdit(name, "Shopping keeps its name, and nothing else can use it.");
         }
 
+        // The list and the Discord posts that show it are renamed together.
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var taken = connection.CreateCommand();
         taken.CommandText = "SELECT COUNT(*) FROM lists WHERE name = $name COLLATE NOCASE AND id <> (SELECT id FROM lists WHERE name = $old COLLATE NOCASE)";
         taken.Parameters.AddWithValue("$name", clean);
@@ -359,6 +394,7 @@ public sealed partial class WaypointDatabase
         command.Parameters.AddWithValue("$old", CleanName(name));
         command.ExecuteNonQuery();
         RenameListPosts(connection, CleanName(name), clean);
+        transaction.Commit();
         return new ListEdit(clean);
     }
 
@@ -401,6 +437,12 @@ public sealed partial class WaypointDatabase
     private long AddHandTyped(string text, DateTime now)
     {
         using var connection = Open();
+        return InsertHandTyped(connection, text, now);
+    }
+
+    /// <summary>The same capture, inside the caller's write, so it's never left behind without what it was made for.</summary>
+    private static long InsertHandTyped(SqliteConnection connection, string text, DateTime now)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO captures (text, created_at, sorted_at) VALUES ($text, $at, $at) RETURNING id";
         command.Parameters.AddWithValue("$text", text);
