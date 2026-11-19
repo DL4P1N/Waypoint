@@ -212,6 +212,11 @@ public sealed class ThemeTests : IDisposable
         {
             Assert.True(ThemePalette.Contrast(color, behind) >= QuietContrast, $"{palette.Name} {color} over {behind}");
         }
+
+        foreach (var color in SmallQuietText(palette))
+        {
+            Assert.True(ThemePalette.Contrast(color, behind) >= TextContrast, $"{palette.Name} {color} over {behind}");
+        }
     }
 
     [Theory]
@@ -219,7 +224,7 @@ public sealed class ThemeTests : IDisposable
     public void The_tint_keeps_every_color_readable_over_the_acrylic_of_a_black_page(ThemePalette palette)
     {
         var behind = Over(palette.WindowTint, AcrylicOverBlack);
-        foreach (var color in BodyText(palette))
+        foreach (var color in BodyText(palette).Concat(SmallQuietText(palette)))
         {
             Assert.True(ThemePalette.Contrast(color, behind) >= TextContrast, $"{palette.Name} {color} over {behind}");
         }
@@ -257,14 +262,16 @@ public sealed class ThemeTests : IDisposable
     /// <summary>Plain text, links, and colored marks, which need 4.5:1.</summary>
     private static string[] BodyText(ThemePalette palette) => [PrimaryText, palette.Accent, palette.Urgent, palette.Soon, palette.Money];
 
-    /// <summary>Secondary and finished text, which need 3:1.</summary>
-    private static string[] QuietText(ThemePalette palette) => [palette.SecondaryText, palette.QuietMark, ThemePalette.FinishedText, ThemePalette.FinishedDetail];
+    /// <summary>Small secondary and finished text, which need 4.5:1 too.</summary>
+    private static string[] SmallQuietText(ThemePalette palette) => [palette.SecondaryText, ThemePalette.FinishedText, ThemePalette.FinishedDetail];
+
+    /// <summary>The quiet gray's marks, which need 3:1.</summary>
+    private static string[] QuietText(ThemePalette palette) => [palette.QuietMark];
 
     /// <summary>
-    /// Links, colored marks, and secondary text. Over a white page they need 3:1, the bar for large text and marks.
-    /// Finished rows and the quiet gray are left out there: they're meant to fade, and drop to about 2.2:1.
+    /// Links and colored marks. Over a white page they need 3:1, the bar for large text and marks.
     /// </summary>
-    private static string[] ColoredText(ThemePalette palette) => [palette.Accent, palette.Urgent, palette.Soon, palette.Money, palette.SecondaryText];
+    private static string[] ColoredText(ThemePalette palette) => [palette.Accent, palette.Urgent, palette.Soon, palette.Money];
 
     // What the window shows behind its text before the tint, measured from screenshots on Windows 11 26H2. The acrylic
     // blurs what's behind so heavily that a page's text and pictures average out, then lays a middle gray over it

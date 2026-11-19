@@ -9,15 +9,15 @@
         <SolidColorBrush x:Key="Surface" Color="#14FFFFFF" />
         <SolidColorBrush x:Key="SurfaceHover" Color="#1CFFFFFF" />
         <SolidColorBrush x:Key="PrimaryText" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="SecondaryText" Color="#A3A3A3" />
+        <SolidColorBrush x:Key="SecondaryText" Color="#D4D4D4" />
         <SolidColorBrush x:Key="Rule" Color="#2AFFFFFF" />
         <SolidColorBrush x:Key="Accent" Color="#D0D0D0" />
         <SolidColorBrush x:Key="Urgent" Color="#FF7A70" />
         <SolidColorBrush x:Key="Soon" Color="#FFC857" />
         <SolidColorBrush x:Key="MoneyMark" Color="#6FD08C" />
         <SolidColorBrush x:Key="QuietMark" Color="#8A8A8A" />
-        <SolidColorBrush x:Key="FinishedText" Color="#8A8A8A" />
-        <SolidColorBrush x:Key="FinishedDetail" Color="#8A8A8A" />
+        <SolidColorBrush x:Key="FinishedText" Color="#C8C8C8" />
+        <SolidColorBrush x:Key="FinishedDetail" Color="#C8C8C8" />
         <!-- A soft dark edge around gray text, like desktop icon labels. It can't be seen over dark content, and keeps
              headings, labels and hints readable when something bright is behind the blur. -->
         <DropShadowEffect x:Key="TextHalo" ShadowDepth="0" BlurRadius="2" Color="#000000" Opacity="0.9" RenderingBias="Performance" />
