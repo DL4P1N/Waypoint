@@ -252,10 +252,8 @@ public sealed partial class WaypointWorker
             _logError(exception);
             try
             {
-                await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't make notes from {DiscordText.Escape(attachment.FileName)}. Try sending it again.", CardTone.Attention));
-
-                // Told to send it again, so it isn't tried again on its own.
-                FinishDiscordFile(message, attachment);
+                // Told to send it again, so it isn't tried again on its own. Until that gets through it's tried again.
+                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't make notes from {DiscordText.Escape(attachment.FileName)}. Try sending it again.", CardTone.Attention)), () => FinishDiscordFile(message, attachment));
             }
             catch (Exception replyFailure) when (replyFailure is not OutOfMemoryException)
             {
@@ -268,20 +266,18 @@ public sealed partial class WaypointWorker
         }
     }
 
-    /// <summary><paramref name="dealtWith"/> is called once the note is started, or the owner is told why it wasn't.</summary>
+    /// <summary><paramref name="dealtWith"/> is called once the note is started, or the owner has been told why it wasn't.</summary>
     private async Task MakeNotesFromFileAsync(DiscordBridge discord, DiscordMessage message, DiscordAttachment attachment, Action dealtWith)
     {
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
-            await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Recording not read", $"Recordings can't be sent from Discord yet, so {attachment.FileName} wasn't read. Add it on the Notes page on the PC."));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Recording not read", $"Recordings can't be sent from Discord yet, so {attachment.FileName} wasn't read. Add it on the Notes page on the PC.")), dealtWith);
             return;
         }
 
         if (NoteFiles is not { CanMakeNotes: true } notes)
         {
-            await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", "Notes from files aren't available right now.", CardTone.Attention));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", "Notes from files aren't available right now.", CardTone.Attention)), dealtWith);
             return;
         }
 
@@ -294,8 +290,7 @@ public sealed partial class WaypointWorker
             Directory.CreateDirectory(folder);
             if (await discord.DownloadAsync(attachment, path, FileReader.MaxBytes) is { } problem)
             {
-                await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention));
-                dealtWith();
+                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention)), dealtWith);
                 return;
             }
 
@@ -307,8 +302,7 @@ public sealed partial class WaypointWorker
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            await discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention)), dealtWith);
             return;
         }
         finally

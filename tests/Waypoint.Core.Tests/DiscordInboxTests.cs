@@ -64,6 +64,12 @@ public sealed class DiscordInboxTests : IDisposable
         /// <summary>Messages Discord won't let the bot read back, the way a lost permission does.</summary>
         public HashSet<string> Forbidden { get; } = [];
 
+        /// <summary>Discord is down for posting, so nothing sent gets through.</summary>
+        public bool PostsFail { get; set; }
+
+        /// <summary>The made-up file can't be fetched.</summary>
+        public bool FileFails { get; set; }
+
         public void Add(string id, string text, bool withFile = false, string channel = "capture") => Messages[id] = $$"""
             {"id":"{{id}}","channel_id":"{{channel}}","content":"{{text}}","author":{"id":"owner"},"timestamp":"2026-11-09T17:00:00+00:00"{{(withFile ? $$""","attachments":[{"id":"f{{id}}","filename":"made-up-list.txt","size":40,"url":"{{FileUrl}}","content_type":"text/plain"}]""" : "")}}}
             """;
@@ -83,7 +89,12 @@ public sealed class DiscordInboxTests : IDisposable
 
             if (url == FileUrl)
             {
-                return Reply(HttpStatusCode.OK, "made up thing one\nmade up thing two");
+                return FileFails ? Reply(HttpStatusCode.NotFound, "") : Reply(HttpStatusCode.OK, "made up thing one\nmade up thing two");
+            }
+
+            if (request.Method == HttpMethod.Post && PostsFail)
+            {
+                return Reply(HttpStatusCode.ServiceUnavailable, "");
             }
 
             if (request.Method == HttpMethod.Get && Listed(url) is { } listed)
@@ -322,6 +333,83 @@ public sealed class DiscordInboxTests : IDisposable
         Assert.Equal(DiscordBridge.GaveUp, JsonDocument.Parse(told).RootElement.GetProperty("embeds")[0].GetProperty("description").GetString());
         Assert.Contains("\"message_id\":\"23\"", told);
         Assert.True(_database.IsDiscordMessageFinished("23"));
+    }
+
+    [Fact]
+    public async Task A_message_given_up_on_during_an_outage_is_told_once_discord_is_back_and_is_never_counted_as_done()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "50");
+        _discord.Add("24", "made up errand");
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Assert.True(_database.ClaimDiscordMessage("24", "capture", _now, DiscordBridge.UnfinishedAfter));
+            _now = _now.AddMinutes(4);
+        }
+
+        var bridge = Bridge();
+        bridge.Captured = _ => throw new InvalidOperationException("given up on, so never handed over again");
+        _discord.PostsFail = true;
+        for (var poll = 0; poll < 3; poll++)
+        {
+            await bridge.PollAsync();
+            _now = _now.AddMinutes(10);
+        }
+
+        // Nothing got through, so it's still waiting to be told and isn't done.
+        Assert.Equal(3, Posted().Count);
+        Assert.False(_database.IsDiscordMessageFinished("24"));
+        Assert.True(_database.IsDiscordMessageGivenUp("24"));
+        Assert.False(_database.ClaimDiscordMessage("24", "capture", _now, DiscordBridge.UnfinishedAfter));
+
+        _discord.PostsFail = false;
+        await bridge.PollAsync();
+        _now = _now.AddMinutes(10);
+        await bridge.PollAsync();
+
+        Assert.Equal(4, Posted().Count);
+        Assert.Equal(DiscordBridge.GaveUp, JsonDocument.Parse(Posted()[^1]).RootElement.GetProperty("embeds")[0].GetProperty("description").GetString());
+        Assert.True(_database.IsDiscordMessageFinished("24"));
+        Assert.True(_database.IsDiscordMessageGivenUp("24"));
+    }
+
+    [Fact]
+    public void A_message_given_up_on_whose_work_is_saved_after_all_counts_as_done()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Assert.True(_database.ClaimDiscordMessage("25", "capture", _now, DiscordBridge.UnfinishedAfter));
+            _now = _now.AddMinutes(4);
+        }
+
+        Assert.Equal([("25", "capture")], _database.GetGivenUpDiscordMessages(_now, DiscordBridge.UnfinishedAfter));
+        _database.FinishDiscordMessage("25", _now);
+
+        Assert.True(_database.IsDiscordMessageFinished("25"));
+        Assert.False(_database.IsDiscordMessageGivenUp("25"));
+        Assert.Empty(_database.GetGivenUpDiscordMessages(_now, DiscordBridge.UnfinishedAfter));
+    }
+
+    [Fact]
+    public async Task A_file_whose_problem_could_not_be_told_is_tried_again_until_the_owner_hears()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "5");
+        _discord.Add("7", "made up words", withFile: true);
+        _discord.FileFails = true;
+        _discord.PostsFail = true;
+
+        var worker = Start(new Host());
+        await PollUntil(worker, () => Posted().Any(posted => posted.Contains("File not read")));
+        Assert.False(_database.IsDiscordPartDone("7", "f7"));
+
+        // Once Discord is back the message is handed over again and the owner is told this time.
+        _discord.PostsFail = false;
+        _now = _now.AddMinutes(5);
+        await PollUntil(worker, () => _database.IsDiscordMessageFinished("7"));
+
+        Assert.True(_database.IsDiscordMessageFinished("7"));
+        Assert.False(_database.IsDiscordMessageGivenUp("7"));
+        Assert.True(Posted().Count(posted => posted.Contains("File not read")) >= 2);
+        worker.StopDiscord();
     }
 
     [Fact]

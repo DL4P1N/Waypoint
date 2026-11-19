@@ -119,7 +119,7 @@ public sealed partial class WaypointWorker
     /// <summary>
     /// A file sent from the phone goes through the same reading as a dropped one, so it can add things but never
     /// change or finish what's already here. The downloaded copy is deleted once it's read. Once its words are
-    /// saved, or the owner is told why it wasn't read, <paramref name="dealtWith"/> is called. Without Discord,
+    /// saved, or the owner has been told why it wasn't read, <paramref name="dealtWith"/> is called. Without Discord,
     /// such as while Waypoint is closing, it's left for the message to be handed over again.
     /// </summary>
     private async Task ReadDiscordFileAsync(DiscordMessage message, DiscordAttachment attachment, Action dealtWith)
@@ -138,8 +138,7 @@ public sealed partial class WaypointWorker
 
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
-            await discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName)), dealtWith);
             return;
         }
 
@@ -159,8 +158,7 @@ public sealed partial class WaypointWorker
             Directory.CreateDirectory(folder);
             if (await discord.DownloadAsync(attachment, path, FileReader.MaxBytes) is { } problem)
             {
-                await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention));
-                dealtWith();
+                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention)), dealtWith);
                 return;
             }
 
@@ -176,8 +174,7 @@ public sealed partial class WaypointWorker
             file = file with { Name = Redaction.ApplyToName(attachment.FileName) };
             if (file.Problem is { } unreadable)
             {
-                await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", unreadable, CardTone.Attention));
-                dealtWith();
+                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", unreadable, CardTone.Attention)), dealtWith);
                 return;
             }
 
@@ -191,8 +188,7 @@ public sealed partial class WaypointWorker
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            await discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention)), dealtWith);
         }
         finally
         {
@@ -204,6 +200,18 @@ public sealed partial class WaypointWorker
             {
                 // The system clears its temp folder in the end.
             }
+        }
+    }
+
+    /// <summary>
+    /// A file that wasn't read is only dealt with once the owner has actually been told why. Until then the message
+    /// is handed over again later, and in the end given up on, which is said until it gets through.
+    /// </summary>
+    private static async Task TellThenDealtWith(Task<string?> told, Action dealtWith)
+    {
+        if (await told is not null)
+        {
+            dealtWith();
         }
     }
 

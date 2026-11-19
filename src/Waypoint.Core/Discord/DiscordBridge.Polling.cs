@@ -176,7 +176,8 @@ public sealed partial class DiscordBridge
     /// <summary>
     /// Reads again each message whose work was cut off and hands it over the same way as when it came in. One
     /// deleted since, or that no longer asks for anything, such as after an edit, has nothing left to do. One that
-    /// can't be read right now counts as a try and is tried on a later poll, so it's let go in the end.
+    /// can't be read right now counts as a try and is tried on a later poll, so it's given up on in the end, and
+    /// the owner is told.
     /// </summary>
     private async Task RetryUnfinishedAsync(Action<DiscordMessage>? onCapture, CancellationToken cancellationToken)
     {
@@ -219,11 +220,15 @@ public sealed partial class DiscordBridge
             }
         }
 
-        // Tried as many times as it may be, so the owner is told under it, once, rather than it going quiet.
+        // Tried as many times as it may be, so the owner is told under it, once, rather than it going quiet. It
+        // stays given up on and untold until the notice goes through, so one lost to an outage is sent again.
         foreach (var (id, channel) in database.GetGivenUpDiscordMessages(Clock(), UnfinishedAfter))
         {
-            await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id);
-            database.FinishDiscordMessage(id, Clock());
+            // Its own nonce, so a try whose answer was lost and is sent again soon after isn't posted twice.
+            if ((await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id, nonce: "g" + id)).Sent)
+            {
+                database.FinishGivenUpDiscordMessage(id, Clock());
+            }
         }
     }
 

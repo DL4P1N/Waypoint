@@ -8,7 +8,8 @@ namespace Waypoint.Core.Data;
 /// The owner's Discord messages as they're worked through. A message is claimed when it's handed over and finished
 /// only once what it asked for is saved, so one cut off by a crash or a close is handed over again later instead of
 /// being skipped. Each file on a message is marked as it's dealt with, so a message handed over again only does
-/// what's left.
+/// what's left. One handed over as many times as it may be is given up on, and stays given up, not finished,
+/// until the owner has actually been told, so a notice lost to an outage is sent again.
 /// </summary>
 public sealed partial class WaypointDatabase
 {
@@ -32,6 +33,9 @@ public sealed partial class WaypointDatabase
         );
         """);
 
+    /// <summary>When a message was given up on. Kept once it's finished, so one given up on never reads as done.</summary>
+    private void AddDiscordGivenUp() => AddColumnIfMissing("discord_inbox", "given_up_at", "TEXT");
+
     /// <summary>
     /// True when the message should be handed over now: the first time it's seen, or again once an earlier claim
     /// has gone <paramref name="unfinishedAfter"/> without being finished. False once it's finished.
@@ -47,10 +51,10 @@ public sealed partial class WaypointDatabase
 
         using (var find = connection.CreateCommand())
         {
-            find.CommandText = "SELECT claimed_at, done_at FROM discord_inbox WHERE message_id = $id";
+            find.CommandText = "SELECT claimed_at, done_at, given_up_at FROM discord_inbox WHERE message_id = $id";
             find.Parameters.AddWithValue("$id", messageId);
             using var reader = find.ExecuteReader();
-            if (reader.Read() && (!reader.IsDBNull(1) || DateTime.Parse(reader.GetString(0), CultureInfo.InvariantCulture) > now - unfinishedAfter))
+            if (reader.Read() && (!reader.IsDBNull(1) || !reader.IsDBNull(2) || DateTime.Parse(reader.GetString(0), CultureInfo.InvariantCulture) > now - unfinishedAfter))
             {
                 return false;
             }
@@ -80,7 +84,7 @@ public sealed partial class WaypointDatabase
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT message_id, channel_id FROM discord_inbox
-            WHERE done_at IS NULL AND channel_id <> '' AND claimed_at <= $before AND tries < $tries
+            WHERE done_at IS NULL AND given_up_at IS NULL AND channel_id <> '' AND claimed_at <= $before AND tries < $tries
             ORDER BY claimed_at
             """;
         command.Parameters.AddWithValue("$before", FormatReminder(now - unfinishedAfter));
@@ -117,26 +121,67 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Messages handed over as many times as they may be without ever finishing, so the owner can be told.</summary>
+    /// <summary>
+    /// Messages handed over as many times as they may be without ever finishing, which are marked given up on here,
+    /// and any given up on before whose owner hasn't been told yet, so the owner can be told.
+    /// </summary>
     public IReadOnlyList<(string MessageId, string ChannelId)> GetGivenUpDiscordMessages(DateTime now, TimeSpan unfinishedAfter)
     {
         using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT message_id, channel_id FROM discord_inbox
-            WHERE done_at IS NULL AND channel_id <> '' AND claimed_at <= $before AND tries >= $tries
-            ORDER BY claimed_at
-            """;
-        command.Parameters.AddWithValue("$before", FormatReminder(now - unfinishedAfter));
-        command.Parameters.AddWithValue("$tries", MaxDiscordTries);
-        var given = new List<(string, string)>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using var transaction = connection.BeginTransaction();
+        using (var give = connection.CreateCommand())
         {
-            given.Add((reader.GetString(0), reader.GetString(1)));
+            give.CommandText = """
+                UPDATE discord_inbox SET given_up_at = $now
+                WHERE done_at IS NULL AND given_up_at IS NULL AND channel_id <> '' AND claimed_at <= $before AND tries >= $tries
+                """;
+            give.Parameters.AddWithValue("$now", FormatReminder(now));
+            give.Parameters.AddWithValue("$before", FormatReminder(now - unfinishedAfter));
+            give.Parameters.AddWithValue("$tries", MaxDiscordTries);
+            give.ExecuteNonQuery();
         }
 
+        var given = new List<(string, string)>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT message_id, channel_id FROM discord_inbox
+                WHERE done_at IS NULL AND given_up_at IS NOT NULL AND channel_id <> ''
+                ORDER BY given_up_at
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                given.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        transaction.Commit();
         return given;
+    }
+
+    /// <summary>
+    /// Finishes a message given up on once the owner has been told, keeping that it was given up on rather than
+    /// done. One whose work was saved meanwhile is left as done.
+    /// </summary>
+    public void FinishGivenUpDiscordMessage(string messageId, DateTime now)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE discord_inbox SET done_at = $at WHERE message_id = $id AND done_at IS NULL AND given_up_at IS NOT NULL";
+        command.Parameters.AddWithValue("$id", messageId);
+        command.Parameters.AddWithValue("$at", FormatReminder(now));
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Whether a message was given up on, told or not, rather than its work being done.</summary>
+    public bool IsDiscordMessageGivenUp(string messageId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM discord_inbox WHERE message_id = $id AND given_up_at IS NOT NULL";
+        command.Parameters.AddWithValue("$id", messageId);
+        return command.ExecuteScalar() is not null;
     }
 
     public bool IsDiscordMessageFinished(string messageId)
@@ -145,7 +190,10 @@ public sealed partial class WaypointDatabase
         return IsFinished(connection, messageId);
     }
 
-    /// <summary>Marks a message as fully dealt with, so it's never handed over again.</summary>
+    /// <summary>
+    /// Marks a message as fully dealt with, so it's never handed over again. One given up on whose work is saved
+    /// after all counts as done.
+    /// </summary>
     public void FinishDiscordMessage(string messageId, DateTime now)
     {
         using var connection = Open();
@@ -165,7 +213,7 @@ public sealed partial class WaypointDatabase
         using var finish = connection.CreateCommand();
         finish.CommandText = """
             INSERT INTO discord_inbox (message_id, channel_id, claimed_at, done_at) VALUES ($id, '', $at, $at)
-            ON CONFLICT (message_id) DO UPDATE SET done_at = $at;
+            ON CONFLICT (message_id) DO UPDATE SET done_at = $at, given_up_at = NULL;
             DELETE FROM discord_inbox WHERE done_at IS NOT NULL AND done_at < $old;
             """;
         finish.Parameters.AddWithValue("$id", messageId);
