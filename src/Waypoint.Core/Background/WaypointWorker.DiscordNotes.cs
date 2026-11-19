@@ -295,7 +295,8 @@ public sealed partial class WaypointWorker
             }
 
             var file = await Task.Run(() => _readFile(path)) with { Name = Redaction.ApplyToName(attachment.FileName) };
-            started = notes.StartFromFile(file, null, false, _clock());
+            // Kept under the file's own ID, so a try whose answer was lost, such as from the server, isn't a second note.
+            started = notes.StartFromFile(file, null, false, _clock(), DiscordClientId(message.Id, attachment.Id));
 
             // The note is saved and writes on from here, so the file isn't made into a note again.
             dealtWith();

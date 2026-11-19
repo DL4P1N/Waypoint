@@ -62,9 +62,10 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
     /// <summary>
     /// Makes a note from a file and saves its text as the note's first source. The note goes in the folder the
     /// user picked, else the class the file names, else the class in session, else Unfiled. Writing the notes
-    /// is a separate step, <see cref="WriteAsync"/>.
+    /// is a separate step, <see cref="WriteAsync"/>. With <paramref name="onceKey"/>, the same file sent again gives
+    /// the note already made, and its text is only saved once.
     /// </summary>
-    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now, string? keptPath = null)
+    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now, string? keptPath = null, string? onceKey = null)
     {
         if (Unreadable(file) is { } problem)
         {
@@ -73,8 +74,12 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
 
         var (folder, course) = Place(file.Name, file.Text, pickedFolderId, folderPicked, now);
         var title = TitleFor(file.Name);
-        var id = database.CreateNote(title, "", now, folder);
-        database.AddNoteSource(id, NoteSourceKind.ForFile(file.Name), file.Name, file.Text!, now, keptPath);
+        var id = onceKey is null ? database.CreateNote(title, "", now, folder) : database.CreateNoteOnce(onceKey, title, "", now, folder);
+        if (onceKey is null || database.GetNoteSources(id).Count == 0)
+        {
+            database.AddNoteSource(id, NoteSourceKind.ForFile(file.Name), file.Name, file.Text!, now, keptPath);
+        }
+
         return new StartedNote(id, title, folder, course);
     }
 

@@ -197,6 +197,21 @@ public sealed class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public void A_file_sent_again_under_the_same_key_gives_the_note_already_made()
+    {
+        INotesData notes = Pc().Notes;
+        var file = new FileText("Made up lecture.txt", "Made up cells divide.");
+
+        var first = notes.StartFromFile(file, null, false, DateTime.Now, "discord:made-up-1:made-up-2");
+        var again = notes.StartFromFile(file, null, false, DateTime.Now, "discord:made-up-1:made-up-2");
+        var other = notes.StartFromFile(file, null, false, DateTime.Now);
+
+        Assert.Equal(first.NoteId, again.NoteId);
+        Assert.Single(notes.GetNoteSources(first.NoteId));
+        Assert.NotEqual(first.NoteId, other.NoteId);
+    }
+
+    [Fact]
     public void A_folder_picked_to_study_from_is_kept_on_the_server()
     {
         INotesData notes = Pc().Notes;

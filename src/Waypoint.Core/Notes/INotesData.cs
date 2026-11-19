@@ -131,7 +131,11 @@ public interface INotesData : INoteFileStore, IPreferences
 
     long? FolderFor(NotePlacement placement, DateTime now);
 
-    StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now);
+    /// <summary>
+    /// With <paramref name="onceKey"/>, the same file sent again, such as after the answer was lost, gives the note
+    /// already made rather than making another.
+    /// </summary>
+    StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now, string? onceKey = null);
 
     StartedNote AttachFile(long noteId, FileText file, DateTime now);
 
@@ -281,8 +285,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
 
     public long? FolderFor(NotePlacement placement, DateTime now) => maker is null ? placement.FolderId : maker.FolderFor(placement, now);
 
-    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now) =>
-        Maker.StartFromFile(file, pickedFolderId, folderPicked, now);
+    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now, string? onceKey = null) =>
+        Maker.StartFromFile(file, pickedFolderId, folderPicked, now, onceKey: onceKey);
 
     public StartedNote AttachFile(long noteId, FileText file, DateTime now) => Maker.AttachFile(noteId, file, now);
 
