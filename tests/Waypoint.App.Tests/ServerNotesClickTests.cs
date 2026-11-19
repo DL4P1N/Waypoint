@@ -36,6 +36,12 @@ public sealed class ServerNotesClickTests
 
         public ManualResetEventSlim ChangeArrived { get; } = new();
 
+        /// <summary>While unset, saves of a note that's there wait for it, after any hold on changes.</summary>
+        public ManualResetEventSlim ReleaseSaves { get; } = new(initialState: true);
+
+        /// <summary>Set once a save of a note that's there has arrived.</summary>
+        public ManualResetEventSlim SaveArrived { get; } = new();
+
         /// <summary>While unset, reads of the lists wait for it.</summary>
         public ManualResetEventSlim ReleaseListReads { get; } = new(initialState: true);
 
@@ -93,6 +99,12 @@ public sealed class ServerNotesClickTests
             {
                 ChangeArrived.Set();
                 await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+            }
+
+            if (request.Method == HttpMethod.Put && path.StartsWith("/api/notes/", StringComparison.Ordinal))
+            {
+                SaveArrived.Set();
+                await Task.Run(() => ReleaseSaves.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
             }
 
             lock (_gate)
@@ -277,6 +289,46 @@ public sealed class ServerNotesClickTests
         ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
         Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
         Assert.Equal(1, server.NotesMade);
+    });
+
+    [Fact]
+    public void A_class_note_opened_again_while_a_later_save_is_held_keeps_its_class_title() => Ui.Run(ui =>
+    {
+        var server = new NotesServer { ClassOn = true };
+        var (view, work, body, _) = OpenNotes(ui, server);
+        var title = UiTest.Named<TextBox>(view, "TitleBox");
+
+        // Made with no title typed, it's given the class title. More is typed while that's held, and its save goes
+        // after it and is held in turn.
+        server.ReleaseChanges.Reset();
+        server.ReleaseSaves.Reset();
+        UiTest.Call(view, "NewNote");
+        Type(body, "cell walls");
+        UiTest.Call(view, "SaveSoon");
+        Type(body, "cell walls, mitochondria");
+        UiTest.Call(view, "SaveSoon");
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => server.SaveArrived.IsSet && title.Text == "Biology 1 Apr", "the note to be made");
+        Assert.Equal(1, server.NotesMade);
+
+        // Opened again from a read of it while the later save is still held, as a page drawn again does.
+        var read = new NoteDetail(101, "Biology 1 Apr", "cell walls", null, new DateTime(2030, 4, 1, 9, 0, 0));
+        UiTest.Call(view, "Open", UiTest.Call(view, "WithPendingSave", read), false);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+        Assert.Equal("Biology 1 Apr", title.Text);
+
+        server.ReleaseSaves.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count >= 3, "the held save");
+        Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
+        Assert.Equal("Biology 1 Apr", title.Text);
+
+        // Typed on, the title it saves is still the class title.
+        Type(body, "cell walls, mitochondria, ribosomes");
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
+        Assert.Equal("Biology 1 Apr", server.Title(101));
+        Assert.Equal("Biology 1 Apr", title.Text);
     });
 
     [Fact]

@@ -784,7 +784,7 @@ public partial class NotesView : UserControl
         }
 
         var last = _saves.LastOrDefault(save => save.Id == note.Id || (_madeAgain.TryGetValue(save.Id, out var again) && again == note.Id));
-        return last is null ? note : note with { Title = last.Title, Body = last.Body };
+        return last is null ? note : note with { Title = last.SentTitle, Body = last.Body };
     }
 
     /// <summary>Picks the open note's row in the list, as clicking it would, when it was opened from elsewhere.</summary>
@@ -1206,7 +1206,14 @@ public partial class NotesView : UserControl
     /// A save to the server of a note that's already there. It's sent off the window's thread, so a slow server never
     /// holds up typing or a click. Saves go in the page's order, so a later one, or a delete, never overtakes it.
     /// </summary>
-    private sealed record BackgroundSave(long Id, string Title, string Body, Task<long> Saving);
+    private sealed record BackgroundSave(long Id, string Title, string Body, Task<long> Saving, NewNoteSave? Plan = null)
+    {
+        /// <summary>
+        /// The title it sends: typed in a new note with no title of its own, the class title the note was made with.
+        /// It's kept with the save, so it holds even once the note has been opened again.
+        /// </summary>
+        public string SentTitle => Plan?.Title is { } given && string.IsNullOrWhiteSpace(Title) ? given : Title;
+    }
 
     /// <summary>The saves on their way, oldest first.</summary>
     private readonly List<BackgroundSave> _saves = [];
@@ -1343,7 +1350,7 @@ public partial class NotesView : UserControl
             return made;
         }
 
-        var save = new BackgroundSave(id, title, body, Work.RunsNow ? Task.Run(Saving) : Work.Run(Saving, "Saving a note"));
+        var save = new BackgroundSave(id, title, body, Work.RunsNow ? Task.Run(Saving) : Work.Run(Saving, "Saving a note"), plan);
         _saves.Add(save);
         AfterSave(save);
     }
@@ -1399,7 +1406,7 @@ public partial class NotesView : UserControl
         if (_draft.Id == save.Id || _draft.Id == savedTo || made is not null)
         {
             // A new note sent with no title was given its class's title, which it shows unless a title has been typed since.
-            var title = plan?.Title is { } classTitle && string.IsNullOrWhiteSpace(save.Title) ? classTitle : save.Title;
+            var title = save.SentTitle;
             if (made is not null)
             {
                 _draftFolder = made.Folder;
