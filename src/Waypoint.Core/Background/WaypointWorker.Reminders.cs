@@ -103,7 +103,16 @@ public sealed partial class WaypointWorker
         var messageId = send.MessageId;
         if (messageId is null && !send.Fresh && channel is not null)
         {
-            messageId = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(key))).MessageId;
+            var search = await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(key));
+            if (search.Result == SentLookup.Unknown)
+            {
+                // Whether the earlier try went out can't be told, and Discord may no longer keep to its nonce, so
+                // nothing is sent now. The reminder is still due, so it's looked for again on a later round.
+                Release(reminder);
+                return;
+            }
+
+            messageId = search.MessageId;
         }
 
         var sent = messageId is not null;

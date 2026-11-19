@@ -63,6 +63,45 @@ public sealed partial class DiscordPhoneTests
     }
 
     [Fact]
+    public async Task A_reminder_card_whose_nonce_has_lapsed_is_not_posted_again_while_the_channel_cant_be_read()
+    {
+        var (task, key) = DueReminderFor("Made up parcel pickup");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+
+        // Discord no longer keeps to the nonce, and the channel can't be read, so whether the card is there isn't known.
+        _discord.ForgetNonces();
+        _discord.ListFails = true;
+        var second = Worker(toDo: null, lists: null);
+        bool Looked() => _discord.All.Count(request => request.Method == HttpMethod.Get && request.Url.Contains("/channels/alerts/messages?")) >= 3;
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return Looked();
+        });
+        Assert.Single(CardsAbout("Made up parcel pickup"));
+        Assert.Equal(0, Rows("sent_reminders"));
+        Assert.NotNull(_database.GetDiscordSend(key));
+
+        // Once the channel can be read, the card already there is found and kept.
+        _discord.ListFails = false;
+        _discord.ListMade = true;
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return Rows("sent_reminders") == 1;
+        });
+
+        var card = Assert.Single(CardsAbout("Made up parcel pickup"));
+        Assert.Equal(1, Rows("sent_reminders", $"message_id = '{card.Id}'"));
+        AssertOneAction(second, card.Id, task);
+    }
+
+    [Fact]
     public async Task A_reminder_card_tried_again_soon_after_carries_the_same_nonce_so_discord_makes_it_once()
     {
         var (task, key) = DueReminderFor("Made up form to sign");

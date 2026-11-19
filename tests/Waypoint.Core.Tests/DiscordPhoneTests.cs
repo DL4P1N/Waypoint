@@ -73,6 +73,9 @@ public sealed partial class DiscordPhoneTests : IDisposable
         /// <summary>When set, every request fails with this text, the way a dropped connection does.</summary>
         public string? FailWith { get; set; }
 
+        /// <summary>When set, reading a channel's messages fails, the way an outage does.</summary>
+        public bool ListFails { get; set; }
+
         public IEnumerable<(HttpMethod Method, string Url, string Body)> Of(HttpMethod method)
         {
             lock (Requests)
@@ -139,6 +142,16 @@ public sealed partial class DiscordPhoneTests : IDisposable
             if (request.Method == HttpMethod.Patch && EditStatus is { } status)
             {
                 return new HttpResponseMessage(status) { Content = new StringContent("""{"code":50035,"message":"Invalid Form Body"}""") };
+            }
+
+            if (request.Method == HttpMethod.Get && url.EndsWith("/users/@me", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"id":"bot"}""") };
+            }
+
+            if (request.Method == HttpMethod.Get && ListFails && ListedChannel(url) is not null)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("") };
             }
 
             if (request.Method == HttpMethod.Get)

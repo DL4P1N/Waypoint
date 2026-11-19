@@ -44,7 +44,14 @@ public sealed partial class WaypointWorker
         var key = HeldSendKey(notice.Id);
         try
         {
-            await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key);
+            var later = false;
+            await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key, tryLater: () => later = true);
+            if (later)
+            {
+                // Kept, and its note with it, so it's looked for again on a later round instead of sent twice.
+                return;
+            }
+
             _database.InOneWrite(() =>
             {
                 _database.DropHeldNotice(notice.Id);
