@@ -150,8 +150,35 @@ public partial class NotesView
         }
     }
 
-    /// <summary>The status line, the change box, the suggestions, and Sources for the open note.</summary>
-    private void ShowNoteExtras()
+    /// <summary>
+    /// The status line, the change box, the suggestions, and Sources for the open note. In server mode, outside a
+    /// drawing of the page, they're drawn at once from what was kept and again once read, if the note is still open.
+    /// </summary>
+    private void ShowNoteExtras() => ShowForOpenNote(DrawNoteExtras);
+
+    /// <summary>
+    /// Draws something of the open note's. Inside a drawing of the page, or on this PC, that's now. Otherwise in server
+    /// mode it's drawn from kept reads and again after a read, and that later drawing is dropped if another note opened.
+    /// </summary>
+    private void ShowForOpenNote(Action draw)
+    {
+        if (Work.RunsNow || Work.Drawing)
+        {
+            draw();
+            return;
+        }
+
+        var id = _draft.Id;
+        Work.Show(() =>
+        {
+            if (_draft.Id == id)
+            {
+                draw();
+            }
+        });
+    }
+
+    private void DrawNoteExtras()
     {
         var id = _draft.Id;
         var opened = id != _extrasFor;
@@ -178,7 +205,7 @@ public partial class NotesView
         AttachButton.Visibility = Visibility.Visible;
         AttachButton.IsEnabled = !writing;
 
-        ShowStatus();
+        DrawStatus();
         ChangePanel.Visibility = sources.Count > 0 && !writing && _notes.GetNoteGeneration(noteId)?.WasGenerated == true ? Visibility.Visible : Visibility.Collapsed;
 
         List<SuggestionRow> suggestions = writing ? [] : _notes.GetNoteSuggestions(noteId).Select(found => new SuggestionRow(found)).ToList();
@@ -203,8 +230,10 @@ public partial class NotesView
         ShowNoteActions(noteId);
     }
 
-    /// <summary>Cheap enough to run every second while notes are written, so the waiting time shows.</summary>
-    private void ShowStatus()
+    /// <summary>Cheap enough to run every second while notes are written, so the waiting time shows. Read like the extras in server mode.</summary>
+    private void ShowStatus() => ShowForOpenNote(DrawStatus);
+
+    private void DrawStatus()
     {
         if (_draft.Id is not { } noteId || _maker is null)
         {

@@ -46,6 +46,7 @@ internal sealed class PageWork
     private ReadRound? _queuedRound;
     private int _pending;
     private int _changes;
+    private int _drawing;
     private volatile bool _closed;
 
     public PageWork(ServerClient? server) => _server = server;
@@ -61,6 +62,9 @@ internal sealed class PageWork
 
     /// <summary>Whether a change or a read is still queued or on its way, so a refresh can leave the page as it is until it's done.</summary>
     public bool IsBusy => Volatile.Read(ref _pending) > 0;
+
+    /// <summary>Whether a drawing from kept answers is under way, on the window's thread, so what it draws reads from them too.</summary>
+    public bool Drawing => _drawing > 0;
 
     /// <summary>Whether a change is still queued or on its way.</summary>
     public bool ChangesWaiting => Volatile.Read(ref _changes) > 0;
@@ -245,7 +249,15 @@ internal sealed class PageWork
         var reads = new KeptReads();
         using (_server!.UseKeptReads(reads))
         {
-            show();
+            _drawing++;
+            try
+            {
+                show();
+            }
+            finally
+            {
+                _drawing--;
+            }
         }
 
         lock (_gate)
