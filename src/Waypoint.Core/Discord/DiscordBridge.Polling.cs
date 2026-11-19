@@ -235,5 +235,5 @@ public sealed partial class DiscordBridge
     }
 
     /// <summary>Said under a message whose work never finished however many times it was tried.</summary>
-    public const string GaveUp = "Couldn't finish this, so send it again.";
+    public const string GaveUp = "Couldn't finish this. Anything missing can be added on the PC, or sent again.";
 }

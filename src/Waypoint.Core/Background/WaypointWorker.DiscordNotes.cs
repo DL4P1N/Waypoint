@@ -253,7 +253,7 @@ public sealed partial class WaypointWorker
             try
             {
                 // Told to send it again, so it isn't tried again on its own. Until that gets through it's tried again.
-                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't make notes from {DiscordText.Escape(attachment.FileName)}. Try sending it again.", CardTone.Attention)), () => FinishDiscordFile(message, attachment));
+                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't make notes from {DiscordText.Escape(attachment.FileName)}. Try sending it again.", CardTone.Attention), nonce: FileNonce(attachment)), () => FinishDiscordFile(message, attachment));
             }
             catch (Exception replyFailure) when (replyFailure is not OutOfMemoryException)
             {
@@ -271,13 +271,13 @@ public sealed partial class WaypointWorker
     {
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
-            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Recording not read", $"Recordings can't be sent from Discord yet, so {attachment.FileName} wasn't read. Add it on the Notes page on the PC.")), dealtWith);
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Recording not read", $"Recordings can't be sent from Discord yet, so {attachment.FileName} wasn't read. Add it on the Notes page on the PC."), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
 
         if (NoteFiles is not { CanMakeNotes: true } notes)
         {
-            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", "Notes from files aren't available right now.", CardTone.Attention)), dealtWith);
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", "Notes from files aren't available right now.", CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
 
@@ -290,7 +290,7 @@ public sealed partial class WaypointWorker
             Directory.CreateDirectory(folder);
             if (await discord.DownloadAsync(attachment, path, FileReader.MaxBytes) is { } problem)
             {
-                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention)), dealtWith);
+                await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
                 return;
             }
 
@@ -302,7 +302,7 @@ public sealed partial class WaypointWorker
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention)), dealtWith);
+            await TellThenDealtWith(discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
         finally

@@ -453,7 +453,10 @@ public sealed class DiscordInboxTests : IDisposable
 
         Assert.True(_database.IsDiscordMessageFinished("7"));
         Assert.False(_database.IsDiscordMessageGivenUp("7"));
-        Assert.True(Posted().Count(posted => posted.Contains("File not read")) >= 2);
+        // Each try carries the file's own nonce, so one whose answer was lost isn't posted twice.
+        var told = Posted().Where(posted => posted.Contains("File not read")).ToList();
+        Assert.True(told.Count >= 2);
+        Assert.All(told, posted => Assert.Contains("\"nonce\":\"ff7\"", posted));
         worker.StopDiscord();
     }
 

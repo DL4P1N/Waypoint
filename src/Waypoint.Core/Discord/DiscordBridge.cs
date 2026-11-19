@@ -174,12 +174,12 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     public Task<string?> SendCaptureReplyAsync(DiscordCard card) => SendAsync(settings.CaptureChannelId, card);
 
     /// <summary>Answers a capture under the message it came from, so it's clear which one this is about.</summary>
-    public async Task<string?> ReplyAsync(string? toMessageId, DiscordCard card) =>
-        (await TrySendAsync(settings.CaptureChannelId, card, toMessageId)).MessageId;
+    public async Task<string?> ReplyAsync(string? toMessageId, DiscordCard card, string? nonce = null) =>
+        (await TrySendAsync(settings.CaptureChannelId, card, toMessageId, nonce)).MessageId;
 
     /// <summary>Answers a message sent in the notes channel, under it.</summary>
-    public async Task<string?> ReplyInNotesAsync(string? toMessageId, DiscordCard card) =>
-        (await TrySendAsync(PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) ?? settings.CaptureChannelId, card, toMessageId)).MessageId;
+    public async Task<string?> ReplyInNotesAsync(string? toMessageId, DiscordCard card, string? nonce = null) =>
+        (await TrySendAsync(PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) ?? settings.CaptureChannelId, card, toMessageId, nonce)).MessageId;
 
     public Task<string?> SendBudgetAsync(DiscordCard card) => SendAsync(settings.BudgetChannelId, card);
 

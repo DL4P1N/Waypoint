@@ -138,7 +138,7 @@ public sealed partial class WaypointWorker
 
         if (Transcription.TranscriptionQueue.IsAudioFile(attachment.FileName))
         {
-            await TellThenDealtWith(discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName)), dealtWith);
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
 
@@ -158,7 +158,7 @@ public sealed partial class WaypointWorker
             Directory.CreateDirectory(folder);
             if (await discord.DownloadAsync(attachment, path, FileReader.MaxBytes) is { } problem)
             {
-                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention)), dealtWith);
+                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", problem, CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
                 return;
             }
 
@@ -174,7 +174,7 @@ public sealed partial class WaypointWorker
             file = file with { Name = Redaction.ApplyToName(attachment.FileName) };
             if (file.Problem is { } unreadable)
             {
-                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", unreadable, CardTone.Attention)), dealtWith);
+                await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", unreadable, CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
                 return;
             }
 
@@ -188,7 +188,7 @@ public sealed partial class WaypointWorker
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention)), dealtWith);
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("File not read", $"Couldn't read {attachment.FileName}. Try sending it again.", CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
         }
         finally
         {
@@ -214,6 +214,12 @@ public sealed partial class WaypointWorker
             dealtWith();
         }
     }
+
+    /// <summary>
+    /// The nonce for the answer about one file, so a try whose answer was lost and is sent again soon after isn't
+    /// posted twice. Attachment IDs are Discord's, so it fits Discord's 25 characters.
+    /// </summary>
+    private static string FileNonce(DiscordAttachment attachment) => "f" + attachment.Id;
 
     /// <summary>
     /// Sorts, then says so once for anything from Discord that couldn't be sorted yet, so a capture is never
