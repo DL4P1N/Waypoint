@@ -112,7 +112,7 @@ public partial class FindView : UserControl
             if (_shownFor != SearchBox.Text.Trim())
             {
                 _typing.Stop();
-                ThenLater(SearchOffThreadAsync(sources), then);
+                Waiting = ThenLater(SearchOffThreadAsync(sources), then);
                 return;
             }
         }
@@ -124,12 +124,27 @@ public partial class FindView : UserControl
         then();
     }
 
-    private static async void ThenLater(System.Threading.Tasks.Task<bool> searching, Action then)
+    /// <summary>What Enter or Down is waiting on in server mode, so tests can tell when it's done.</summary>
+    internal System.Threading.Tasks.Task Waiting { get; private set; } = System.Threading.Tasks.Task.CompletedTask;
+
+    /// <summary>Carries on once the search is shown, but not if Find was left or the box changed meanwhile.</summary>
+    private async System.Threading.Tasks.Task ThenLater(System.Threading.Tasks.Task<bool> searching, Action then)
     {
-        if (await searching)
+        var asked = _searches;
+        var text = SearchBox.Text.Trim();
+        if (await searching && asked == _searches && IsVisible && SearchBox.Text.Trim() == text)
         {
             then();
         }
+    }
+
+    /// <summary>Leaving Find drops a search still on its way, so its results don't pull the user anywhere.</summary>
+    public void Leave() => _searches++;
+
+    private void Close()
+    {
+        Leave();
+        Closed?.Invoke();
     }
 
     private void Show(string text, System.Collections.Generic.IReadOnlyList<FoundThing> found)
@@ -171,7 +186,7 @@ public partial class FindView : UserControl
                 break;
             case Key.Escape:
                 e.Handled = true;
-                Closed?.Invoke();
+                Close();
                 break;
         }
     }
@@ -190,7 +205,7 @@ public partial class FindView : UserControl
                 break;
             case Key.Escape:
                 e.Handled = true;
-                Closed?.Invoke();
+                Close();
                 break;
         }
     }
@@ -203,7 +218,7 @@ public partial class FindView : UserControl
         }
     }
 
-    private void OnCloseClicked(object sender, RoutedEventArgs e) => Closed?.Invoke();
+    private void OnCloseClicked(object sender, RoutedEventArgs e) => Close();
 
     private void FocusSelected()
     {

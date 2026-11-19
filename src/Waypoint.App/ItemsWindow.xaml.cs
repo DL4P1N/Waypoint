@@ -475,7 +475,11 @@ public partial class ItemsWindow : Window
     }
 
     /// <summary>Back to the page that was open.</summary>
-    private void CloseFind() => ShowPage(_page);
+    private void CloseFind()
+    {
+        FindPage.Leave();
+        ShowPage(_page);
+    }
 
     /// <summary>Opens the page a result is on and shows it there.</summary>
     private void ShowFound(FoundThing thing)
