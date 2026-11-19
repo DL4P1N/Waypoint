@@ -467,6 +467,89 @@ public sealed class PagesApiTests : IDisposable
     }
 
     [Fact]
+    public async Task A_change_sent_during_a_restore_is_turned_away_and_reads_still_answer()
+    {
+        var maintenance = _factory.Services.GetRequiredService<ServerMaintenance>();
+        using var client = Paired();
+        Assert.True(maintenance.TryStartRestore());
+
+        using var refused = await client.PostAsJsonAsync("/api/backups", new { });
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Contains(ServerMaintenance.Restoring, await refused.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/backups")).StatusCode);
+        Assert.Empty(Database.GetBackups());
+
+        maintenance.EndRestore();
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/backups", new { })).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_restore_waits_for_a_change_under_way_before_replacing_anything()
+    {
+        var maintenance = _factory.Services.GetRequiredService<ServerMaintenance>();
+        var backups = new ServerBackups(Client());
+        Database.AddListEntry(WaypointDatabase.ShoppingList, "kept", DateTime.Now);
+        backups.BackUpNow();
+        var made = Assert.Single(backups.GetBackups());
+
+        var change = maintenance.TryStartChange();
+        Assert.NotNull(change);
+        var restoring = Task.Run(() => backups.Restore(made));
+        await Task.Delay(500);
+
+        Assert.False(restoring.IsCompleted);
+        Database.AddListEntry(WaypointDatabase.ShoppingList, "saved while it waited", DateTime.Now);
+        change.Dispose();
+
+        var result = await restoring.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(result.Restored);
+        Assert.Equal(["kept"], Database.GetListEntries(WaypointDatabase.ShoppingList).Select(entry => entry.Text));
+    }
+
+    [Fact]
+    public async Task Writers_are_stopped_before_the_backup_goes_in_and_changes_stay_turned_away_after()
+    {
+        var maintenance = _factory.Services.GetRequiredService<ServerMaintenance>();
+        var backups = new ServerBackups(Client());
+        Database.AddListEntry(WaypointDatabase.ShoppingList, "kept", DateTime.Now);
+        backups.BackUpNow();
+        var made = Assert.Single(backups.GetBackups());
+        Database.AddListEntry(WaypointDatabase.ShoppingList, "added after", DateTime.Now);
+
+        IReadOnlyList<string>? seenWhenStopped = null;
+        maintenance.AddWriter(_ =>
+        {
+            seenWhenStopped = [.. Database.GetListEntries(WaypointDatabase.ShoppingList).Select(entry => entry.Text)];
+            return Task.FromResult(true);
+        });
+
+        var result = backups.Restore(made);
+
+        Assert.True(result.Restored);
+        Assert.Equal(["kept", "added after"], seenWhenStopped);
+        Assert.Equal(["kept"], Database.GetListEntries(WaypointDatabase.ShoppingList).Select(entry => entry.Text));
+        using var client = Paired();
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsJsonAsync("/api/backups", new { })).StatusCode);
+    }
+
+    [Fact]
+    public void A_damaged_backup_is_turned_down_without_stopping_anything()
+    {
+        var maintenance = _factory.Services.GetRequiredService<ServerMaintenance>();
+        var backups = new ServerBackups(Client());
+        backups.BackUpNow();
+        var made = Assert.Single(backups.GetBackups());
+        SqliteConnection.ClearAllPools();
+        File.WriteAllText(Path.Combine(_folder, "backups", made.Name), "not a database");
+
+        var result = backups.Restore(made);
+
+        Assert.False(result.Restored);
+        Assert.False(result.Restarting);
+        Assert.False(maintenance.IsRestoring);
+    }
+
+    [Fact]
     public void Only_the_servers_own_backups_can_be_restored()
     {
         var backups = new ServerBackups(Client());

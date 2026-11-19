@@ -15,6 +15,7 @@ namespace Waypoint.App;
 public partial class App
 {
     private const string RestoreTitle = "Restore a backup";
+    private const string RecordingBlocksRestore = "A lecture is recording. Stop the recording first, then restore.";
 
     private void AddServerBackupItems(Forms.ContextMenuStrip menu, ServerConnection server)
     {
@@ -101,6 +102,13 @@ public partial class App
     /// </summary>
     private async void RestoreOnServer(ServerConnection server, BackupChoice backup)
     {
+        // Waypoint starts again after a restore, which would cut a recording off.
+        if (_recorder?.IsRecording == true)
+        {
+            NoteConfirmWindow.Tell(null, RestoreTitle, RecordingBlocksRestore);
+            return;
+        }
+
         if (!NoteConfirmWindow.Ask(
             _itemsWindow,
             RestoreTitle,
@@ -129,17 +137,9 @@ public partial class App
             // What the pages still hold is from before the restore, so it must not be written into the restored data.
             _itemsWindow.DiscardDrafts();
 
+            // What this PC shows and keeps is from before, so it starts again straight away too.
             var restarting = result.Restarting ? " The server starts again to load it, which takes a few seconds." : "";
-            if (NoteConfirmWindow.Ask(
-                null,
-                RestoreTitle,
-                "Restored. Close Waypoint now? Then open it again the way you usually do.",
-                $"How things were before is saved on the server as {result.SafetyCopy}.{restarting}",
-                "Close Waypoint",
-                "Not now"))
-            {
-                Shutdown();
-            }
+            RestartWith($"Restored. How things were before is saved on the server as {result.SafetyCopy}.{restarting}");
         }
         catch (ServerUnavailableException away)
         {

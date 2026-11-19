@@ -32,6 +32,9 @@ public sealed class ServerNotes
 
         // Jobs still going as the server shuts down are stopped, and each lets go of what it held once it ends.
         services.GetService<IHostApplicationLifetime>()?.ApplicationStopping.Register(_jobs.StopAll);
+
+        // And before a restore, so none finishes against the restored data.
+        services.GetService<ServerMaintenance>()?.AddWriter(_jobs.StopAllAsync);
     }
 
     public LocalNotesData Data { get; }

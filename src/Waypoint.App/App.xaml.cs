@@ -35,6 +35,7 @@ public partial class App : System.Windows.Application
     private Mutex? _singleInstance;
     private EventWaitHandle _showList = null!;
     private EventWaitHandle? _exitRequest;
+    private EventWaitHandle? _closing;
     private WaypointWorker _worker = null!;
     private PostedWork? _posted;
     private ClassSchedule? _schedule;
@@ -104,6 +105,14 @@ public partial class App : System.Windows.Application
             ? $@"Local\Waypoint-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(chosen).ToUpperInvariant())))[..16]}"
             : @"Local\Waypoint";
         _singleInstance = new Mutex(initiallyOwned: true, instance, out var isFirstInstance);
+        var afterRestore = e.Args.Length > 1 && e.Args[0] == AfterRestoreArgument ? e.Args[1] : null;
+        if (!isFirstInstance && afterRestore is not null)
+        {
+            isFirstInstance = WaitForEarlierCopy(_singleInstance);
+        }
+
+        _holdsInstance = isFirstInstance;
+
         _showList = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.ShowList");
         if (!isFirstInstance)
         {
@@ -396,7 +405,13 @@ public partial class App : System.Windows.Application
         {
             while (_showList.WaitOne())
             {
-                Dispatcher.BeginInvoke(() => _itemsWindow.ShowLastPage());
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (!_restoring)
+                    {
+                        _itemsWindow.ShowLastPage();
+                    }
+                });
             }
         })
         { IsBackground = true };
@@ -405,6 +420,11 @@ public partial class App : System.Windows.Application
         // install.ps1 sets this to close the app the usual way, saving drafts and finishing a recording, before it
         // switches versions. Only the copy that holds this name's single-instance lock listens for it.
         _exitRequest = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.Exit");
+
+        // Set once closing starts, and left set until this copy has gone, so install.ps1 knows a slow close is still
+        // saving and waits for it instead of stopping it. Cleared here in case a copy before this one left it set.
+        _closing = new EventWaitHandle(false, EventResetMode.ManualReset, $"{instance}.Closing");
+        _closing.Reset();
         ThreadPool.RegisterWaitForSingleObject(
             _exitRequest, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
@@ -425,6 +445,12 @@ public partial class App : System.Windows.Application
 
         // A recording cut off by a crash or power cut is fixed and offered once things have settled.
         Dispatcher.BeginInvoke(() => Guarded(() => _recorder?.OfferUnfinished()), DispatcherPriority.ApplicationIdle);
+
+        // Started again after a restore, it says how that went.
+        if (afterRestore is not null)
+        {
+            Dispatcher.BeginInvoke(() => NoteConfirmWindow.Tell(null, RestoreTitle, afterRestore), DispatcherPriority.ApplicationIdle);
+        }
     }
 
     private void StartLater(bool atLogin)

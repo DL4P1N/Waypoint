@@ -8,6 +8,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using Waypoint.Core;
+using Waypoint.Core.Background;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 using Waypoint.Core.Discord;
@@ -34,9 +35,18 @@ public partial class App
         }
     }
 
-    /// <summary>Asks first, and saves how things are now before replacing anything.</summary>
-    private void RestoreBackup()
+    /// <summary>
+    /// Asks first, and saves how things are now before replacing anything. Everything that writes is stopped before the
+    /// copy goes in, so nothing started against the old data finishes against the restored one, and Waypoint then
+    /// starts again straight away, since what was stopped isn't started again in this run.
+    /// </summary>
+    private async void RestoreBackup()
     {
+        if (_restoring)
+        {
+            return;
+        }
+
         Directory.CreateDirectory(_database.BackupFolder);
         using var dialog = new Forms.OpenFileDialog
         {
@@ -54,47 +64,60 @@ public partial class App
             _itemsWindow,
             RestoreTitle,
             $"Replace everything in Waypoint with the backup from {when}?",
-            "A copy of how things are right now is saved in the backups folder first, so you can switch back.",
+            "A copy of how things are right now is saved in the backups folder first, so you can switch back. Waypoint starts again once it's done.",
             "Restore",
             "Cancel"))
         {
             return;
         }
 
+        // Turned down before anything is stopped, so Waypoint doesn't start again for nothing.
+        var path = dialog.FileName;
+        var problem = _recorder?.IsRecording == true
+            ? RecordingBlocksRestore
+            : _database.RestoreProblem(path);
+        if (problem is not null)
+        {
+            NoteConfirmWindow.Tell(null, RestoreTitle, problem);
+            return;
+        }
+
+        _restoring = true;
+        string said;
         try
         {
             _itemsWindow.SaveDrafts();
-            _itemsWindow.Hide();
-            // The notes folder sync waits, so it can't undo the restore with the files from before it.
-            var path = dialog.FileName;
-            var result = _noteSync is { } sync
-                ? sync.WhileHeld(() => _database.RestoreBackup(path, DateTime.Now))
-                : _database.RestoreBackup(path, DateTime.Now);
-            if (!result.Restored)
+            var stopped = await ExclusiveRestore.StopWritersAsync(RestoreStops(), ExclusiveRestore.StopLimit, LogError);
+            if (!stopped)
             {
-                NoteConfirmWindow.Tell(null, RestoreTitle, result.Problem ?? "Nothing was changed.");
-                return;
+                said = ExclusiveRestore.StillBusy;
             }
-
-            // Drafts were saved above, into the copy taken before the restore. What the pages still hold is from
-            // before it, so it must not be written into the restored data on the way out.
-            _itemsWindow.DiscardDrafts();
-
-            if (NoteConfirmWindow.Ask(
-                null,
-                RestoreTitle,
-                "Restored. Close Waypoint now? Then open it again the way you usually do.",
-                $"Waypoint needs to close and open again to show it everywhere. How things were before is saved as {Path.GetFileName(result.SafetyCopy)}.",
-                "Close Waypoint",
-                "Not now"))
+            else
             {
-                Shutdown();
+                // The notes folder sync waits too, so it can't undo the restore with the files from before it.
+                var now = DateTime.Now;
+                var result = _noteSync is { } sync
+                    ? await sync.WhileHeldAsync(() => System.Threading.Tasks.Task.FromResult(_database.RestoreBackup(path, now)))
+                    : _database.RestoreBackup(path, now);
+                if (result.Restored)
+                {
+                    // Drafts were saved above, into the copy taken before the restore. What the pages still hold is
+                    // from before it, so it must not be written into the restored data on the way out.
+                    _itemsWindow.DiscardDrafts();
+                    said = $"Restored. How things were before is saved as {Path.GetFileName(result.SafetyCopy)} in the backups folder.";
+                }
+                else
+                {
+                    said = result.Problem ?? "Nothing was changed.";
+                }
             }
         }
         catch (Exception exception)
         {
-            NoteConfirmWindow.Tell(null, RestoreTitle, $"The restore didn't work, so nothing was changed. {PlainProblem.Report(exception)} Try again, or pick another backup.");
+            said = $"The restore didn't work, so nothing was changed. {PlainProblem.Report(exception)} Try again, or pick another backup.";
         }
+
+        RestartWith(said);
     }
 
     /// <summary>Into a new dated folder, so an earlier export is never written over.</summary>

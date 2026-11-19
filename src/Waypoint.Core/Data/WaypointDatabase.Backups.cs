@@ -87,17 +87,7 @@ public sealed partial class WaypointDatabase
     public RestoreResult RestoreBackup(string backupPath, DateTime now)
     {
         var source = Path.GetFullPath(backupPath);
-        if (!File.Exists(source))
-        {
-            return new RestoreResult(false, null, "That backup file is gone.");
-        }
-
-        if (string.Equals(source, DatabasePath, StringComparison.OrdinalIgnoreCase))
-        {
-            return new RestoreResult(false, null, "That's the database Waypoint is using now, not a backup.");
-        }
-
-        if (BackupProblem(source) is { } problem)
+        if (RestoreProblem(source) is { } problem)
         {
             return new RestoreResult(false, null, problem);
         }
@@ -214,6 +204,23 @@ public sealed partial class WaypointDatabase
         }
 
         return ReservedFileNames.Contains(clean) ? $"{clean} note" : clean;
+    }
+
+    /// <summary>
+    /// Why that file can't be restored, or null when it can. Checked before anything is stopped for a restore, so a
+    /// wrong file never makes Waypoint start again for nothing.
+    /// </summary>
+    public string? RestoreProblem(string backupPath)
+    {
+        var source = Path.GetFullPath(backupPath);
+        if (!File.Exists(source))
+        {
+            return "That backup file is gone.";
+        }
+
+        return string.Equals(source, DatabasePath, StringComparison.OrdinalIgnoreCase)
+            ? "That's the database Waypoint is using now, not a backup."
+            : BackupProblem(source);
     }
 
     /// <summary>Null if the file is a readable Waypoint database.</summary>

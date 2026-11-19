@@ -119,6 +119,27 @@ public sealed class NoteJobs
         }
     }
 
+    /// <summary>
+    /// Stops every job, as before a restore, and waits up to <paramref name="limit"/> for each to end and be kept, so
+    /// none is kept in the restored data. True once none is left running.
+    /// </summary>
+    public async Task<bool> StopAllAsync(TimeSpan limit)
+    {
+        StopAll();
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (!_jobs.IsEmpty)
+        {
+            if (waited.Elapsed >= limit)
+            {
+                return false;
+            }
+
+            await Task.Delay(20);
+        }
+
+        return true;
+    }
+
     /// <summary>The plain sentence for why a job failed, never the exception's own text, which can carry paths and keys.</summary>
     private static string Reason(AggregateException? exception) =>
         exception is null ? "Something unexpected went wrong." : PlainProblem.Describe(exception.GetBaseException());

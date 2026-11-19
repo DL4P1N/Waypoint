@@ -318,17 +318,24 @@ public sealed class TranscriptionQueue : IDisposable
         return WhisperPrompt.Build(course, _notes.GetClassNames(), assignments);
     }
 
-    public void Dispose()
+    // Long enough for whisper-cli to be stopped, so it doesn't keep running after Waypoint closes.
+    public void Dispose() => Stop(TimeSpan.FromSeconds(3));
+
+    /// <summary>
+    /// Stops transcribing and waits up to <paramref name="limit"/> for it to end, as before a restore. True once nothing
+    /// is left running, so nothing it would save can land after.
+    /// </summary>
+    public bool Stop(TimeSpan limit)
     {
         _stopping.Cancel();
         try
         {
-            // Long enough for whisper-cli to be stopped, so it doesn't keep running after Waypoint closes.
-            _loop?.Wait(TimeSpan.FromSeconds(3));
+            return _loop?.Wait(limit) ?? true;
         }
         catch (AggregateException)
         {
-            // Stopping is all that matters here.
+            // It ended, by failing or being stopped, which is all that matters here.
+            return true;
         }
     }
 

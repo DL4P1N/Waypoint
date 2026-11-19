@@ -237,7 +237,7 @@ public partial class NotesView
     /// </summary>
     private async void StudyFor(StudyExam exam, long folderId, bool replaceEdits = false, bool askedAgain = false)
     {
-        if ((_studyAsking && !askedAgain) || _study is not { } study)
+        if ((_studyAsking && !askedAgain) || _study is not { } study || _stoppedForRestore)
         {
             return;
         }
@@ -291,7 +291,10 @@ public partial class NotesView
             _studying.Remove(key);
         }
 
-        await FinishStudy(exam, folderId, outcome);
+        if (!_stoppedForRestore)
+        {
+            await FinishStudy(exam, folderId, outcome);
+        }
     }
 
     private async Task FinishStudy(StudyExam exam, long folderId, StudyOutcome outcome)

@@ -56,14 +56,26 @@ public static class Api
         }
     }
 
+    /// <summary>Marks the restore itself, the one change let through while a restore runs.</summary>
+    public sealed class RestoreRoute
+    {
+        public static readonly RestoreRoute Instance = new();
+
+        private RestoreRoute()
+        {
+        }
+    }
+
     /// <summary>
     /// Turns away any request without the pairing token, other than /health, before routing, so nothing in its body is
-    /// read first. Then holds every body to a small limit, except a route marked <see cref="LargeBody"/>.
+    /// read first. Then holds every body to a small limit, except a route marked <see cref="LargeBody"/>. During a
+    /// restore every change is turned away with a 503, and a change under way is counted so the restore can wait for it.
     /// </summary>
     public static void UseToken(WebApplication app)
     {
         var server = app.Services.GetRequiredService<WaypointServer>();
         var limit = app.Services.GetRequiredService<IOptions<ServerOptions>>().Value.MaxRequestBytes;
+        var maintenance = app.Services.GetRequiredService<ServerMaintenance>();
 
         app.Use(async (context, next) =>
         {
@@ -97,6 +109,22 @@ public static class Api
                 {
                     size.MaxRequestBodySize = limit;
                 }
+            }
+
+            if (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)
+                || context.GetEndpoint()?.Metadata.GetMetadata<RestoreRoute>() is not null)
+            {
+                await next(context);
+                return;
+            }
+
+            using var change = maintenance.TryStartChange();
+            if (change is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.RetryAfter = "10";
+                await context.Response.WriteAsJsonAsync(new { status = "restoring", problem = ServerMaintenance.Restoring });
+                return;
             }
 
             await next(context);
