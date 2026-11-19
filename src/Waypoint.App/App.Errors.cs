@@ -1,0 +1,116 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Media;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading;
+using System.Windows;
+using System.Windows.Threading;
+using Waypoint.Core.Background;
+using Waypoint.Core.Budget;
+using Waypoint.Core.Calendar;
+using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
+using Waypoint.Core.Discord;
+using Waypoint.Core.Email;
+using Waypoint.Core.Files;
+using Waypoint.Core.Remote;
+using Waypoint.Core.Theme;
+using Forms = System.Windows.Forms;
+
+namespace Waypoint.App;
+
+/// <summary>Problems: guarding a check, unhandled exceptions, and the error log.</summary>
+public partial class App
+{
+    private void Guarded(Action check)
+    {
+        try
+        {
+            check();
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+        }
+    }
+
+    /// <summary>Once running, staying up matters most, since alerts stop if the app does. A failed start still ends it.</summary>
+    private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        // In server mode a change made while the server is away says so in Ask, and nothing else is wrong. During
+        // startup it's a failed start like any other: handled there, the tray and window would never be made, and the
+        // copy would sit invisible, holding the single-instance lock.
+        if (e.Exception is ServerUnavailableException away && _started)
+        {
+            _itemsWindow?.ShowReply(away.Message);
+            e.Handled = true;
+            return;
+        }
+
+        // A click's change goes to the server off the window's thread, so a slow answer lands here. It's said the same
+        // way, and kept in the log.
+        if (e.Exception is ServerTimedOutException slow && _started)
+        {
+            LogError(slow);
+            _itemsWindow?.ShowReply(slow.Message);
+            e.Handled = true;
+            return;
+        }
+
+        LogError(e.Exception);
+        e.Handled = _started;
+    }
+
+    private string? _loggedSortFailure;
+
+    private void LogSortFailure(string error)
+    {
+        if (error == _loggedSortFailure)
+        {
+            return;
+        }
+
+        _loggedSortFailure = error;
+        LogText($"Sorting failed: {error}");
+    }
+
+    private readonly Dictionary<string, string?> _loggedProblems = [];
+
+    /// <summary>The window says these plainly, so the detail is kept here, once each time it changes.</summary>
+    private void LogOnce(string what, string? error)
+    {
+        if (_loggedProblems.TryGetValue(what, out var logged) && logged == error)
+        {
+            return;
+        }
+
+        _loggedProblems[what] = error;
+        if (error is not null)
+        {
+            LogText($"{what} failed: {error}");
+        }
+    }
+
+    private static void LogError(Exception exception) => LogText(exception.ToString());
+
+    private static void LogText(string text)
+    {
+        try
+        {
+            var path = Path.Combine(GetDataDirectory(), ErrorLogFile);
+            if (File.Exists(path) && new FileInfo(path).Length > MaxErrorLogBytes)
+            {
+                File.Delete(path);
+            }
+
+            File.AppendAllText(path, $"{DateTime.Now:O}\n{text}\n---\n");
+        }
+        catch (Exception logFailure) when (logFailure is IOException or UnauthorizedAccessException)
+        {
+            // Nothing else to do with it, and the app should keep running.
+        }
+    }
+}
