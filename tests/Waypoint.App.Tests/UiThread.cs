@@ -28,6 +28,14 @@ internal static class Ui
     private static readonly Lazy<Dispatcher> Thread = new(Start, LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly List<Exception> Unhandled = [];
 
+    /// <summary>The problems raised on the UI thread so far, which a test expected, so they don't fail it.</summary>
+    public static List<Exception> TakeUnhandled()
+    {
+        var taken = Unhandled.ToList();
+        Unhandled.Clear();
+        return taken;
+    }
+
     public static void Run(Action<UiTest> body)
     {
         ExceptionDispatchInfo? failure = null;

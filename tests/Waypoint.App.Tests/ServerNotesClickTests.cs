@@ -63,6 +63,9 @@ public sealed class ServerNotesClickTests
         /// <summary>The next note save is turned down, as a server does with a request it won't take.</summary>
         public bool RefuseNextSave { get; set; }
 
+        /// <summary>The next new note is turned down in the same way.</summary>
+        public bool RefuseNextMake { get; set; }
+
         public void ChangeElsewhere(long id, string body)
         {
             lock (_gate)
@@ -109,9 +112,9 @@ public sealed class ServerNotesClickTests
 
             lock (_gate)
             {
-                if (request.Method == HttpMethod.Put && RefuseNextSave)
+                if ((request.Method == HttpMethod.Put && RefuseNextSave) || (request.Method == HttpMethod.Post && path == "/api/notes" && RefuseNextMake))
                 {
-                    RefuseNextSave = false;
+                    RefuseNextSave = RefuseNextMake = false;
                     return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
                 }
 
@@ -329,6 +332,35 @@ public sealed class ServerNotesClickTests
         Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
         Assert.Equal("Biology 1 Apr", server.Title(101));
         Assert.Equal("Biology 1 Apr", title.Text);
+    });
+
+    [Fact]
+    public void Delete_after_a_new_notes_first_save_failed_keeps_what_was_typed_to_try_again() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+        server.ReleaseChanges.Reset();
+        server.RefuseNextMake = true;
+
+        // Delete waits for the first save, which the server turns down.
+        UiTest.Call(view, "NewNote");
+        Type(body, "pond notes");
+        UiTest.Call(view, "SaveSoon");
+        UiTest.Call(view, "OnDeleteClicked", view, new System.Windows.RoutedEventArgs());
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the first save");
+
+        // Its problem is said, and the note stays open with what was typed.
+        Assert.Single(Ui.TakeUnhandled());
+        Assert.Equal(0, server.NotesMade);
+        Assert.Equal("pond notes", body.Text);
+        Assert.True(UiTest.Named<System.Windows.FrameworkElement>(view, "Editor").IsVisible);
+
+        // Tried again, it's saved.
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.NotesMade == 1, "the save tried again");
+        Assert.Equal("pond notes", server.Body(101));
+        Assert.Equal("pond notes", body.Text);
     });
 
     [Fact]

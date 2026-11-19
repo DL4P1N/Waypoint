@@ -1872,8 +1872,9 @@ public partial class NotesView : UserControl
             // Said once the save is marked done, the way any save's problem is.
         }
 
-        // Marked saved first, since that was waiting on it before this.
-        if (_newNote == plan)
+        // Marked saved first, since that was waiting on it before this. A first save that failed leaves the note open
+        // with what was typed, its problem said, so it can be tried again rather than the text dropped.
+        if (_newNote == plan && _draft.Id is not null)
         {
             then();
         }
