@@ -146,6 +146,9 @@ public partial class App
             }
         }
 
+        // Said first, so install.ps1 waits for the rest rather than stopping this copy partway through saving.
+        Step(() => _closing?.Set());
+
         Step(() =>
         {
             if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)

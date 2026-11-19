@@ -19,7 +19,9 @@ param(
     # Installs this already-built folder instead of building. Used to try the installer quickly.
     [string]$PublishedFolder,
     # How long a new version has to stay running before it counts as started.
-    [int]$StartCheckSeconds = 8
+    [int]$StartCheckSeconds = 8,
+    # How long a running copy that has started closing may take to save before the install gives up and leaves it be.
+    [int]$CloseLimitSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,25 +75,49 @@ function Get-InstalledProcesses {
         Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
 }
 
-# Asks a running copy from this install to close, so it saves drafts and finishes a recording, and stops it if it
-# hasn't closed within 20 seconds. A version from before the close request is simply stopped.
+# Asks a running copy from this install to close, so it saves drafts, finishes a recording, and syncs notes a last
+# time. A copy that says it has started closing is given up to -CloseLimitSeconds, and if it's still closing then,
+# the install stops with nothing switched and leaves it to finish, so nothing it's saving is lost. Only a copy that
+# never answers is stopped: one with no closing signal after 20 seconds, and one from before the close request at once.
 function Stop-Installed {
-    if ((Get-InstalledProcesses).Count -eq 0) { return }
+    if (@(Get-InstalledProcesses).Count -eq 0) { return }
+    $instance = Get-InstanceName
     $request = $null
-    if ([Threading.EventWaitHandle]::TryOpenExisting((Get-InstanceName) + '.Exit', [ref]$request)) {
+    if ([Threading.EventWaitHandle]::TryOpenExisting($instance + '.Exit', [ref]$request)) {
+        # Opened before asking, so the signal is still there to see even if the copy has gone by the time it's checked.
+        $closing = $null
+        $answers = [Threading.EventWaitHandle]::TryOpenExisting($instance + '.Closing', [ref]$closing)
         Write-Host 'Asking Waypoint to close...'
         [void]$request.Set()
         $request.Dispose()
-        $deadline = (Get-Date).AddSeconds(20)
-        while ((Get-InstalledProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-        if ((Get-InstalledProcesses).Count -eq 0) { Write-Host 'Waypoint closed.' }
+        try {
+            $deadline = (Get-Date).AddSeconds(20)
+            $answered = $false
+            while (@(Get-InstalledProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
+                if ($answers -and $closing.WaitOne(250)) { $answered = $true; break }
+                if (-not $answers) { Start-Sleep -Milliseconds 250 }
+            }
+            if ($answered) {
+                Write-Host 'Waypoint is closing. Waiting while it saves...'
+                $deadline = (Get-Date).AddSeconds($CloseLimitSeconds)
+                while (@(Get-InstalledProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+                if (@(Get-InstalledProcesses).Count -gt 0) {
+                    $script:closeRefused = $true
+                    throw "Waypoint is still closing after $CloseLimitSeconds seconds, so nothing was switched and it was left to finish saving. Run this again once it has closed."
+                }
+            }
+        } finally {
+            if ($closing) { $closing.Dispose() }
+        }
+        if (@(Get-InstalledProcesses).Count -eq 0) { Write-Host 'Waypoint closed.' }
     }
-    for ($attempt = 1; (Get-InstalledProcesses).Count -gt 0 -and $attempt -le 20; $attempt++) {
+    for ($attempt = 1; @(Get-InstalledProcesses).Count -gt 0 -and $attempt -le 20; $attempt++) {
         if ($attempt -eq 1) { Write-Host 'Stopping Waypoint...' }
         Get-InstalledProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Milliseconds 500
     }
-    if ((Get-InstalledProcesses).Count -gt 0) {
+    if (@(Get-InstalledProcesses).Count -gt 0) {
+        $script:closeRefused = $true
         throw "Waypoint is still running from $InstallRoot and couldn't be stopped. Nothing was switched."
     }
 }
@@ -128,7 +154,13 @@ function Switch-To([string]$name) {
         }
     }
 
-    Stop-Installed
+    try {
+        Stop-Installed
+    } catch {
+        # Nothing was switched, so the copies made beside the running files go and it's left as it was.
+        foreach ($relative in $files) { Remove-Item -LiteralPath ((Join-Path $InstallRoot $relative) + '.new') -Force -ErrorAction SilentlyContinue }
+        throw
+    }
 
     foreach ($relative in $files) {
         $target = Join-Path $InstallRoot $relative
@@ -263,7 +295,14 @@ Rename-Item -LiteralPath $partial -NewName $name
 if ($ownStaging) { Remove-Item -Recurse -Force $staging }
 
 $previous = Get-Current
-Switch-To $name
+$script:closeRefused = $false
+try {
+    Switch-To $name
+} catch {
+    # The running copy wasn't switched, so the new version goes too, and -Rollback still goes back from the running one.
+    if ($script:closeRefused) { Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force -ErrorAction SilentlyContinue }
+    throw
+}
 Set-Launchers
 
 if (Test-Start) {

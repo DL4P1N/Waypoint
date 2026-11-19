@@ -35,6 +35,7 @@ public partial class App : System.Windows.Application
     private Mutex? _singleInstance;
     private EventWaitHandle _showList = null!;
     private EventWaitHandle? _exitRequest;
+    private EventWaitHandle? _closing;
     private WaypointWorker _worker = null!;
     private PostedWork? _posted;
     private ClassSchedule? _schedule;
@@ -417,6 +418,11 @@ public partial class App : System.Windows.Application
         // install.ps1 sets this to close the app the usual way, saving drafts and finishing a recording, before it
         // switches versions. Only the copy that holds this name's single-instance lock listens for it.
         _exitRequest = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.Exit");
+
+        // Set once closing starts, and left set until this copy has gone, so install.ps1 knows a slow close is still
+        // saving and waits for it instead of stopping it. Cleared here in case a copy before this one left it set.
+        _closing = new EventWaitHandle(false, EventResetMode.ManualReset, $"{instance}.Closing");
+        _closing.Reset();
         ThreadPool.RegisterWaitForSingleObject(
             _exitRequest, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
