@@ -229,9 +229,15 @@ internal sealed class UiTest : IDisposable
         Assert.True(element.IsKeyboardFocused, $"Couldn't focus {element}, focus is on {Keyboard.FocusedElement}");
     }
 
-    /// <summary>A key press as WPF raises it: PreviewKeyDown, then KeyDown unless handled.</summary>
+    /// <summary>
+    /// A key press with no modifiers as WPF raises it: PreviewKeyDown, then KeyDown unless handled. A handler that
+    /// checks <see cref="Keyboard.Modifiers"/> reads this thread's own key state from Windows, which only changes as
+    /// the thread reads key messages. If Windows ever hands the test window the foreground while a modifier is held
+    /// elsewhere, that state can go on showing it held after the key is let go, so it's cleared here first.
+    /// </summary>
     public bool Press(UIElement target, Key key)
     {
+        SetModifiersShownHeld(false);
         var source = PresentationSource.FromVisual(target) ?? throw new InvalidOperationException("Not in a window");
         var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
         target.RaiseEvent(preview);
@@ -445,6 +451,37 @@ internal sealed class UiTest : IDisposable
         GetWindowThreadProcessId(window, out var process);
         return process == (uint)Environment.ProcessId ? 0 : window;
     }
+
+    /// <summary>Shift, Ctrl, Alt and the Windows keys, left, right and either.</summary>
+    private static readonly byte[] Modifiers = [0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
+
+    /// <summary>
+    /// Sets whether this thread's own key state shows every modifier as held. It never sends input, so nothing
+    /// changes for the window the user is in.
+    /// </summary>
+    internal static void SetModifiersShownHeld(bool held)
+    {
+        var state = new byte[256];
+        if (!GetKeyboardState(state))
+        {
+            return;
+        }
+
+        foreach (var modifier in Modifiers)
+        {
+            state[modifier] = held ? (byte)0x80 : (byte)0;
+        }
+
+        SetKeyboardState(state);
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetKeyboardState(byte[] state);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetKeyboardState(byte[] state);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

@@ -55,6 +55,9 @@ public sealed class WeekViewTests
 
         ui.Focus(block);
         var before = ui.Menus.Count;
+
+        // Left showing as held from earlier in the run, a modifier would make a plain Enter read as Shift+Enter.
+        UiTest.SetModifiersShownHeld(true);
         Assert.True(ui.Press(block, System.Windows.Input.Key.Enter));
         Assert.Equal(before + 1, ui.Menus.Count);
         Assert.NotNull(ui.RightClick(block));
