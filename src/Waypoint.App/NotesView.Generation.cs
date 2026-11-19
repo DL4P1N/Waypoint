@@ -235,6 +235,7 @@ public partial class NotesView
 
     private void DrawStatus()
     {
+        _studyStatusFor = null;
         if (_draft.Id is not { } noteId || _maker is null)
         {
             StatusPanel.Visibility = Visibility.Collapsed;

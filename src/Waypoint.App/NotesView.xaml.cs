@@ -233,6 +233,9 @@ public partial class NotesView : UserControl
             {
                 _draft.MoveTo(moved.NoteId);
 
+                // It goes on as another note, so a late answer about the one it was is dropped.
+                _opens++;
+
                 // The copy's title says where it came from, unless a new title was typed meanwhile.
                 if (_notes.GetNote(moved.NoteId) is { } copy
                     && (string.IsNullOrWhiteSpace(_draft.Title) || copy.Title == _draft.Title.Trim() + Waypoint.Core.Remote.OfflineNotes.KeptBothSuffix))

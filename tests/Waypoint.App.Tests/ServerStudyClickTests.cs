@@ -191,6 +191,28 @@ public sealed class ServerStudyClickTests
     });
 
     [Fact]
+    public void While_a_study_press_waits_on_the_server_the_status_button_of_an_ordinary_note_still_writes_its_notes() => Ui.Run(ui =>
+    {
+        var server = new StudyServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+
+        // A study press is held on the server.
+        server.ReleaseStudyFolder.Reset();
+        view.StudyForExam(new StoredItem(5, ItemKind.Exam, "Cell quiz", null, null, false));
+        ServerToDoClickTests.PumpUntil(ui, () => server.Count("/api/notes/study/folder") == 1, "where to study from to be asked");
+
+        // Note 7 isn't a study note, so its Write notes or Try again isn't taken for a second study press.
+        var handled = (Task<bool>)UiTest.Call(view, "StudyStatusClicked", 7L)!;
+        Assert.True(handled.IsCompleted);
+        Assert.False(handled.Result);
+
+        // Another note opens, so the study answer is dropped once it comes.
+        Pick(view, 8);
+        server.ReleaseStudyFolder.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "frogs", "the other note");
+    });
+
+    [Fact]
     public void Starting_a_study_session_returns_at_once_and_a_second_press_while_it_is_on_its_way_starts_nothing_more() => Ui.Run(ui =>
     {
         var server = new StudyServer { SevenIsStudy = true };

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -25,10 +26,15 @@ public partial class NotesView
     private bool _studyConnected;
 
     /// <summary>
-    /// A press to study, or to start studying, waiting on the server in server mode. Another press meanwhile does
-    /// nothing, so a study note is never asked for twice. On this PC it's never set when a press comes.
+    /// How many asks for studying are on their way to the server in server mode. A press meanwhile does nothing, so a
+    /// study note is never asked for twice. On this PC an ask is done before the next press can come.
     /// </summary>
-    private bool _studyAsking;
+    private int _studyAsks;
+
+    private bool _studyAsking => _studyAsks > 0;
+
+    /// <summary>The note whose status line is a study note's, with Make new questions, as last drawn.</summary>
+    private long? _studyStatusFor;
 
     /// <summary>Counts each time a different note opens, or none, so a late answer can tell the user moved on.</summary>
     private int _opens;
@@ -55,18 +61,18 @@ public partial class NotesView
     /// Reads, or with <paramref name="change"/> changes, for studying through the page's queue, so in server mode the
     /// window never waits on it. Stayed is false when another note or page was opened meanwhile, so the answer is dropped.
     /// </summary>
-    private async Task<(bool Stayed, T Answer)> StudyAsk<T>(Func<T> ask, bool change = false)
+    private async Task<(bool Stayed, T Answer)> StudyAsk<T>(Func<T> ask, bool change = false, [CallerMemberName] string what = "")
     {
         var at = StudyPlace;
-        _studyAsking = true;
+        _studyAsks++;
         try
         {
-            var answer = change ? await Work.Run(ask) : await Work.Read(ask);
+            var answer = change ? await Work.Run(ask, what) : await Work.Read(ask, what);
             return (StudyPlace == at, answer);
         }
         finally
         {
-            _studyAsking = false;
+            _studyAsks--;
         }
     }
 
@@ -225,10 +231,13 @@ public partial class NotesView
 
     private static string StudyKey(long folderId, string examTitle) => $"{folderId}\n{examTitle.Trim().ToLowerInvariant()}";
 
-    /// <summary>Asks before replacing changes, then writes in the background and opens the note when it's done.</summary>
-    private async void StudyFor(StudyExam exam, long folderId, bool replaceEdits = false)
+    /// <summary>
+    /// Asks before replacing changes, then writes in the background and opens the note when it's done. A press while
+    /// another waits on the server does nothing, but asking again once the server wants a yes always goes ahead.
+    /// </summary>
+    private async void StudyFor(StudyExam exam, long folderId, bool replaceEdits = false, bool askedAgain = false)
     {
-        if (_studyAsking || _study is not { } study)
+        if ((_studyAsking && !askedAgain) || _study is not { } study)
         {
             return;
         }
@@ -316,7 +325,7 @@ public partial class NotesView
                 break;
 
             case StudyStatus.NeedsConfirm:
-                StudyFor(exam, folderId);
+                StudyFor(exam, folderId, askedAgain: true);
                 return;
 
             case StudyStatus.ChangedWhileWriting when outcome.NoteId is { } changedId && outcome.Markdown is { } markdown && _study is { } study:
@@ -377,6 +386,7 @@ public partial class NotesView
             return false;
         }
 
+        _studyStatusFor = noteId;
         StopButton.Visibility = Visibility.Collapsed;
         if (_studying.Contains(StudyKey(folderId, exam.Title)))
         {
@@ -406,9 +416,10 @@ public partial class NotesView
     /// </summary>
     private async Task<bool> StudyStatusClicked(long noteId)
     {
+        // While another press waits on the server, a study note's button does nothing, and any other note's goes on.
         if (_studyAsking)
         {
-            return true;
+            return _studyStatusFor == noteId;
         }
 
         var sources = _sourceCount;
@@ -442,20 +453,29 @@ public partial class NotesView
             return;
         }
 
-        var sources = _sourceCount;
-        var (stayed, itemRef) = await StudyAsk(() => OpenStudyExam(noteId, sources)?.ItemRef);
-        if (!stayed || itemRef is null)
+        // Both asks count as one press on its way, so another press can't come in between them.
+        _studyAsks++;
+        try
         {
-            return;
-        }
+            var sources = _sourceCount;
+            var (stayed, itemRef) = await StudyAsk(() => OpenStudyExam(noteId, sources)?.ItemRef);
+            if (!stayed || itemRef is null)
+            {
+                return;
+            }
 
-        // The session has started once this is back, so the chat says so even if the user moved on meanwhile.
-        var (still, reply) = await StudyAsk(() => _notes.StartActivation(itemRef, FirstQuestionAction, StudyMethod, DateTime.Now).Text, change: true);
-        if (still)
+            // The session has started once this is back, so the chat says so even if the user moved on meanwhile.
+            var (still, reply) = await StudyAsk(() => _notes.StartActivation(itemRef, FirstQuestionAction, StudyMethod, DateTime.Now).Text, change: true);
+            if (still)
+            {
+                Bar.Show(reply);
+            }
+
+            Replied?.Invoke(reply);
+        }
+        finally
         {
-            Bar.Show(reply);
+            _studyAsks--;
         }
-
-        Replied?.Invoke(reply);
     }
 }
