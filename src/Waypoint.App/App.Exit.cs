@@ -81,11 +81,9 @@ public partial class App
         },
         limit => _captures.StopAsync(limit),
         limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
-        _ =>
-        {
-            _transcription?.Dispose();
-            return System.Threading.Tasks.Task.FromResult(true);
-        },
+        limit => _transcription is { } transcription
+            ? System.Threading.Tasks.Task.Run(() => transcription.Stop(limit))
+            : System.Threading.Tasks.Task.FromResult(true),
     ];
 
     /// <summary>
