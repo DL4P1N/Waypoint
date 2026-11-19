@@ -74,7 +74,7 @@ public partial class App
         // Turned down before anything is stopped, so Waypoint doesn't start again for nothing.
         var path = dialog.FileName;
         var problem = _recorder?.IsRecording == true
-            ? "A lecture is recording. Stop the recording first, then restore."
+            ? RecordingBlocksRestore
             : _database.RestoreProblem(path);
         if (problem is not null)
         {

@@ -15,6 +15,7 @@ namespace Waypoint.App;
 public partial class App
 {
     private const string RestoreTitle = "Restore a backup";
+    private const string RecordingBlocksRestore = "A lecture is recording. Stop the recording first, then restore.";
 
     private void AddServerBackupItems(Forms.ContextMenuStrip menu, ServerConnection server)
     {
@@ -101,6 +102,13 @@ public partial class App
     /// </summary>
     private async void RestoreOnServer(ServerConnection server, BackupChoice backup)
     {
+        // Waypoint starts again after a restore, which would cut a recording off.
+        if (_recorder?.IsRecording == true)
+        {
+            NoteConfirmWindow.Tell(null, RestoreTitle, RecordingBlocksRestore);
+            return;
+        }
+
         if (!NoteConfirmWindow.Ask(
             _itemsWindow,
             RestoreTitle,
