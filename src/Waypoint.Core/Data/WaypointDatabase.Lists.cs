@@ -470,6 +470,32 @@ public sealed partial class WaypointDatabase
         return entries.Count > 0 ? $"{found} is ready. Start with: {entries[0].Text}" : $"{found} is empty.";
     }
 
+    /// <summary>
+    /// Undo for Start over: checks these entries on the list again. Nothing goes in History, since Start over took
+    /// nothing out of it. An entry deleted since is left alone.
+    /// </summary>
+    public void UndoStartList(string name, IReadOnlyList<long> checkedIds, DateTime now)
+    {
+        if (checkedIds.Count == 0)
+        {
+            return;
+        }
+
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        foreach (var id in checkedIds)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE list_entries SET done = 1, done_at = $now WHERE id = $id AND removed_at IS NULL AND list_id = (SELECT id FROM lists WHERE name = $name COLLATE NOCASE)";
+            command.Parameters.AddWithValue("$now", FormatReminder(now));
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$name", CleanName(name));
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     /// <summary>Hides a list. Its entries stay stored, and naming it again brings it back.</summary>
     public string DeleteList(string? name, DateTime now)
     {

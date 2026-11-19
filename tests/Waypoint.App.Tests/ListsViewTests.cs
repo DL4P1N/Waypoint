@@ -528,7 +528,18 @@ public sealed class ListsViewTests
 
         Assert.All(ui.Database.GetListEntries("Morning routine"), entry => Assert.False(entry.Done));
         Assert.Equal(Visibility.Collapsed, startOver.Visibility);
-        Assert.Equal(Visibility.Visible, UiTest.Named<UndoBar>(page.View, "Bar").Visibility);
+        var bar = UiTest.Named<UndoBar>(page.View, "Bar");
+        Assert.Equal(Visibility.Visible, bar.Visibility);
+
+        // Undo checks again just what was checked, and adds nothing to History.
+        var history = ui.Database.GetHistory().Count;
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+        Assert.Equal(Visibility.Visible, undo.Visibility);
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([true, false], ui.Database.GetListEntries("Morning routine").Select(entry => entry.Done));
+        Assert.Equal(history, ui.Database.GetHistory().Count);
+        Assert.Equal(Visibility.Visible, startOver.Visibility);
     });
 
     [Fact]

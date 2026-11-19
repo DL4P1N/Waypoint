@@ -164,6 +164,7 @@
                     <StackPanel x:Name="ClassesSection" Visibility="Collapsed">
                         <!-- Classes -->
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Classes" />
+                        <local:UndoBar x:Name="ClassesBar" Margin="0,0,0,10" />
                         <TextBlock x:Name="NoClasses" Style="{StaticResource Note}" Margin="0,0,0,6" Text="No classes yet." />
                         <ItemsControl x:Name="ClassRows" ItemTemplate="{StaticResource ClassRowTemplate}" />
 

@@ -209,5 +209,7 @@ public sealed class FindAnywhereTests : IDisposable
         public void RestoreEntry(ListEntry entry, DateTime now) => throw new NotSupportedException();
 
         public string StartList(string name) => throw new NotSupportedException();
+
+        public void UndoStartList(string name, IReadOnlyList<long> checkedIds) => throw new NotSupportedException();
     }
 }

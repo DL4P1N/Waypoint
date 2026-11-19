@@ -61,6 +61,12 @@ public partial class SettingsView : UserControl
     private Action<string> _moveNotesFolder = _ => { };
     private DateOnly _shiftDate = DateOnly.FromDateTime(DateTime.Now);
     private List<ClassMeeting> _classes = [];
+
+    /// <summary>The classes as last saved or read, for going back to when a change couldn't be saved.</summary>
+    private List<ClassMeeting> _savedClasses = [];
+
+    /// <summary>Class changes asked for and not finished yet. While any is, a read doesn't replace the classes shown.</summary>
+    private int _classSaves;
     private int? _editingClass;
     private DateOnly? _termStart;
     private DateOnly? _termEnd;
@@ -860,6 +866,7 @@ public partial class SettingsView : UserControl
     {
         var form = _settings.GetClasses();
         _classes = (form.Classes ?? []).ToList();
+        _savedClasses = _classes.ToList();
         _termStart = form.TermStart;
         _termEnd = form.TermEnd;
         ClearClassForm();
@@ -961,33 +968,67 @@ public partial class SettingsView : UserControl
         return new ClassMeeting(name, ClassPlace.Text.Trim(), days, start, end, travel);
     }
 
-    private async void SaveClasses(List<ClassMeeting> classes)
+    /// <summary>
+    /// Saves the classes. They're shown straight away, so a quick second change starts from this one rather than
+    /// from the classes before it, and a read that comes back while a later change is still on its way is left
+    /// unshown, so it can't bring back what that change took out.
+    /// </summary>
+    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null)
     {
+        ClassesBar.Changed();
         var form = new ClassesForm(_termStart, _termEnd, classes);
-        var (ok, reply) = await Change(() => _settings.SaveClasses(form), ShowClassesStatus);
-        if (!ok)
+        _classes = classes;
+        ShowClasses();
+        _classSaves++;
+        var last = false;
+        try
         {
-            return;
-        }
+            var (ok, reply) = await Change(() => _settings.SaveClasses(form), ShowClassesStatus);
+            if (!ok)
+            {
+                return;
+            }
 
-        if (!reply.StartsWith("Saved", StringComparison.Ordinal))
-        {
+            if (!reply.StartsWith("Saved", StringComparison.Ordinal))
+            {
+                ShowClassesStatus(reply);
+                return;
+            }
+
+            _savedClasses = classes.ToList();
+
+            // The classes as the server saved them, read off the window's thread, then shown from that.
+            var saved = await Work.Read(() => _settings.GetClasses());
+            last = _classSaves == 1;
+            if (last)
+            {
+                Work.Peek(LoadClasses);
+                if (_settings.OnServer && Classes is { } here)
+                {
+                    here.Use(ClassSetup.FromForm(saved, here));
+                    _database.ScheduleCourses = here.Meetings.Select(meeting => meeting.Course).ToList();
+                }
+            }
+
             ShowClassesStatus(reply);
-            return;
-        }
+            if (done is not null)
+            {
+                ClassesBar.Show(done, undo);
+            }
 
-        // The classes as the server saved them, read off the window's thread, then shown from that.
-        var saved = await Work.Read(() => _settings.GetClasses());
-        Work.Peek(LoadClasses);
-        if (_settings.OnServer && Classes is { } here)
+            ShowAfterChanges();
+            _changed();
+        }
+        finally
         {
-            here.Use(ClassSetup.FromForm(saved, here));
-            _database.ScheduleCourses = here.Meetings.Select(meeting => meeting.Course).ToList();
+            _classSaves--;
+            if (_classSaves == 0 && !last)
+            {
+                // Nothing after this one will show the classes, and this one wasn't saved: back to what was.
+                _classes = _savedClasses.ToList();
+                ShowClasses();
+            }
         }
-
-        ShowClassesStatus(reply);
-        ShowAfterChanges();
-        _changed();
     }
 
     private void OnClassEdited(object sender, RoutedEventArgs e)
@@ -1019,7 +1060,7 @@ public partial class SettingsView : UserControl
 
     private void OnClassEditCancelled(object sender, RoutedEventArgs e) => ClearClassForm();
 
-    /// <summary>Removed straight away, like a work row. Anything being typed in the form stays.</summary>
+    /// <summary>Removed straight away, like a work row, with an Undo that puts the class back as it was, in its place.</summary>
     private void OnClassRemoved(object sender, RoutedEventArgs e)
     {
         var row = (ClassRow)((FrameworkElement)sender).DataContext;
@@ -1028,7 +1069,21 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        SaveClasses(_classes.Where((_, index) => index != row.Index).ToList());
+        var meeting = _classes[row.Index];
+        var at = row.Index;
+        SaveClasses(_classes.Where((_, index) => index != at).ToList(), $"Removed {meeting.Course}", () => PutClassBack(meeting, at));
+    }
+
+    private void PutClassBack(ClassMeeting meeting, int at)
+    {
+        if (_classes.Contains(meeting))
+        {
+            return;
+        }
+
+        var classes = _classes.ToList();
+        classes.Insert(Math.Min(at, classes.Count), meeting);
+        SaveClasses(classes);
     }
 
     private void OnTermStartClicked(object sender, RoutedEventArgs e)

@@ -78,6 +78,7 @@ public sealed class PagesApiTests : IDisposable
     [InlineData("POST", "/api/lists/entries")]
     [InlineData("POST", "/api/lists/rename")]
     [InlineData("POST", "/api/lists/start")]
+    [InlineData("POST", "/api/lists/start/undo")]
     [InlineData("GET", "/api/budget/purchases?words=milk")]
     [InlineData("GET", "/api/settings/weekly")]
     [InlineData("GET", "/api/settings/discord")]
@@ -140,6 +141,10 @@ public sealed class PagesApiTests : IDisposable
         lists.SetEntryDone(Database.GetListEntries("Trip").Single(), true, DateTime.Now);
         Assert.Equal("Trip is ready. Start with: charger", lists.StartList("Trip"));
         Assert.False(Database.GetListEntries("Trip").Single().Done);
+
+        // Its Undo checks again what was checked.
+        lists.UndoStartList("Trip", [Database.GetListEntries("Trip").Single().Id]);
+        Assert.True(Database.GetListEntries("Trip").Single().Done);
 
         Assert.Equal("Removed Trip", lists.DeleteList("Trip", DateTime.Now));
         Assert.DoesNotContain(lists.GetListOverview(), list => list.Name == "Trip");

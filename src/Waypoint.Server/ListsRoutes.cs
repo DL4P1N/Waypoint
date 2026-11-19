@@ -18,6 +18,11 @@ public static class ListsRoutes
             return Results.NoContent();
         });
         api.MapPost("/lists/start", (NameRequest request, WaypointServer server) => new TextValue(Lists(server).StartList(request.Name)));
+        api.MapPost("/lists/start/undo", (ListStartUndoRequest request, WaypointServer server) =>
+        {
+            Lists(server).UndoStartList(request.Name, request.CheckedIds);
+            return Results.NoContent();
+        });
         api.MapPost("/lists/delete", (NameRequest request, WaypointServer server) => new TextValue(Lists(server).DeleteList(request.Name, DateTime.Now)));
         api.MapPost("/lists/entries", (ListEntryRequest request, WaypointServer server) =>
         {

@@ -385,6 +385,31 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
+    public void A_removed_class_comes_back_as_it_was_and_in_its_place_with_Undo() => Ui.Run(ui =>
+    {
+        var art = new ClassMeeting("Art 101", "Room 4", [DayOfWeek.Monday, DayOfWeek.Wednesday], new TimeOnly(9, 0), new TimeOnly(10, 15), 10);
+        var bio = new ClassMeeting("Bio 102", "", [DayOfWeek.Tuesday], new TimeOnly(11, 0), new TimeOnly(12, 0));
+        var settings = new MemorySettings { Classes = new(new DateOnly(2030, 1, 7), new DateOnly(2030, 5, 3), [art, bio]) };
+        var view = OpenClasses(ui, settings);
+
+        var remove = UiTest.Descendants<Button>(view).Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Remove Art 101");
+        UiTest.Call(view, "OnClassRemoved", remove, new RoutedEventArgs());
+        Assert.Equal([bio], settings.Classes.Classes);
+        var bar = UiTest.Named<UndoBar>(view, "ClassesBar");
+        Assert.Equal(Visibility.Visible, bar.Visibility);
+        Assert.Equal("Removed Art 101", UiTest.Named<TextBlock>(bar, "Message").Text);
+
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([art, bio], settings.Classes.Classes);
+        Assert.Equal(new DateOnly(2030, 1, 7), settings.Classes.TermStart);
+        Assert.Equal(new DateOnly(2030, 5, 3), settings.Classes.TermEnd);
+        Assert.Equal([SettingsView.ClassLabel(art), SettingsView.ClassLabel(bio)], ClassLines(view));
+        Assert.Equal(Visibility.Collapsed, bar.Visibility);
+    });
+
+    [Fact]
     public void Classes_saved_on_the_server_are_used_on_this_pc_too() => Ui.Run(ui =>
     {
         var here = new ClassSchedule(DateOnly.MinValue, DateOnly.MinValue, [], [new DateOnly(2026, 10, 16)]);
