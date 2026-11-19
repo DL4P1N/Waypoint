@@ -973,8 +973,9 @@ public partial class SettingsView : UserControl
     /// from the classes before it, and a read that comes back while a later change is still on its way is left
     /// unshown, so it can't bring back what that change took out.
     /// </summary>
-    private async void SaveClasses(List<ClassMeeting> classes)
+    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null)
     {
+        ClassesBar.Changed();
         var form = new ClassesForm(_termStart, _termEnd, classes);
         _classes = classes;
         ShowClasses();
@@ -1010,6 +1011,11 @@ public partial class SettingsView : UserControl
             }
 
             ShowClassesStatus(reply);
+            if (done is not null)
+            {
+                ClassesBar.Show(done, undo);
+            }
+
             ShowAfterChanges();
             _changed();
         }
@@ -1054,7 +1060,7 @@ public partial class SettingsView : UserControl
 
     private void OnClassEditCancelled(object sender, RoutedEventArgs e) => ClearClassForm();
 
-    /// <summary>Removed straight away, like a work row. Anything being typed in the form stays.</summary>
+    /// <summary>Removed straight away, like a work row, with an Undo that puts the class back as it was, in its place.</summary>
     private void OnClassRemoved(object sender, RoutedEventArgs e)
     {
         var row = (ClassRow)((FrameworkElement)sender).DataContext;
@@ -1063,7 +1069,21 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        SaveClasses(_classes.Where((_, index) => index != row.Index).ToList());
+        var meeting = _classes[row.Index];
+        var at = row.Index;
+        SaveClasses(_classes.Where((_, index) => index != at).ToList(), $"Removed {meeting.Course}", () => PutClassBack(meeting, at));
+    }
+
+    private void PutClassBack(ClassMeeting meeting, int at)
+    {
+        if (_classes.Contains(meeting))
+        {
+            return;
+        }
+
+        var classes = _classes.ToList();
+        classes.Insert(Math.Min(at, classes.Count), meeting);
+        SaveClasses(classes);
     }
 
     private void OnTermStartClicked(object sender, RoutedEventArgs e)
