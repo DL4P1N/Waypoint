@@ -37,8 +37,8 @@ public partial class App
     /// <summary>Set once a restore starts. Nothing new is taken from then on, and Waypoint starts again after.</summary>
     private bool _restoring;
 
-    /// <summary>What the copy started after a restore says once it's open. Set, Waypoint starts again on the way out.</summary>
-    private string? _afterRestore;
+    /// <summary>Whether this copy holds the single-instance lock, so it lets go of it properly on the way out.</summary>
+    private bool _holdsInstance;
 
     /// <summary>
     /// What closing stops, stopped the same way before a restore so nothing started against the old data finishes
@@ -87,27 +87,40 @@ public partial class App
     ];
 
     /// <summary>
-    /// Closes the usual way, then starts again, saying <paramref name="said"/> once it's open. Used after a
-    /// restore, whether or not it went in, since what was stopped for it isn't started again in this run.
+    /// Starts the next copy, then closes the usual way. Used after a restore, whether or not it went in, since what was
+    /// stopped for it isn't started again in this run. The next copy waits for this one to let go of the lock, then says
+    /// <paramref name="said"/>. If it can't be started, carrying on here isn't safe either, so this says to open
+    /// Waypoint again before closing, rather than closing without a word.
     /// </summary>
     private void RestartWith(string said)
     {
-        _afterRestore = said;
+        if (!StartAfterRestore(said))
+        {
+            NoteConfirmWindow.Tell(null, RestoreTitle, $"{said} Waypoint couldn't open again by itself, so it closes now. Open it again the way you usually do.");
+        }
+
         Shutdown();
     }
 
-    /// <summary>Starts the next copy, once this one has let go of the single-instance lock.</summary>
-    private void StartAfterRestore()
+    private static bool StartAfterRestore(string said)
     {
-        if (_afterRestore is not { } said || Environment.ProcessPath is not { } exe)
+        if (Environment.ProcessPath is not { } exe)
         {
-            return;
+            return false;
         }
 
-        var start = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
-        start.ArgumentList.Add(AfterRestoreArgument);
-        start.ArgumentList.Add(said);
-        System.Diagnostics.Process.Start(start);
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
+            start.ArgumentList.Add(AfterRestoreArgument);
+            start.ArgumentList.Add(said);
+            return System.Diagnostics.Process.Start(start) is not null;
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            LogError(exception);
+            return false;
+        }
     }
 
     /// <summary>
@@ -179,10 +192,16 @@ public partial class App
         Step(() => _worker?.ForgetLateNight());
         Step(() => _transcription?.Dispose());
         Step(() => _tray?.Dispose());
-        Step(() => _singleInstance?.Dispose());
+        Step(() =>
+        {
+            // Released, not just dropped, so a copy started after a restore takes it over cleanly.
+            if (_holdsInstance)
+            {
+                _singleInstance?.ReleaseMutex();
+            }
 
-        // After a restore, Waypoint opens again on what's there now.
-        Step(StartAfterRestore);
+            _singleInstance?.Dispose();
+        });
         base.OnExit(e);
     }
 }

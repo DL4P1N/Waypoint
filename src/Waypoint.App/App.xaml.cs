@@ -111,6 +111,8 @@ public partial class App : System.Windows.Application
             isFirstInstance = WaitForEarlierCopy(_singleInstance);
         }
 
+        _holdsInstance = isFirstInstance;
+
         _showList = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.ShowList");
         if (!isFirstInstance)
         {
