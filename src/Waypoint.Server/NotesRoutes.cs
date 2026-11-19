@@ -142,7 +142,7 @@ public static class NotesRoutes
     {
         group.MapPost("/place", (PlaceRequest request) => notes.Value.Data.PlaceNewNote(request.PickedFolderId, request.FolderPicked, DateTime.Now));
         group.MapPost("/folder-for", (NotePlacement placement) => new Found<long?>(notes.Value.Data.FolderFor(placement, DateTime.Now)));
-        group.MapPost("/from-file", (FromFileRequest request) => notes.Value.Data.StartFromFile(request.File, request.PickedFolderId, request.FolderPicked, DateTime.Now));
+        group.MapPost("/from-file", (FromFileRequest request) => notes.Value.Data.StartFromFile(request.File, request.PickedFolderId, request.FolderPicked, DateTime.Now, request.ClientId));
         group.MapPost("/{id:long}/files", (long id, FileText file) => notes.Value.Data.AttachFile(id, file, DateTime.Now));
         group.MapPost("/for-recording", (RecordingNoteRequest request) =>
             notes.Value.Data.StartForRecording(request.FileName, request.PickedFolderId, request.FolderPicked, request.At, request.Title));

@@ -602,4 +602,54 @@ public sealed class DiscordTests : IDisposable
         Assert.False(overlapped);
         Assert.Equal(1, failures);
     }
+
+    [Fact]
+    public async Task Looking_for_an_earlier_post_takes_only_this_bots_own_and_reads_past_the_first_page()
+    {
+        var card = new DiscordCard("Made up card", "Made up words", [], CardTone.Reminder);
+        var shown = """[{"title":"Made up card","description":"Made up words"}]""";
+        var fake = new FakeDiscord(request =>
+        {
+            var url = request.RequestUri!.ToString();
+            if (url.EndsWith("/users/@me", StringComparison.Ordinal))
+            {
+                return (HttpStatusCode.OK, """{"id":"self"}""");
+            }
+
+            // A full first page of the bot's other posts, then another bot's look-alike before the bot's own.
+            if (url.Contains("after=1000", StringComparison.Ordinal))
+            {
+                return (HttpStatusCode.OK, "[" + string.Join(",", Enumerable.Range(1001, 100).Select(id => $$"""{"id":"{{id}}","author":{"id":"self","bot":true},"embeds":[{"title":"Something else"}]}""")) + "]");
+            }
+
+            return url.Contains("after=1100", StringComparison.Ordinal)
+                ? (HttpStatusCode.OK, $$"""[{"id":"1102","author":{"id":"self","bot":true},"embeds":{{shown}}},{"id":"1101","author":{"id":"another-bot","bot":true},"embeds":{{shown}}}]""")
+                : (HttpStatusCode.OK, "[]");
+        });
+
+        var found = await Bridge(fake).FindSentAfterAsync("200", "1000", "made-up-nonce", card, new HashSet<string>());
+
+        Assert.Equal(new SentSearch(SentLookup.Found, "1102"), found);
+    }
+
+    [Fact]
+    public async Task Looking_for_an_earlier_post_says_it_isnt_known_when_the_channel_or_the_bot_cant_be_read_and_refused_when_turned_away()
+    {
+        var card = new DiscordCard("Made up card", null, [], CardTone.Reminder);
+        var channelDown = new FakeDiscord(request => request.RequestUri!.ToString().EndsWith("/users/@me", StringComparison.Ordinal)
+            ? (HttpStatusCode.OK, """{"id":"self"}""")
+            : (HttpStatusCode.InternalServerError, ""));
+        var nobody = new FakeDiscord(_ => (HttpStatusCode.Unauthorized, ""));
+        var empty = new FakeDiscord(request => request.RequestUri!.ToString().EndsWith("/users/@me", StringComparison.Ordinal)
+            ? (HttpStatusCode.OK, """{"id":"self"}""")
+            : (HttpStatusCode.OK, "[]"));
+
+        Assert.Equal(SentLookup.Unknown, (await Bridge(channelDown).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+        var gone = new FakeDiscord(request => request.RequestUri!.ToString().EndsWith("/users/@me", StringComparison.Ordinal)
+            ? (HttpStatusCode.OK, """{"id":"self"}""")
+            : (HttpStatusCode.NotFound, """{"code":10003}"""));
+        Assert.Equal(SentLookup.Refused, (await Bridge(nobody).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+        Assert.Equal(SentLookup.Refused, (await Bridge(gone).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+        Assert.Equal(SentLookup.NotFound, (await Bridge(empty).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+    }
 }

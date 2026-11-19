@@ -37,8 +37,11 @@ public sealed record CourseRequest(string Course);
 
 public sealed record PlaceRequest(long? PickedFolderId, bool FolderPicked);
 
-/// <summary>A file read on the PC, with its text recognized there, so the server only ever sees text.</summary>
-public sealed record FromFileRequest(FileText File, long? PickedFolderId, bool FolderPicked);
+/// <summary>
+/// A file read on the PC, with its text recognized there, so the server only ever sees text. ClientId, when given,
+/// makes the same file sent again give the note already made.
+/// </summary>
+public sealed record FromFileRequest(FileText File, long? PickedFolderId, bool FolderPicked, string? ClientId = null);
 
 /// <summary>At is when the recording started, so it's filed under the class that was on then.</summary>
 public sealed record RecordingNoteRequest(string FileName, long? PickedFolderId, bool FolderPicked, DateTime At, string? Title);

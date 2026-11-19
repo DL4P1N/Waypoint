@@ -73,6 +73,12 @@ public sealed partial class DiscordPhoneTests : IDisposable
         /// <summary>When set, every request fails with this text, the way a dropped connection does.</summary>
         public string? FailWith { get; set; }
 
+        /// <summary>When set, reading a channel's messages fails, the way an outage does.</summary>
+        public bool ListFails { get; set; }
+
+        /// <summary>When set, reading a channel's messages gets this answer instead, such as a channel that's gone.</summary>
+        public HttpStatusCode? ListStatus { get; set; }
+
         public IEnumerable<(HttpMethod Method, string Url, string Body)> Of(HttpMethod method)
         {
             lock (Requests)
@@ -139,6 +145,16 @@ public sealed partial class DiscordPhoneTests : IDisposable
             if (request.Method == HttpMethod.Patch && EditStatus is { } status)
             {
                 return new HttpResponseMessage(status) { Content = new StringContent("""{"code":50035,"message":"Invalid Form Body"}""") };
+            }
+
+            if (request.Method == HttpMethod.Get && url.EndsWith("/users/@me", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"id":"bot"}""") };
+            }
+
+            if (request.Method == HttpMethod.Get && (ListFails || ListStatus is not null) && ListedChannel(url) is not null)
+            {
+                return new HttpResponseMessage(ListStatus ?? HttpStatusCode.ServiceUnavailable) { Content = new StringContent("") };
             }
 
             if (request.Method == HttpMethod.Get)
@@ -223,14 +239,36 @@ public sealed partial class DiscordPhoneTests : IDisposable
         }
     }
 
+    /// <summary>The PC each worker here runs on, so what it showed is seen across restarts.</summary>
+    private readonly Host _pc = new();
+
     private sealed class Host : IWorkerHost
     {
+        /// <summary>The titles of the notices and reminders shown on the PC, in order.</summary>
+        public List<string> Shown { get; } = [];
+
+        public List<string> ShownCopy()
+        {
+            lock (Shown)
+            {
+                return Shown.ToList();
+            }
+        }
+
         public void ShowNotice(string title, string text)
         {
+            lock (Shown)
+            {
+                Shown.Add(title);
+            }
         }
 
         public void ShowReminder(DueReminder reminder, Action closed)
         {
+            lock (Shown)
+            {
+                Shown.Add(reminder.Item.Title);
+            }
         }
 
         public void ShowWeeklyReset(string text)
@@ -262,7 +300,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
     private WaypointWorker Worker(string? toDo = "todo-ch", string? lists = "lists-ch", ICaptureSorter? sorter = null, Schedule.ClassSchedule? classes = null)
     {
         var settings = new WaypointSettings(Schedule: classes, Discord: new DiscordSettings("token", "owner", "capture", "alerts", "budget", toDo, lists));
-        var worker = new WaypointWorker(_database, settings, _folder, new Host(), exception => throw exception, new WorkerParts(
+        var worker = new WaypointWorker(_database, settings, _folder, _pc, exception => throw exception, new WorkerParts(
             _ => new NoTokens(),
             Clock: () => _now,
             Http: () => new HttpClient(_discord),

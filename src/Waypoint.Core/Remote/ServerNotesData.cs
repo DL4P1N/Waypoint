@@ -458,8 +458,8 @@ public sealed class ServerNotesData : INotesData
         }
     }
 
-    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now) =>
-        _server.Send<StartedNote>(Post, "api/notes/from-file", new FromFileRequest(file, pickedFolderId, folderPicked));
+    public StartedNote StartFromFile(FileText file, long? pickedFolderId, bool folderPicked, DateTime now, string? onceKey = null) =>
+        _server.Send<StartedNote>(Post, "api/notes/from-file", new FromFileRequest(file, pickedFolderId, folderPicked, onceKey));
 
     public StartedNote AttachFile(long noteId, FileText file, DateTime now) => _server.Send<StartedNote>(Post, $"api/notes/{Real(noteId)}/files", file);
 

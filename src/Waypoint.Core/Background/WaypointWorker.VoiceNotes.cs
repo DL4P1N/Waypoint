@@ -94,8 +94,7 @@ public sealed partial class WaypointWorker
 
         if (attachment.DurationSeconds is { } seconds && TimeSpan.FromSeconds(seconds) > VoiceNotes.MaxLength)
         {
-            await discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName, tooLong: true));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, RecordingNotRead(attachment.FileName, tooLong: true), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
 
@@ -108,8 +107,7 @@ public sealed partial class WaypointWorker
                 Directory.CreateDirectory(VoiceFolder);
                 if (await discord.DownloadAsync(attachment, part, FileReader.MaxBytes) is { } problem)
                 {
-                    await discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", problem, CardTone.Attention));
-                    dealtWith();
+                    await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", problem, CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
                     return;
                 }
 
@@ -121,8 +119,7 @@ public sealed partial class WaypointWorker
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             PlainProblem.Report(exception);
-            await discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", $"Couldn't save {attachment.FileName}. Try sending it again.", CardTone.Attention));
-            dealtWith();
+            await TellThenDealtWith(discord.ReplyAsync(message.Id, DiscordText.Notice("Voice note not read", $"Couldn't save {attachment.FileName}. Try sending it again.", CardTone.Attention), nonce: FileNonce(attachment)), dealtWith);
             return;
         }
         finally

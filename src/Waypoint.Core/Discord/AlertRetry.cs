@@ -14,6 +14,9 @@ public static class AlertRetry
         TimeSpan.FromMinutes(2),
     ];
 
+    /// <summary>How long all the tries take, from the first to the last.</summary>
+    public static TimeSpan Total => Waits.Aggregate(TimeSpan.Zero, (sum, wait) => sum + wait);
+
     /// <summary>True once <paramref name="attempt"/> succeeds, false if every try failed.</summary>
     public static async Task<bool> RunAsync(Func<Task<bool>> attempt, Func<TimeSpan, Task>? wait = null)
     {

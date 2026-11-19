@@ -63,6 +63,143 @@ public sealed partial class DiscordPhoneTests
     }
 
     [Fact]
+    public async Task A_reminder_card_whose_nonce_has_lapsed_is_not_posted_again_while_the_channel_cant_be_read()
+    {
+        var (task, key) = DueReminderFor("Made up parcel pickup");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+
+        // Discord no longer keeps to the nonce, and the channel can't be read, so whether the card is there isn't known.
+        _discord.ForgetNonces();
+        _discord.ListFails = true;
+        var second = Worker(toDo: null, lists: null);
+        bool Looked() => _discord.All.Count(request => request.Method == HttpMethod.Get && request.Url.Contains("/channels/alerts/messages?")) >= 3;
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return Looked();
+        });
+        Assert.Single(CardsAbout("Made up parcel pickup"));
+        Assert.Equal(0, Rows("sent_reminders"));
+        Assert.NotNull(_database.GetDiscordSend(key));
+
+        // Once the channel can be read, the card already there is found and kept.
+        _discord.ListFails = false;
+        _discord.ListMade = true;
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return Rows("sent_reminders") == 1;
+        });
+
+        var card = Assert.Single(CardsAbout("Made up parcel pickup"));
+        Assert.Equal(1, Rows("sent_reminders", $"message_id = '{card.Id}'"));
+        AssertOneAction(second, card.Id, task);
+    }
+
+    [Fact]
+    public async Task A_reminder_whose_card_cant_be_looked_for_shows_on_the_pc_once_even_after_a_restart()
+    {
+        var (_, key) = DueReminderFor("Made up rent check");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+        _discord.ForgetNonces();
+        _discord.ListFails = true;
+
+        // Within the time sending is tried, it's only looked for again, and shown nowhere yet.
+        var second = Worker(toDo: null, lists: null);
+        await LookedFor(second, 2);
+        Assert.DoesNotContain("Made up rent check", _pc.ShownCopy());
+
+        // After that it shows on the PC, once, and isn't posted again.
+        _now = _now.Add(AlertRetry.Total);
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return _pc.ShownCopy().Contains("Made up rent check");
+        });
+        second.StopDiscord();
+        var third = Worker(toDo: null, lists: null);
+        await LookedFor(third, 3);
+
+        Assert.Single(_pc.ShownCopy(), title => title == "Made up rent check");
+        Assert.Single(CardsAbout("Made up rent check"));
+        Assert.NotNull(_database.GetDiscordSend(key));
+    }
+
+    [Fact]
+    public async Task A_reminder_whose_channel_is_gone_shows_on_the_pc_straight_away()
+    {
+        var (_, key) = DueReminderFor("Made up oil change");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+        _discord.ForgetNonces();
+        _discord.ListStatus = System.Net.HttpStatusCode.NotFound;
+
+        var second = Worker(toDo: null, lists: null);
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return _pc.ShownCopy().Contains("Made up oil change");
+        });
+
+        Assert.Single(CardsAbout("Made up oil change"));
+    }
+
+    [Fact]
+    public async Task A_held_notice_whose_earlier_try_cant_be_looked_for_shows_on_the_pc_once_and_is_let_go()
+    {
+        _database.HoldNotice("Made up paycheck", "Added: $9.00", CardTone.Money, false);
+        var held = Assert.Single(_database.GetHeldNotices());
+
+        // Noted as tried before, with nothing heard back, and the channel can't be read.
+        _database.BeginDiscordSend($"held:{held.Id}", "alerts", _now);
+        _discord.ListFails = true;
+        var worker = Worker(toDo: null, lists: null);
+        await LookedFor(worker, 2);
+        Assert.Single(_database.GetHeldNotices());
+        Assert.DoesNotContain("Made up paycheck", _pc.ShownCopy());
+
+        _now = _now.Add(AlertRetry.Total);
+        await Until(() =>
+        {
+            worker.CheckAlerts();
+            return _database.GetHeldNotices().Count == 0;
+        });
+        await Until(() => !worker.SendingHeld);
+        worker.CheckAlerts();
+        await Until(() => !worker.SendingHeld);
+
+        Assert.Single(_pc.ShownCopy(), title => title == "Made up paycheck");
+        Assert.DoesNotContain(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up paycheck"));
+        Assert.Empty(_database.GetDiscordSends("held:"));
+    }
+
+    /// <summary>Runs rounds until the alerts channel has been read this many more times.</summary>
+    private async Task LookedFor(Background.WaypointWorker worker, int times)
+    {
+        int Reads() => _discord.All.Count(request => request.Method == HttpMethod.Get && request.Url.Contains("/channels/alerts/messages?"));
+        var before = Reads();
+        await Until(() =>
+        {
+            worker.CheckAlerts();
+            return Reads() >= before + times;
+        });
+    }
+
+    [Fact]
     public async Task A_reminder_card_tried_again_soon_after_carries_the_same_nonce_so_discord_makes_it_once()
     {
         var (task, key) = DueReminderFor("Made up form to sign");
@@ -95,7 +232,7 @@ public sealed partial class DiscordPhoneTests
         FailPartway("BEFORE INSERT ON preferences WHEN NEW.key = 'discord_pinned_views'");
         var first = Worker(lists: null);
         await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
-        await Task.Delay(50);
+        await first.ViewsSettledAsync();
         first.StopDiscord();
         StopFailingPartway();
         var noted = _database.GetDiscordSends("view:");
@@ -103,7 +240,7 @@ public sealed partial class DiscordPhoneTests
         Assert.All(noted, send => Assert.NotNull(send.MessageId));
         var second = Worker(lists: null);
         await second.RefreshDiscordViewsAsync();
-        await Task.Delay(50);
+        await second.ViewsSettledAsync();
         AssertEachViewMadeOnce();
         Assert.Empty(_database.GetDiscordSends("view:"));
 
@@ -123,7 +260,7 @@ public sealed partial class DiscordPhoneTests
         FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
         var first = Worker(lists: null);
         await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
-        await Task.Delay(50);
+        await first.ViewsSettledAsync();
         first.StopDiscord();
         StopFailingPartway();
         Assert.NotEmpty(ViewsMade());
@@ -132,7 +269,7 @@ public sealed partial class DiscordPhoneTests
         _discord.ListMade = true;
         var second = Worker(lists: null);
         await second.RefreshDiscordViewsAsync();
-        await Task.Delay(50);
+        await second.ViewsSettledAsync();
 
         AssertEachViewMadeOnce();
         Assert.Empty(_database.GetDiscordSends("view:"));
@@ -161,8 +298,10 @@ public sealed partial class DiscordPhoneTests
         var second = Worker(toDo: null, lists: null);
         second.CheckAlerts();
         await Until(() => _database.GetHeldNotices().Count == 0);
+
+        // A round after it's let go starts no send of its own, and the one that sent it is waited out.
         second.CheckAlerts();
-        await Task.Delay(50);
+        await Until(() => !second.SendingHeld);
 
         Assert.Single(CardsAbout("Made up deposit"));
         Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up deposit"));
@@ -215,7 +354,7 @@ public sealed partial class DiscordPhoneTests
 
         await Until(() => _database.GetHeldNotices().Count == 0);
         worker.CheckAlerts();
-        await Task.Delay(50);
+        await Until(() => !worker.SendingHeld);
 
         Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up refund"));
         Assert.Empty(_database.GetDiscordSends("held:"));

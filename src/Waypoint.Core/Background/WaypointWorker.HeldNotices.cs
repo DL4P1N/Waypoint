@@ -33,6 +33,18 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>Whether a held notice is going out right now. For tests, to know a round's sends are over.</summary>
+    internal bool SendingHeld
+    {
+        get
+        {
+            lock (_heldSending)
+            {
+                return _heldSending.Count > 0;
+            }
+        }
+    }
+
     /// <summary>
     /// A held notice is kept until it's gone out, and noted before it's sent, so a crash partway sends it once:
     /// never lost, and never twice. It's let go in the same write that notes it's done.
@@ -44,7 +56,14 @@ public sealed partial class WaypointWorker
         var key = HeldSendKey(notice.Id);
         try
         {
-            await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key);
+            var later = false;
+            await SendNoticeAsync(notice.Title, notice.Text, notice.Tone, notice.ToBudget, sendKey: key, tryLater: () => later = true);
+            if (later)
+            {
+                // Kept, and its note with it, so it's looked for again on a later round instead of sent twice.
+                return;
+            }
+
             _database.InOneWrite(() =>
             {
                 _database.DropHeldNotice(notice.Id);

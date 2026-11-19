@@ -103,7 +103,28 @@ public sealed partial class WaypointWorker
         var messageId = send.MessageId;
         if (messageId is null && !send.Fresh && channel is not null)
         {
-            messageId = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(key))).MessageId;
+            var search = await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(key));
+            if (search.CantTell)
+            {
+                // Whether the earlier try went out can't be told, and Discord may no longer keep to its nonce, so
+                // it's never sent again from here. For a while it's looked for again on later rounds. Once that's
+                // gone on as long as sending is tried, or Discord turns it away for good, it shows on this PC,
+                // once. Its note stays, and goes once the reminder is answered.
+                if (search.Result == SentLookup.Refused || _clock() - send.StartedAt >= AlertRetry.Total)
+                {
+                    if (_database.MarkDiscordSendShownHere(key))
+                    {
+                        DiscordHealth.Sent(false, _clock());
+                        ShowReminder(reminder);
+                        return;
+                    }
+                }
+
+                Release(reminder);
+                return;
+            }
+
+            messageId = search.MessageId;
         }
 
         var sent = messageId is not null;

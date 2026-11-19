@@ -18,7 +18,7 @@ public sealed partial class WaypointWorker
     /// For a notice that must go out once, such as a held one: it's noted under this key before it's sent and sent with
     /// Discord's nonce, so a try before that went through is found instead of sent again. The caller lets the note go.
     /// </param>
-    private async Task<string?> SendNoticeAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null, string? sendKey = null)
+    private async Task<string?> SendNoticeAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null, string? sendKey = null, Action? tryLater = null)
     {
         if (canWait && BedtimeSchedule.IsQuiet(_clock()))
         {
@@ -48,7 +48,24 @@ public sealed partial class WaypointWorker
         }
         else if (send is { Fresh: false, Channel: { } channel })
         {
-            id = (await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(send.Key))).MessageId;
+            var search = await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(send.Key));
+            if (search.CantTell)
+            {
+                // Whether the earlier try went out can't be told, so it's never sent again from here. For a while
+                // it's looked for again later. Once that's gone on as long as sending is tried, or Discord turns it
+                // away for good, it shows on this PC instead and is let go.
+                if (search.Result == SentLookup.Unknown && _clock() - send.StartedAt < AlertRetry.Total)
+                {
+                    tryLater?.Invoke();
+                    return null;
+                }
+
+                DiscordHealth.Sent(false, _clock());
+                _host.ShowNotice(title, text);
+                return null;
+            }
+
+            id = search.MessageId;
         }
 
         var sent = id is not null || await AlertRetry.RunAsync(

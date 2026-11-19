@@ -30,6 +30,22 @@ public sealed partial class WaypointDatabase
         );
         """);
 
+    /// <summary>Whether a note's post was shown on this PC instead, while Discord couldn't say if it went out.</summary>
+    private void AddDiscordSendShownHere() => AddColumnIfMissing("discord_sends", "shown_here", "INTEGER NOT NULL DEFAULT 0");
+
+    /// <summary>
+    /// Marks a note's post as shown on this PC instead. True only the first time, so it's shown once however many
+    /// rounds or restarts follow. The note itself stays, so a post found in Discord later is never sent again.
+    /// </summary>
+    public bool MarkDiscordSendShownHere(string key)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE discord_sends SET shown_here = 1 WHERE send_key = $key AND shown_here = 0";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteNonQuery() == 1;
+    }
+
     /// <summary>
     /// Notes a post before it's made, or hands back the note from a try before. One for another channel, or left
     /// long ago with nothing posted, starts over with a new nonce.

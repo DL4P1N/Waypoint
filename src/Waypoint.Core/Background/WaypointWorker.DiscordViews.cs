@@ -73,6 +73,16 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>
+    /// Finishes once any round of views already going, such as the one a start sets off, is over. For tests, which
+    /// otherwise can't tell a round still posting from one that's done.
+    /// </summary>
+    internal async Task ViewsSettledAsync()
+    {
+        await _viewsRunning.WaitAsync();
+        _viewsRunning.Release();
+    }
+
     private bool ViewsDue() => _viewsDirty || _viewsDrawnAt is not { } drawn || _clock() - drawn >= ViewRefreshInterval;
 
     /// <summary>Every view that has a channel, in the order they should sit in it.</summary>
