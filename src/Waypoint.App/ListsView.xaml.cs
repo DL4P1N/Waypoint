@@ -508,7 +508,10 @@ public partial class ListsView : UserControl
         }
     }
 
-    /// <summary>Start over unchecks the whole list, the same as typing "start my morning routine", and says where to begin.</summary>
+    /// <summary>
+    /// Start over unchecks the whole list, the same as typing "start my morning routine", and says where to begin,
+    /// with an Undo that checks again what was checked.
+    /// </summary>
     private async void OnStartOverClicked(object sender, RoutedEventArgs e)
     {
         if (_editing is { } editing)
@@ -517,13 +520,26 @@ public partial class ListsView : UserControl
         }
 
         var name = _selected;
-        var (ok, said) = await Change(() => _lists.StartList(name), Bar);
+        var lists = _lists;
+        var (ok, (said, wasChecked)) = await Change(() =>
+        {
+            // What was checked, read just before, in the same turn as the change, so Undo puts back exactly that.
+            var wasChecked = (lists.GetListOverview().FirstOrDefault(list => list.Name == name)?.Entries ?? [])
+                .Where(entry => entry.Done).Select(entry => entry.Id).ToList();
+            return (lists.StartList(name), wasChecked);
+        }, Bar);
         if (!ok)
         {
             return;
         }
 
-        Bar.Show(said);
+        Bar.Show(said, wasChecked.Count == 0 ? null : async () =>
+        {
+            if (await Change(() => _lists.UndoStartList(name, wasChecked)))
+            {
+                Redraw();
+            }
+        });
         Redraw();
     }
 

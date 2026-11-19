@@ -3,10 +3,10 @@ using Waypoint.Core.Discord;
 
 namespace Waypoint.Core.Background;
 
-/// <summary>The buttons on posts: Edit on a note's part, with its form and how the edit is saved, and Start over on a list's post.</summary>
+/// <summary>The buttons on posts: Edit on a note's part, with its form and how the edit is saved, and Start over on a list's post, with its Undo.</summary>
 public sealed partial class WaypointWorker
 {
-    /// <summary>The Edit button on a note's part, and Start over on a list's post. Null when it isn't one of them.</summary>
+    /// <summary>The Edit button on a note's part, and Start over on a list's post with its Undo. Null when it isn't one of them.</summary>
     private ButtonResult? OnThreadAction(string action)
     {
         if (action.StartsWith(NoteEdit, StringComparison.Ordinal))
@@ -21,13 +21,40 @@ public sealed partial class WaypointWorker
                 return new ButtonResult(Outcome: "That list is gone now.");
             }
 
+            // What was checked is kept, so the post's Undo can check it again.
+            var wasChecked = list.Entries.Where(entry => entry.Done).Select(entry => entry.Id.ToString(CultureInfo.InvariantCulture));
+            _database.SetPreference(ListUndoKey(list.Name), string.Join(',', wasChecked));
             _database.StartList(list.Name);
             var started = _database.GetListOverview(includeEmptyShopping: true).First(found => found.Name == list.Name);
-            return new ButtonResult(ListPostCard(started));
+            var card = ListPostCard(started);
+            return new ButtonResult(card with { Actions = [.. card.Actions, new CardAction("Undo", ListStartUndo + DiscordViews.ListTarget(list.Name), ButtonRole.Other)] });
+        }
+
+        if (action.StartsWith(ListStartUndo, StringComparison.Ordinal))
+        {
+            if (ListForTarget(action[ListStartUndo.Length..]) is not { } list)
+            {
+                return new ButtonResult(Outcome: "That list is gone now.");
+            }
+
+            var ids = (_database.GetPreference(ListUndoKey(list.Name)) ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var found) ? found : -1)
+                .Where(id => id > 0)
+                .ToList();
+            _database.UndoStartList(list.Name, ids, _clock());
+            _database.SetPreference(ListUndoKey(list.Name), "");
+            var undone = _database.GetListOverview(includeEmptyShopping: true).First(found => found.Name == list.Name);
+            return new ButtonResult(ListPostCard(undone));
         }
 
         return null;
     }
+
+    /// <summary>Undo on a list's post after Start over, which checks again what was checked before it.</summary>
+    public const string ListStartUndo = "listundo:";
+
+    private static string ListUndoKey(string list) => $"list_start_undo:{list}";
 
     private static bool TryReadPart(string rest, out long noteId, out int part, out string hash)
     {

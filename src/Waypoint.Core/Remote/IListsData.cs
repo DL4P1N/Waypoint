@@ -34,6 +34,9 @@ public interface IListsData : IPreferences
 
     /// <summary>Unchecks every entry so a routine or checklist can be run again, and says what to start with.</summary>
     string StartList(string name);
+
+    /// <summary>Undo for Start over: checks again what was checked before it.</summary>
+    void UndoStartList(string name, IReadOnlyList<long> checkedIds);
 }
 
 /// <summary>Today's behavior: every call goes to the database on this PC. The server answers with this too.</summary>
@@ -64,6 +67,8 @@ public sealed class LocalListsData(WaypointDatabase database) : IListsData
     public void RestoreEntry(ListEntry entry, DateTime now) => database.RestoreEntry(entry, now);
 
     public string StartList(string name) => database.StartList(name);
+
+    public void UndoStartList(string name, IReadOnlyList<long> checkedIds) => database.UndoStartList(name, checkedIds, DateTime.Now);
 }
 
 /// <summary>
@@ -101,7 +106,12 @@ public sealed class ServerListsData(ServerClient server) : IListsData
     public void RestoreEntry(ListEntry entry, DateTime now) => server.Send(Post, "api/lists/entries/restore", new EntryRequest(entry));
 
     public string StartList(string name) => server.Send<TextValue>(Post, "api/lists/start", new NameRequest(name)).Value ?? "";
+
+    public void UndoStartList(string name, IReadOnlyList<long> checkedIds) =>
+        server.Send(Post, "api/lists/start/undo", new ListStartUndoRequest(name, checkedIds.ToList()));
 }
+
+public sealed record ListStartUndoRequest(string Name, List<long> CheckedIds);
 
 public sealed record ListRenameRequest(string Name, string NewName);
 

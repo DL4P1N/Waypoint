@@ -908,6 +908,12 @@ public sealed partial class DiscordThreadTests : IDisposable
         var result = await worker.OnButtonActedAsync(new ButtonPress(DiscordBridge.ActionPrefix + startOver.Id, null, "m", post.Id));
         Assert.NotNull(result!.Card);
         Assert.DoesNotContain(_database.GetListEntries("Packing"), entry => entry.Done);
+
+        // Its Undo checks socks again, and only socks.
+        var undo = result.Card!.Actions.Single(action => action.Label == "Undo");
+        var undone = await worker.OnButtonActedAsync(new ButtonPress(DiscordBridge.ActionPrefix + undo.Id, null, "m", post.Id));
+        Assert.Contains(undone!.Card!.Actions, action => action.Label == "Start over");
+        Assert.Equal(["socks"], _database.GetListEntries("Packing").Where(entry => entry.Done).Select(entry => entry.Text));
     }
 
     [Fact]
