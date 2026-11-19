@@ -158,6 +158,35 @@ public sealed partial class DiscordPhoneTests
         Assert.Single(CardsAbout("Made up oil change"));
     }
 
+    [Fact]
+    public async Task A_held_notice_whose_earlier_try_cant_be_looked_for_shows_on_the_pc_once_and_is_let_go()
+    {
+        _database.HoldNotice("Made up paycheck", "Added: $9.00", CardTone.Money, false);
+        var held = Assert.Single(_database.GetHeldNotices());
+
+        // Noted as tried before, with nothing heard back, and the channel can't be read.
+        _database.BeginDiscordSend($"held:{held.Id}", "alerts", _now);
+        _discord.ListFails = true;
+        var worker = Worker(toDo: null, lists: null);
+        await LookedFor(worker, 2);
+        Assert.Single(_database.GetHeldNotices());
+        Assert.DoesNotContain("Made up paycheck", _pc.ShownCopy());
+
+        _now = _now.Add(AlertRetry.Total);
+        await Until(() =>
+        {
+            worker.CheckAlerts();
+            return _database.GetHeldNotices().Count == 0;
+        });
+        await Until(() => !worker.SendingHeld);
+        worker.CheckAlerts();
+        await Until(() => !worker.SendingHeld);
+
+        Assert.Single(_pc.ShownCopy(), title => title == "Made up paycheck");
+        Assert.DoesNotContain(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up paycheck"));
+        Assert.Empty(_database.GetDiscordSends("held:"));
+    }
+
     /// <summary>Runs rounds until the alerts channel has been read this many more times.</summary>
     private async Task LookedFor(Background.WaypointWorker worker, int times)
     {

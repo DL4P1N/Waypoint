@@ -49,10 +49,19 @@ public sealed partial class WaypointWorker
         else if (send is { Fresh: false, Channel: { } channel })
         {
             var search = await discord.FindSentAsync(channel, send.StartedAt, send.Nonce, card, known: KnownMessages(send.Key));
-            if (search.Result == SentLookup.Unknown)
+            if (search.CantTell)
             {
-                // Whether the earlier try went out can't be told, so it isn't sent again now, only later.
-                tryLater?.Invoke();
+                // Whether the earlier try went out can't be told, so it's never sent again from here. For a while
+                // it's looked for again later. Once that's gone on as long as sending is tried, or Discord turns it
+                // away for good, it shows on this PC instead and is let go.
+                if (search.Result == SentLookup.Unknown && _clock() - send.StartedAt < AlertRetry.Total)
+                {
+                    tryLater?.Invoke();
+                    return null;
+                }
+
+                DiscordHealth.Sent(false, _clock());
+                _host.ShowNotice(title, text);
                 return null;
             }
 
