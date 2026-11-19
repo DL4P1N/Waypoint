@@ -251,6 +251,8 @@ public partial class NotesView : UserControl
     /// <summary>Saves anything waiting, for when the page or the window goes away.</summary>
     public void Leave()
     {
+        _leaves++;
+
         // Closing: a save still on its way that the server turned down is noted in the log rather than stopping the
         // rest of closing, and what it sent counts as not saved, so it's saved again here.
         var finished = false;

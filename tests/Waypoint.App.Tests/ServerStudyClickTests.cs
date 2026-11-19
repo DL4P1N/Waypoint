@@ -164,6 +164,59 @@ public sealed class ServerStudyClickTests
     private static string BarText(NotesView view) => UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message").Text;
 
     [Fact]
+    public void Studying_for_an_exam_returns_at_once_a_second_press_does_nothing_and_a_late_answer_after_another_note_opens_is_dropped() => Ui.Run(ui =>
+    {
+        var server = new StudyServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+        var exam = new StoredItem(5, ItemKind.Exam, "Cell quiz", null, null, false);
+        var before = BarText(view);
+
+        // Where to study from is held. Both presses came back at once, and the second asked nothing more.
+        server.ReleaseStudyFolder.Reset();
+        view.StudyForExam(exam);
+        view.StudyForExam(exam);
+        ServerToDoClickTests.PumpUntil(ui, () => server.Count("/api/notes/study/folder") == 1, "where to study from to be asked");
+        Assert.True(work.IsBusy);
+
+        // The user opens another note before the answer comes.
+        Pick(view, 8);
+        server.ReleaseStudyFolder.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "frogs", "the other note");
+        ui.Pump();
+
+        // Nothing came of the answer: no study note was looked for or asked to be written.
+        Assert.Equal(["/api/notes/study/folder"], server.Asked.Where(asked => !asked.EndsWith("/suggestions", StringComparison.Ordinal)));
+        Assert.Equal(before, BarText(view));
+        Assert.Equal("frogs", body.Text);
+    });
+
+    [Fact]
+    public void Starting_a_study_session_returns_at_once_and_a_second_press_while_it_is_on_its_way_starts_nothing_more() => Ui.Run(ui =>
+    {
+        var server = new StudyServer { SevenIsStudy = true };
+        var (view, work, _, _) = OpenNotes(ui, server);
+        var start = UiTest.Named<Button>(view, "StudyStartButton");
+        ServerToDoClickTests.PumpUntil(ui, () => start.Visibility == Visibility.Visible, "the start button");
+        var replies = new List<string>();
+        view.Replied += replies.Add;
+
+        server.ReleaseStart.Reset();
+        UiTest.Call(view, "OnStudyStartClicked", start, new RoutedEventArgs());
+        ServerToDoClickTests.PumpUntil(ui, () => server.Count("POST /api/activation/start") == 1, "the session to be started");
+        UiTest.Call(view, "OnStudyStartClicked", start, new RoutedEventArgs());
+        ui.Pump();
+        Assert.True(work.ChangesWaiting);
+        Assert.Empty(replies);
+
+        server.ReleaseStart.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && replies.Count == 1, "the reply");
+        ui.Pump();
+        Assert.Equal(1, server.Count("POST /api/activation/start"));
+        Assert.Equal(["Started on Cell quiz. Answer question 1 first."], replies);
+        Assert.Equal("Started on Cell quiz. Answer question 1 first.", BarText(view));
+    });
+
+    [Fact]
     public void A_note_opened_from_elsewhere_shows_its_suggestions_once_read_and_a_late_answer_for_a_note_no_longer_open_is_ignored() => Ui.Run(ui =>
     {
         var server = new StudyServer();

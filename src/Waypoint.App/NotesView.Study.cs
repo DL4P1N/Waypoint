@@ -24,6 +24,20 @@ public partial class NotesView
     private readonly HashSet<string> _studying = [];
     private bool _studyConnected;
 
+    /// <summary>
+    /// A press to study, or to start studying, waiting on the server in server mode. Another press meanwhile does
+    /// nothing, so a study note is never asked for twice. On this PC it's never set when a press comes.
+    /// </summary>
+    private bool _studyAsking;
+
+    /// <summary>Counts each time a different note opens, or none, so a late answer can tell the user moved on.</summary>
+    private int _opens;
+
+    /// <summary>Counts each time the page is left.</summary>
+    private int _leaves;
+
+    private (int Opens, int Leaves) StudyPlace => (_opens, _leaves);
+
     /// <summary>Raised with a reply for the chat, such as when a study session starts.</summary>
     public event Action<string>? Replied;
 
@@ -37,9 +51,33 @@ public partial class NotesView
     /// <summary>Studying goes through the notes, wherever they're kept, once it's connected.</summary>
     private INotesData? _study => _studyConnected && _notes.CanStudy ? _notes : null;
 
-    /// <summary>For an exam on To do. It needs a class with a notes folder to study from.</summary>
-    public void StudyForExam(StoredItem item)
+    /// <summary>
+    /// Reads, or with <paramref name="change"/> changes, for studying through the page's queue, so in server mode the
+    /// window never waits on it. Stayed is false when another note or page was opened meanwhile, so the answer is dropped.
+    /// </summary>
+    private async Task<(bool Stayed, T Answer)> StudyAsk<T>(Func<T> ask, bool change = false)
     {
+        var at = StudyPlace;
+        _studyAsking = true;
+        try
+        {
+            var answer = change ? await Work.Run(ask) : await Work.Read(ask);
+            return (StudyPlace == at, answer);
+        }
+        finally
+        {
+            _studyAsking = false;
+        }
+    }
+
+    /// <summary>For an exam on To do. It needs a class with a notes folder to study from.</summary>
+    public async void StudyForExam(StoredItem item)
+    {
+        if (_studyAsking)
+        {
+            return;
+        }
+
         if (_study is not { } study)
         {
             Bar.Show("Studying from notes isn't available right now.");
@@ -47,7 +85,13 @@ public partial class NotesView
         }
 
         var exam = StudyMaker.ExamOf(item);
-        if (study.StudyFolderFor(exam) is { } folderId)
+        var (stayed, found) = await StudyAsk(() => study.StudyFolderFor(exam));
+        if (!stayed)
+        {
+            return;
+        }
+
+        if (found is { } folderId)
         {
             StudyFor(exam, folderId);
             return;
@@ -82,34 +126,73 @@ public partial class NotesView
     private IEnumerable<RowMenuEntry> StudyFolderChoices(StudyExam exam, INotesData study) =>
         _folders.Select(found => new RowMenuEntry(
             string.Concat(Enumerable.Repeat(Indent, found.Depth)) + found.Folder.Name,
+            () => LinkThenStudy(exam, study, found.Folder.Id)));
+
+    /// <summary>The folder picked is remembered for the exam, then studied from, unless the user moved on meanwhile.</summary>
+    private async void LinkThenStudy(StudyExam exam, INotesData study, long folderId)
+    {
+        if (_studyAsking)
+        {
+            return;
+        }
+
+        var (stayed, _) = await StudyAsk(
             () =>
             {
-                study.LinkStudyFolder(exam, found.Folder.Id);
-                StudyFor(exam, found.Folder.Id);
-            }));
+                study.LinkStudyFolder(exam, folderId);
+                return true;
+            },
+            change: true);
+        if (stayed)
+        {
+            StudyFor(exam, folderId);
+        }
+    }
 
-    /// <summary>The class folder's right-click entry. One open exam is studied for directly, several are picked from.</summary>
+    /// <summary>Whether a folder can be studied from: it's a class folder, and studying is on.</summary>
+    private bool CanStudyFrom(NoteFolder folder) => _study is not null && !string.IsNullOrWhiteSpace(folder.Course);
+
+    /// <summary>
+    /// The class folder's right-click entry. One open exam is studied for directly, several are picked from. In
+    /// server mode the exams are read once it's chosen, so the menu never waits on the server.
+    /// </summary>
     private IEnumerable<RowMenuEntry> StudyMenu(NoteFolder folder)
     {
-        if (_study is not { } study || string.IsNullOrWhiteSpace(folder.Course))
+        if (!CanStudyFrom(folder) || _study is not { } study)
         {
             yield break;
         }
 
-        var exams = study.ExamsFor(folder.Course, DateOnly.FromDateTime(DateTime.Now));
-        if (exams.Count == 0)
+        if (!Work.RunsNow)
         {
-            yield return new RowMenuEntry("Study for an exam", () => StudyFor(new StudyExam($"{folder.Course} exam", folder.Course), folder.Id));
+            yield return new RowMenuEntry("Study for an exam", () => StudyFromFolder(folder, study));
+            yield break;
         }
-        else if (exams.Count == 1)
+
+        yield return StudyEntry(folder, study.ExamsFor(folder.Course!, DateOnly.FromDateTime(DateTime.Now)));
+    }
+
+    private RowMenuEntry StudyEntry(NoteFolder folder, IReadOnlyList<StoredItem> exams) => exams.Count switch
+    {
+        0 => new RowMenuEntry("Study for an exam", () => StudyFor(new StudyExam($"{folder.Course} exam", folder.Course), folder.Id)),
+        1 => new RowMenuEntry("Study for an exam", () => StudyFor(StudyMaker.ExamOf(exams[0]), folder.Id)),
+        _ => new RowMenuEntry("Study for an exam", Children: exams
+            .Select(exam => new RowMenuEntry(ExamLabel(exam), () => StudyFor(StudyMaker.ExamOf(exam), folder.Id)))
+            .ToList()),
+    };
+
+    /// <summary>In server mode: the folder's open exams are read, then studied for as the menu would have.</summary>
+    private async void StudyFromFolder(NoteFolder folder, INotesData study)
+    {
+        if (_studyAsking)
         {
-            yield return new RowMenuEntry("Study for an exam", () => StudyFor(StudyMaker.ExamOf(exams[0]), folder.Id));
+            return;
         }
-        else
+
+        var (stayed, exams) = await StudyAsk(() => study.ExamsFor(folder.Course!, DateOnly.FromDateTime(DateTime.Now)));
+        if (stayed)
         {
-            yield return new RowMenuEntry("Study for an exam", Children: exams
-                .Select(exam => new RowMenuEntry(ExamLabel(exam), () => StudyFor(StudyMaker.ExamOf(exam), folder.Id)))
-                .ToList());
+            RunStudyEntry(StudyEntry(folder, exams));
         }
     }
 
@@ -121,13 +204,19 @@ public partial class NotesView
             return;
         }
 
+        RunStudyEntry(entry);
+    }
+
+    private void RunStudyEntry(RowMenuEntry entry)
+    {
         if (entry.Run is { } run)
         {
             run();
         }
         else if (entry.Children is { } exams)
         {
-            RowMenu.Open(StudyButton, System.Windows.Controls.Primitives.PlacementMode.Bottom, exams, () => { });
+            FrameworkElement under = StudyButton.IsVisible ? StudyButton : ListTitle;
+            RowMenu.Open(under, System.Windows.Controls.Primitives.PlacementMode.Bottom, exams, () => { });
         }
     }
 
@@ -139,7 +228,7 @@ public partial class NotesView
     /// <summary>Asks before replacing changes, then writes in the background and opens the note when it's done.</summary>
     private async void StudyFor(StudyExam exam, long folderId, bool replaceEdits = false)
     {
-        if (_study is not { } study)
+        if (_studyAsking || _study is not { } study)
         {
             return;
         }
@@ -156,8 +245,15 @@ public partial class NotesView
         {
             Flush();
             var title = StudyGuide.Title(exam.Title);
-            if (!replaceEdits && study.FindStudyNote(folderId, exam.Title) is { } existing
-                && _notes.GetNoteGeneration(existing) is { EditedSince: true } generation)
+            var (stayed, found) = replaceEdits
+                ? (true, null)
+                : await StudyAsk(() => study.FindStudyNote(folderId, exam.Title) is { } existing ? _notes.GetNoteGeneration(existing) : null);
+            if (!stayed)
+            {
+                return;
+            }
+
+            if (found is { EditedSince: true } generation)
             {
                 var ask = new NoteConfirmWindow(
                     Window.GetWindow(this),
@@ -186,10 +282,10 @@ public partial class NotesView
             _studying.Remove(key);
         }
 
-        FinishStudy(exam, folderId, outcome);
+        await FinishStudy(exam, folderId, outcome);
     }
 
-    private void FinishStudy(StudyExam exam, long folderId, StudyOutcome outcome)
+    private async Task FinishStudy(StudyExam exam, long folderId, StudyOutcome outcome)
     {
         switch (outcome.Status)
         {
@@ -204,8 +300,16 @@ public partial class NotesView
                 {
                     Flush();
                     Column.Select(EntryKey(folderId));
-                    ShowList(force: true);
-                    Open(_notes.GetNote(noteId));
+                    Work.Show(() => ShowList(force: true), () => ShowList());
+                    var opens = _opens;
+                    var note = await Work.Read(() => _notes.GetNote(noteId));
+
+                    // In server mode it isn't opened over another note opened and typed in while it was read.
+                    if (_opens == opens || !Editor.IsKeyboardFocusWithin)
+                    {
+                        Flush();
+                        Open(note);
+                    }
                 }
 
                 Bar.Show(outcome.Message, undo);
@@ -221,7 +325,7 @@ public partial class NotesView
                     Flush();
                 }
 
-                var title = _notes.GetNote(changedId)?.Title ?? StudyGuide.Title(exam.Title);
+                var title = (await Work.Read(() => _notes.GetNote(changedId)))?.Title ?? StudyGuide.Title(exam.Title);
                 var ask = new NoteConfirmWindow(
                     Window.GetWindow(this),
                     $"{title} changed while new questions were being written. Use the new questions?",
@@ -230,7 +334,7 @@ public partial class NotesView
                     title: "New questions are ready");
                 if (ask.ShowDialog() == true)
                 {
-                    FinishStudy(exam, folderId, study.SaveStudyAnyway(changedId, markdown, DateTime.Now));
+                    await FinishStudy(exam, folderId, await Work.Run(() => study.SaveStudyAnyway(changedId, markdown, DateTime.Now)));
                     return;
                 }
 
@@ -247,12 +351,15 @@ public partial class NotesView
             ReloadIfOpen(id);
         }
 
-        Refresh(force: true);
+        ShowSoon(force: true);
     }
 
     /// <summary>The open note's exam, when it's a study note that was made from notes.</summary>
-    private StudyExam? OpenStudyExam(long noteId) =>
-        _study is { } study && _sourceCount == 0 && _notes.GetNoteGeneration(noteId) is { WasGenerated: true }
+    private StudyExam? OpenStudyExam(long noteId) => OpenStudyExam(noteId, _sourceCount);
+
+    /// <summary>The same, with the note's count of sources given, so it can be read off the window's thread.</summary>
+    private StudyExam? OpenStudyExam(long noteId, int sourceCount) =>
+        _study is { } study && sourceCount == 0 && _notes.GetNoteGeneration(noteId) is { WasGenerated: true }
             ? study.ExamForNote(noteId, DateOnly.FromDateTime(DateTime.Now))
             : null;
 
@@ -287,15 +394,31 @@ public partial class NotesView
         return true;
     }
 
-    /// <summary>True when the status button was for a study note and has been handled.</summary>
-    private bool StudyStatusClicked(long noteId)
+    /// <summary>
+    /// True when the status button was for a study note and has been handled. It's handled, doing nothing, while
+    /// another press waits on the server, or when another note or page was opened while this was read.
+    /// </summary>
+    private async Task<bool> StudyStatusClicked(long noteId)
     {
-        if (OpenStudyExam(noteId) is not { } exam || _notes.GetNote(noteId)?.FolderId is not { } folderId)
+        if (_studyAsking)
+        {
+            return true;
+        }
+
+        var sources = _sourceCount;
+        var (stayed, found) = await StudyAsk(() =>
+            OpenStudyExam(noteId, sources) is { } exam && _notes.GetNote(noteId)?.FolderId is { } folderId ? (exam, folderId) : ((StudyExam Exam, long FolderId)?)null);
+        if (!stayed)
+        {
+            return true;
+        }
+
+        if (found is not { } study)
         {
             return false;
         }
 
-        StudyFor(exam, folderId);
+        StudyFor(study.Exam, study.FolderId);
         return true;
     }
 
@@ -306,15 +429,27 @@ public partial class NotesView
     }
 
     /// <summary>One concrete first step, through the usual session, so it shows on the session card like any other start.</summary>
-    private void OnStudyStartClicked(object sender, RoutedEventArgs e)
+    private async void OnStudyStartClicked(object sender, RoutedEventArgs e)
     {
-        if (_draft.Id is not { } noteId || OpenStudyExam(noteId) is not { ItemRef: { } itemRef })
+        if (_studyAsking || _draft.Id is not { } noteId)
         {
             return;
         }
 
-        var reply = _notes.StartActivation(itemRef, FirstQuestionAction, StudyMethod, DateTime.Now).Text;
-        Bar.Show(reply);
+        var sources = _sourceCount;
+        var (stayed, itemRef) = await StudyAsk(() => OpenStudyExam(noteId, sources)?.ItemRef);
+        if (!stayed || itemRef is null)
+        {
+            return;
+        }
+
+        // The session has started once this is back, so the chat says so even if the user moved on meanwhile.
+        var (still, reply) = await StudyAsk(() => _notes.StartActivation(itemRef, FirstQuestionAction, StudyMethod, DateTime.Now).Text, change: true);
+        if (still)
+        {
+            Bar.Show(reply);
+        }
+
         Replied?.Invoke(reply);
     }
 }

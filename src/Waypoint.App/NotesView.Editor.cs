@@ -20,6 +20,11 @@ public partial class NotesView
     {
         _opening = null;
         _newNote = null;
+        if (note?.Id != _draft.Id)
+        {
+            _opens++;
+        }
+
         _draft.Load(note);
         if (note is not null)
         {

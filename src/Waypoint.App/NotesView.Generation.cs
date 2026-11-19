@@ -335,7 +335,7 @@ public partial class NotesView
             return;
         }
 
-        if (_draft.Id is { } studyId && StudyStatusClicked(studyId))
+        if (_draft.Id is { } studyId && await StudyStatusClicked(studyId))
         {
             return;
         }

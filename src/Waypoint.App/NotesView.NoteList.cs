@@ -62,7 +62,7 @@ public partial class NotesView
         }
 
         ListTitle.Text = key == UnfiledKey ? "Unfiled" : folder?.Folder.Name ?? "All notes";
-        StudyButton.Visibility = folder is not null && StudyMenu(folder.Folder).Any() ? Visibility.Visible : Visibility.Collapsed;
+        StudyButton.Visibility = folder is not null && CanStudyFrom(folder.Folder) ? Visibility.Visible : Visibility.Collapsed;
         _loading = true;
         NotesList.ItemsSource = rows;
         NotesList.SelectedItem = rows.FirstOrDefault(row => row.Id == _draft.Id);
