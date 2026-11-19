@@ -19,6 +19,9 @@ public sealed partial class WaypointDatabase
     /// <summary>A message is handed over again at most this many times, so one that always fails can't go on forever.</summary>
     private const int MaxDiscordTries = 5;
 
+    /// <summary>How long the owner is tried to be told about a message given up on, so a long outage can't go on forever.</summary>
+    private static readonly TimeSpan TellGivenUpFor = TimeSpan.FromDays(3);
+
     /// <summary>Finished messages are only needed while they could still be read again, so older ones are let go.</summary>
     private static readonly TimeSpan KeepFinishedDiscord = TimeSpan.FromDays(30);
 
@@ -141,6 +144,15 @@ public sealed partial class WaypointDatabase
             give.ExecuteNonQuery();
         }
 
+        // Still untold after this long, so it's let go, kept as given up on rather than done.
+        using (var stop = connection.CreateCommand())
+        {
+            stop.CommandText = "UPDATE discord_inbox SET done_at = $now WHERE done_at IS NULL AND given_up_at IS NOT NULL AND given_up_at <= $limit";
+            stop.Parameters.AddWithValue("$now", FormatReminder(now));
+            stop.Parameters.AddWithValue("$limit", FormatReminder(now - TellGivenUpFor));
+            stop.ExecuteNonQuery();
+        }
+
         var given = new List<(string, string)>();
         using (var command = connection.CreateCommand())
         {
@@ -175,7 +187,7 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>Whether a message was given up on, told or not, rather than its work being done.</summary>
-    public bool IsDiscordMessageGivenUp(string messageId)
+    internal bool IsDiscordMessageGivenUp(string messageId)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();

@@ -37,8 +37,15 @@ public enum AlertActionKind
     NotNowReminder,
 }
 
-/// <summary>How one send went. A channel that's turned off counts as sent, since nothing was meant to go there.</summary>
-public sealed record DiscordDelivery(string? MessageId, bool Sent);
+/// <summary>
+/// How one send went. A channel that's turned off counts as sent, since nothing was meant to go there. Status is
+/// Discord's answer to a send it turned away, when it gave one.
+/// </summary>
+public sealed record DiscordDelivery(string? MessageId, bool Sent, System.Net.HttpStatusCode? Status = null)
+{
+    /// <summary>Turned away for good: the channel is gone or the bot may not post there, so trying again won't help.</summary>
+    public bool Refused => Status is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound;
+}
 
 /// <summary>
 /// What the owner did to an alert. No message ID means the latest reminder. SentAs is the owner's own typed reply,

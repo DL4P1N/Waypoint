@@ -221,11 +221,13 @@ public sealed partial class DiscordBridge
         }
 
         // Tried as many times as it may be, so the owner is told under it, once, rather than it going quiet. It
-        // stays given up on and untold until the notice goes through, so one lost to an outage is sent again.
+        // stays given up on and untold until the notice goes through, so one lost to an outage is sent again. A
+        // channel that's gone, or that the bot may no longer post in, can't be told anything, so that ends it too.
         foreach (var (id, channel) in database.GetGivenUpDiscordMessages(Clock(), UnfinishedAfter))
         {
             // Its own nonce, so a try whose answer was lost and is sent again soon after isn't posted twice.
-            if ((await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id, nonce: "g" + id)).Sent)
+            var told = await TrySendAsync(channel, DiscordText.Notice("Not finished", GaveUp, CardTone.Attention), id, nonce: "g" + id);
+            if (told.Sent || told.Refused)
             {
                 database.FinishGivenUpDiscordMessage(id, Clock());
             }

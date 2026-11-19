@@ -67,6 +67,9 @@ public sealed class DiscordInboxTests : IDisposable
         /// <summary>Discord is down for posting, so nothing sent gets through.</summary>
         public bool PostsFail { get; set; }
 
+        /// <summary>When set, every post gets this answer instead, such as a channel that's gone.</summary>
+        public HttpStatusCode? PostStatus { get; set; }
+
         /// <summary>The made-up file can't be fetched.</summary>
         public bool FileFails { get; set; }
 
@@ -92,9 +95,9 @@ public sealed class DiscordInboxTests : IDisposable
                 return FileFails ? Reply(HttpStatusCode.NotFound, "") : Reply(HttpStatusCode.OK, "made up thing one\nmade up thing two");
             }
 
-            if (request.Method == HttpMethod.Post && PostsFail)
+            if (request.Method == HttpMethod.Post && (PostsFail || PostStatus is not null))
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, "");
+                return Reply(PostStatus ?? HttpStatusCode.ServiceUnavailable, "");
             }
 
             if (request.Method == HttpMethod.Get && Listed(url) is { } listed)
@@ -370,6 +373,48 @@ public sealed class DiscordInboxTests : IDisposable
         Assert.Equal(DiscordBridge.GaveUp, JsonDocument.Parse(Posted()[^1]).RootElement.GetProperty("embeds")[0].GetProperty("description").GetString());
         Assert.True(_database.IsDiscordMessageFinished("24"));
         Assert.True(_database.IsDiscordMessageGivenUp("24"));
+    }
+
+    [Fact]
+    public async Task A_message_given_up_on_stops_being_told_once_its_channel_is_gone_or_after_a_few_days()
+    {
+        _database.SetPreference(DiscordBridge.LastMessageKey, "50");
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Assert.True(_database.ClaimDiscordMessage("26", "capture", _now, DiscordBridge.UnfinishedAfter));
+            Assert.True(_database.ClaimDiscordMessage("27", "capture", _now, DiscordBridge.UnfinishedAfter));
+            _now = _now.AddMinutes(4);
+        }
+
+        var bridge = Bridge();
+        bridge.Captured = _ => { };
+
+        // The channel is gone, so there's no one to tell.
+        _discord.PostStatus = HttpStatusCode.NotFound;
+        await bridge.PollAsync();
+        Assert.True(_database.IsDiscordMessageFinished("26"));
+        Assert.True(_database.IsDiscordMessageFinished("27"));
+        Assert.True(_database.IsDiscordMessageGivenUp("26"));
+
+        // An outage that never ends is let go in the end too.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Assert.True(_database.ClaimDiscordMessage("28", "capture", _now, DiscordBridge.UnfinishedAfter));
+            _now = _now.AddMinutes(4);
+        }
+
+        _discord.PostStatus = null;
+        _discord.PostsFail = true;
+        await bridge.PollAsync();
+        Assert.False(_database.IsDiscordMessageFinished("28"));
+        var posts = Posted().Count;
+
+        _now = _now.AddDays(4);
+        await bridge.PollAsync();
+        await bridge.PollAsync();
+        Assert.True(_database.IsDiscordMessageFinished("28"));
+        Assert.True(_database.IsDiscordMessageGivenUp("28"));
+        Assert.Equal(posts, Posted().Count);
     }
 
     [Fact]

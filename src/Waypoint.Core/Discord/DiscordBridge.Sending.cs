@@ -36,7 +36,7 @@ public sealed partial class DiscordBridge
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             LastError = exception.Message;
-            return new DiscordDelivery(null, false);
+            return new DiscordDelivery(null, false, (exception as HttpRequestException)?.StatusCode);
         }
     }
 
