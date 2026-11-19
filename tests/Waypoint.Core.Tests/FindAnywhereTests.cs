@@ -133,6 +133,54 @@ public sealed class FindAnywhereTests : IDisposable
         Assert.Equal(["Renew passport"], found.Select(thing => thing.Title));
     }
 
+    [Fact]
+    public void Look_says_which_pages_answered_and_which_couldnt_be_reached()
+    {
+        Add(ItemKind.Task, "Renew passport");
+        var sources = Local() with { Notes = null, Lists = new AwayLists() };
+
+        var result = FindAnywhere.Look("passport", sources);
+
+        Assert.Equal(["Renew passport"], result.Found.Select(thing => thing.Title));
+        Assert.Equal([FoundPage.ToDo, FoundPage.History, FoundPage.Budget], result.Answered);
+        Assert.Equal([FoundPage.Lists], result.Unreached);
+        Assert.True(result.Partial);
+    }
+
+    [Fact]
+    public void Look_on_this_pcs_pages_is_never_partial_even_when_nothing_matches()
+    {
+        var result = FindAnywhere.Look("zebra", Local());
+
+        Assert.Empty(result.Found);
+        Assert.Equal(5, result.Answered.Count);
+        Assert.Empty(result.Unreached);
+        Assert.False(result.Partial);
+    }
+
+    [Fact]
+    public void Server_pages_with_nothing_kept_and_no_server_count_as_not_reached_rather_than_empty()
+    {
+        var client = new ServerClient(new HttpClient(new NoServer()) { BaseAddress = new Uri("http://server/") }, "token");
+        var sources = new FindSources(new ServerToDoData(client), new ServerListsData(client), new ServerNotesData(client), new ServerHistoryData(client), new ServerBudgetData(client));
+
+        var result = FindAnywhere.Look("passport", sources);
+
+        Assert.Empty(result.Found);
+        Assert.Empty(result.Answered);
+        Assert.Equal([FoundPage.ToDo, FoundPage.Lists, FoundPage.Notes, FoundPage.History, FoundPage.Budget], result.Unreached);
+        Assert.Empty(FindAnywhere.Search("passport", sources));
+
+        // Outside a search the pages still get their empty fallback, so they can open while the server is away.
+        Assert.Empty(new ServerToDoData(client).GetOpenItems());
+    }
+
+    private sealed class NoServer : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new HttpRequestException("No route to host");
+    }
+
     /// <summary>Stands in for the server being away with nothing read yet.</summary>
     private sealed class AwayLists : IListsData
     {

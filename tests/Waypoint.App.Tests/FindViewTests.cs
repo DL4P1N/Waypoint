@@ -64,6 +64,9 @@ public sealed class FindViewTests
         Assert.Empty(results.Items);
         Assert.Equal("Nothing on any page matches \"zebra\".", hint.Text);
 
+        // This PC's search is made straight away, so Searching... is never on its way to show.
+        Assert.False(UiTest.Field<System.Windows.Threading.DispatcherTimer>(view, "_searching")!.IsEnabled);
+
         ui.Focus(box);
         Assert.True(ui.Press(box, Key.Escape));
         Assert.True(closed);
