@@ -18,9 +18,9 @@ public sealed record ThemePalette(string Name, string Accent, string Urgent, str
     /// <summary>The tint with Less see-through on: the same black as the panels, nearly solid, so little shows through.</summary>
     public const string SolidWindowTint = "#F2141414";
 
-    // Grayer than anything still to do, but light enough to read and uncheck, at 4.5:1 or better on black.
-    public const string FinishedText = "#8A8A8A";
-    public const string FinishedDetail = "#8A8A8A";
+    // Grayer than anything still to do, but light enough to read, at 4.5:1 or better even over the window background.
+    public const string FinishedText = "#C8C8C8";
+    public const string FinishedDetail = "#C8C8C8";
 
     /// <summary>A preference of its own, set beside the theme, so it's kept whichever theme is picked.</summary>
     public bool LessSeeThrough { get; init; }
@@ -54,12 +54,11 @@ public static class Themes
     private const string SharedSoon = "#FFC857";
     private const string SharedMoney = "#6FD08C";
     private const string SharedQuiet = "#8A8A8A";
-    private const string SharedSecondary = "#A3A3A3";
+    private const string SharedSecondary = "#D4D4D4";
 
     // Half the panels' black over the acrylic, the lightest that keeps every theme readable over a white page behind:
-    // 4.5:1 for plain text and 3:1 for colored text, marks, and secondary text. The shared red needs this much in the
-    // colored themes, and mono's secondary gray nearly as much. Finished rows' gray is meant to fade, and over a white
-    // page it drops to about 2.2:1.
+    // 4.5:1 for plain, secondary, and finished text and 3:1 for colored text and marks. The shared red needs this much
+    // in the colored themes.
     private const string AcrylicTint = "#80141414";
 
     public static readonly ThemePalette Default = new("gray", "#D0D0D0", SharedUrgent, SharedSoon, SharedMoney, SharedQuiet, SharedSecondary) { WindowTint = AcrylicTint };
