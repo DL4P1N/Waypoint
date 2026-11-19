@@ -74,14 +74,14 @@ public partial class ListsView : UserControl
 
         _selected = name;
         _search = search;
-        Refresh(force: changed);
+        Work.Show(() => Refresh(force: changed), () => Refresh());
     }
 
     /// <summary>The column's search changed while this list is open. Only entries with those words show.</summary>
     public void SetSearch(string search)
     {
         _search = search;
-        ShowEntries(_lists.GetListOverview(), false, force: true);
+        Work.Show(() => ShowEntries(_lists.GetListOverview(), false, force: true), () => Refresh());
     }
 
     /// <summary>Finishes anything half done and drops a message with no Undo, for when the page moves to notes or another list.</summary>
@@ -107,19 +107,38 @@ public partial class ListsView : UserControl
         FinishRename();
         _selected = entry.List;
         _search = "";
-        Refresh(force: true);
+        _revealing = entry.Id;
 
-        Dispatcher.InvokeAsync(() =>
+        // In server mode it's drawn from what was kept, and the entry is found again once the list is read, unless
+        // another list or entry was picked meanwhile.
+        Work.Show(() =>
         {
-            Entries.UpdateLayout();
-            var row = Entries.Items.OfType<EntryRow>().FirstOrDefault(found => found.Entry.Id == entry.Id);
-            if (row is not null && Entries.ItemContainerGenerator.ContainerFromItem(row) is FrameworkElement container)
+            Refresh(force: true);
+            FocusSoon(entry);
+        }, () =>
+        {
+            Refresh();
+            if (_revealing == entry.Id && _selected == entry.List)
             {
-                container.BringIntoView();
-                FindBox(container)?.Focus();
+                FocusSoon(entry);
             }
-        }, DispatcherPriority.Loaded);
+        });
     }
+
+    /// <summary>The entry Find anywhere last asked to show, until its row has been found and given focus.</summary>
+    private long? _revealing;
+
+    private void FocusSoon(ListEntry entry) => Dispatcher.InvokeAsync(() =>
+    {
+        Entries.UpdateLayout();
+        var row = Entries.Items.OfType<EntryRow>().FirstOrDefault(found => found.Entry.Id == entry.Id);
+        if (row is not null && Entries.ItemContainerGenerator.ContainerFromItem(row) is FrameworkElement container)
+        {
+            _revealing = null;
+            container.BringIntoView();
+            FindBox(container)?.Focus();
+        }
+    }, DispatcherPriority.Loaded);
 
     private static CheckBox? FindBox(DependencyObject root)
     {

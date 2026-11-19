@@ -23,6 +23,9 @@ public sealed class ServerToDoClickTests
         private readonly Dictionary<string, bool> _items = new() { ["Email advisor"] = false, ["Repot the basil"] = false };
         private readonly Dictionary<string, string?> _preferences = new() { ["todo_setup_card"] = "done" };
 
+        /// <summary>Each This didn't help kept, then each note added to one, as they arrived.</summary>
+        public List<string> Feedback { get; } = [];
+
         /// <summary>Each done box change, as it arrived: the title, then done or not.</summary>
         public List<string> Changes { get; } = [];
 
@@ -70,6 +73,25 @@ public sealed class ServerToDoClickTests
                 }
 
                 body = new { };
+            }
+            else if (path.StartsWith("/api/feedback", StringComparison.Ordinal))
+            {
+                var sent = await request.Content!.ReadAsStringAsync(cancellationToken);
+                ChangeArrived.Set();
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                lock (_gate)
+                {
+                    if (request.Method == HttpMethod.Post)
+                    {
+                        Feedback.Add($"kept {JsonSerializer.Deserialize<FeedbackRequest>(sent, RemoteJson.Options)!.Feature}");
+                        body = new FeedbackKept(Feedback.Count);
+                    }
+                    else
+                    {
+                        Feedback.Add($"{path} {JsonSerializer.Deserialize<TextValue>(sent, RemoteJson.Options)!.Value}");
+                        body = new FlagValue(true);
+                    }
+                }
             }
             else if (path.StartsWith("/api/preferences/", StringComparison.Ordinal))
             {
@@ -154,7 +176,7 @@ public sealed class ServerToDoClickTests
         var client = new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token");
         opened = client;
         var work = new PageWork(client);
-        var view = new TodayView { Work = work };
+        var view = new TodayView { Work = work, FeedbackData = new ServerFeedbackData(client) };
         view.Connect(new ServerToDoData(client), () => { }, _ => { }, _ => { }, () => { });
         ui.Host(view);
         work.Show(() => view.Refresh(null));
@@ -191,6 +213,45 @@ public sealed class ServerToDoClickTests
         Assert.Equal(["Email advisor done"], server.Changes);
         Assert.True(Box(view, "Email advisor").IsChecked);
         Assert.False(Box(view, "Repot the basil").IsChecked);
+    });
+
+    [Fact]
+    public void This_didnt_help_and_its_note_return_at_once_while_the_server_holds_them() => Ui.Run(ui =>
+    {
+        var server = new ToDoServer();
+        var (view, work) = Open(ui, server);
+        var prompt = UiTest.Named<FeedbackPrompt>(view, "SuggestionFeedback");
+        var link = UiTest.Descendants<Button>(prompt).First(button => button.Content as string == CardLabels.DidntHelp);
+        server.ReleaseChanges.Reset();
+
+        // A second press while the first is on its way keeps nothing more.
+        link.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent, link));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Empty(server.Feedback);
+        Assert.True(work.ChangesWaiting);
+        Assert.False(link.IsVisible);
+        link.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent, link));
+
+        server.ReleaseChanges.Set();
+        var note = UiTest.Descendants<TextBox>(prompt).Single();
+        PumpUntil(ui, () => !work.IsBusy && note.IsVisible, "the line for a note");
+        Assert.Equal([$"kept {Feedback.Suggestion}"], server.Feedback);
+
+        server.ChangeArrived.Reset();
+        server.ReleaseChanges.Reset();
+        note.Text = "Already emailed them";
+        var add = UiTest.Descendants<Button>(prompt).First(button => button.Content as string == "Add");
+        add.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent, add));
+
+        // It came back while the server still held the note, and the line can't be sent again meanwhile.
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Single(server.Feedback);
+        Assert.False(note.IsVisible);
+
+        server.ReleaseChanges.Set();
+        PumpUntil(ui, () => !work.IsBusy && server.Feedback.Count == 2, "the note");
+        Assert.Equal([$"kept {Feedback.Suggestion}", "/api/feedback/1/note Already emailed them"], server.Feedback);
+        Assert.Contains(UiTest.Descendants<TextBlock>(prompt), block => block.IsVisible && block.Text.StartsWith("Thanks.", StringComparison.Ordinal));
     });
 
     [Fact]

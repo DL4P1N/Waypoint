@@ -202,9 +202,18 @@ public partial class TodayView : UserControl
             Work.Fire(() => _database.SetToDoFilterOrder(ids));
         };
         Column.RenameRequested += OnFilterRenamed;
-        SuggestionFeedback.Kept = () => FeedbackData!.AddFeedback(Feedback.Suggestion, _suggested is { } shown ? ItemRef.Format(shown) : null, DateTime.Now);
+        SuggestionFeedback.Keeping = () =>
+        {
+            // Taken as it's pressed, since the card may move on before the server has it.
+            var feedback = FeedbackData!;
+            var reference = _suggested is { } shown ? ItemRef.Format(shown) : null;
+            var at = DateTime.Now;
+            return () => feedback.AddFeedback(Feedback.Suggestion, reference, at);
+        };
         SuggestionFeedback.Noted = (id, note) => FeedbackData!.NoteFeedback(id, note);
         RowFeedback.Noted = (id, note) => FeedbackData!.NoteFeedback(id, note);
+        SuggestionFeedback.Work = Work;
+        RowFeedback.Work = Work;
 
         Work.Fire(DecideSetupCard);
         _weekShown = Work.Peek(() => database.GetPreference(ViewKey)) == WeekValue;

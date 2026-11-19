@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Windows.Controls;
 using Waypoint.App;
 using Waypoint.Core.Capture;
+using Waypoint.Core.Files;
+using Waypoint.Core.Notes;
 using Waypoint.Core.Remote;
 
 namespace Waypoint.App.Tests;
@@ -34,14 +36,49 @@ public sealed class ServerNotesClickTests
 
         public ManualResetEventSlim ChangeArrived { get; } = new();
 
+        /// <summary>While unset, saves of a note that's there wait for it, after any hold on changes.</summary>
+        public ManualResetEventSlim ReleaseSaves { get; } = new(initialState: true);
+
+        /// <summary>Set once a save of a note that's there has arrived.</summary>
+        public ManualResetEventSlim SaveArrived { get; } = new();
+
+        /// <summary>While unset, reads of the lists wait for it.</summary>
+        public ManualResetEventSlim ReleaseListReads { get; } = new(initialState: true);
+
+        /// <summary>Set once a read of the lists has arrived.</summary>
+        public ManualResetEventSlim ListReadArrived { get; } = new();
+
+        /// <summary>Something added to Shopping from another PC.</summary>
+        public void AddElsewhere(ListEntry entry)
+        {
+            lock (_gate)
+            {
+                _entries.Add(entry);
+            }
+        }
+
+        /// <summary>A class is on, so a new note started from All goes in its folder, titled with it.</summary>
+        public bool ClassOn { get; set; }
+
         /// <summary>The next note save is turned down, as a server does with a request it won't take.</summary>
         public bool RefuseNextSave { get; set; }
+
+        /// <summary>The next new note is turned down in the same way.</summary>
+        public bool RefuseNextMake { get; set; }
 
         public void ChangeElsewhere(long id, string body)
         {
             lock (_gate)
             {
                 _notes[id] = (_notes[id].Title, body);
+            }
+        }
+
+        public string Title(long id)
+        {
+            lock (_gate)
+            {
+                return _notes[id].Title;
             }
         }
 
@@ -67,15 +104,31 @@ public sealed class ServerNotesClickTests
                 await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
             }
 
+            if (request.Method == HttpMethod.Put && path.StartsWith("/api/notes/", StringComparison.Ordinal))
+            {
+                SaveArrived.Set();
+                await Task.Run(() => ReleaseSaves.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+            }
+
             lock (_gate)
             {
-                if (request.Method == HttpMethod.Put && RefuseNextSave)
+                if ((request.Method == HttpMethod.Put && RefuseNextSave) || (request.Method == HttpMethod.Post && path == "/api/notes" && RefuseNextMake))
                 {
-                    RefuseNextSave = false;
+                    RefuseNextSave = RefuseNextMake = false;
                     return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
                 }
 
-                if (path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
+                if (path == "/api/notes/7/files")
+                {
+                    var file = JsonSerializer.Deserialize<FileText>(sent, RemoteJson.Options)!;
+                    Changes.Add($"attach 7 {file.Name}");
+                    body = new StartedNote(7, "Seed list", null, null);
+                }
+                else if (path == "/api/notes/7/generation")
+                {
+                    body = new Found<NoteGeneration>(new NoteGeneration(null, false, Changes.Count(change => change.StartsWith("attach", StringComparison.Ordinal))));
+                }
+                else if (path.StartsWith("/api/notes/", StringComparison.Ordinal) && long.TryParse(path["/api/notes/".Length..], out var id))
                 {
                     if (request.Method == HttpMethod.Put)
                     {
@@ -92,7 +145,19 @@ public sealed class ServerNotesClickTests
                 else if (path == "/api/notes" && request.Method == HttpMethod.Post)
                 {
                     NotesMade++;
+                    var made = JsonSerializer.Deserialize<NewNoteRequest>(sent, RemoteJson.Options)!;
+                    Changes.Add($"make {100 + NotesMade} {made.Title}: {made.Body} in {made.FolderId}");
+                    _notes[100 + NotesMade] = (made.Title, made.Body);
                     body = new Found<long>(100 + NotesMade);
+                }
+                else if (path == "/api/notes/place")
+                {
+                    body = ClassOn ? new NotePlacement(null, "Biology", "Biology 1 Apr") : new NotePlacement(null);
+                }
+                else if (path == "/api/notes/folder-for")
+                {
+                    Changes.Add("class folder");
+                    body = new Found<long?>(50);
                 }
                 else if (path is "/api/notes" or "/api/notes/in" || path.StartsWith("/api/notes/search", StringComparison.Ordinal))
                 {
@@ -114,6 +179,12 @@ public sealed class ServerNotesClickTests
                 {
                     body = new[] { new ListOverview("Shopping", _entries.ToList()) };
                 }
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/api/lists")
+            {
+                ListReadArrived.Set();
+                await Task.Run(() => ReleaseListReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
             }
 
             if (request.Method == HttpMethod.Get && path is "/api/notes/7" or "/api/notes/8")
@@ -138,12 +209,12 @@ public sealed class ServerNotesClickTests
         body.CaretIndex = body.Text.Length;
     }
 
-    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, NotesServer server)
+    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, NotesServer server, bool withLists = false)
     {
         var client = Client(server);
         var work = new PageWork(client);
         var view = new NotesView { Work = work };
-        view.Connect(new ServerNotesData(client));
+        view.Connect(new ServerNotesData(client), withLists ? new ServerListsData(client) : null);
         ui.Host(view);
         work.Show(() => view.Refresh(force: true));
         var body = UiTest.Named<MarkdownBox>(view, "BodyBox");
@@ -185,6 +256,171 @@ public sealed class ServerNotesClickTests
         Assert.Equal(["save 7 radish, kale"], server.Changes);
         Assert.Equal("radish, kale", server.Body(7));
         Assert.Equal(0, server.NotesMade);
+    });
+
+    [Fact]
+    public void A_new_notes_first_save_and_its_class_folder_return_at_once_and_the_note_is_made_once() => Ui.Run(ui =>
+    {
+        var server = new NotesServer { ClassOn = true };
+        var (view, work, body, _) = OpenNotes(ui, server);
+        server.ChangeArrived.Reset();
+        server.ReleaseChanges.Reset();
+
+        // Where it goes is read while the first words are typed, then the first save places it and makes it, and
+        // more typed meanwhile is saved to it after. Each came back while the server still held the first.
+        UiTest.Call(view, "NewNote");
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Type(body, "cell walls");
+        UiTest.Call(view, "SaveSoon");
+        Type(body, "cell walls, mitochondria");
+        UiTest.Call(view, "SaveSoon");
+        Assert.Empty(server.Changes);
+        Assert.True(work.ChangesWaiting);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3 && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
+        Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
+        Assert.Equal(1, server.NotesMade);
+        Assert.Equal("Biology 1 Apr", server.Title(101));
+        Assert.Equal("Biology 1 Apr", UiTest.Named<TextBox>(view, "TitleBox").Text);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+
+        // Typed on, it goes on as that note.
+        Type(body, "cell walls, mitochondria, ribosomes");
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
+        Assert.Equal(1, server.NotesMade);
+    });
+
+    [Fact]
+    public void A_class_note_opened_again_while_a_later_save_is_held_keeps_its_class_title() => Ui.Run(ui =>
+    {
+        var server = new NotesServer { ClassOn = true };
+        var (view, work, body, _) = OpenNotes(ui, server);
+        var title = UiTest.Named<TextBox>(view, "TitleBox");
+
+        // Made with no title typed, it's given the class title. More is typed while that's held, and its save goes
+        // after it and is held in turn.
+        server.ReleaseChanges.Reset();
+        server.ReleaseSaves.Reset();
+        UiTest.Call(view, "NewNote");
+        Type(body, "cell walls");
+        UiTest.Call(view, "SaveSoon");
+        Type(body, "cell walls, mitochondria");
+        UiTest.Call(view, "SaveSoon");
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => server.SaveArrived.IsSet && title.Text == "Biology 1 Apr", "the note to be made");
+        Assert.Equal(1, server.NotesMade);
+
+        // Opened again from a read of it while the later save is still held, as a page drawn again does.
+        var read = new NoteDetail(101, "Biology 1 Apr", "cell walls", null, new DateTime(2030, 4, 1, 9, 0, 0));
+        UiTest.Call(view, "Open", UiTest.Call(view, "WithPendingSave", read), false);
+        Assert.Equal("cell walls, mitochondria", body.Text);
+        Assert.Equal("Biology 1 Apr", title.Text);
+
+        server.ReleaseSaves.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count >= 3, "the held save");
+        Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
+        Assert.Equal("Biology 1 Apr", title.Text);
+
+        // Typed on, the title it saves is still the class title.
+        Type(body, "cell walls, mitochondria, ribosomes");
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
+        Assert.Equal("Biology 1 Apr", server.Title(101));
+        Assert.Equal("Biology 1 Apr", title.Text);
+    });
+
+    [Fact]
+    public void Delete_after_a_new_notes_first_save_failed_keeps_what_was_typed_to_try_again() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+        server.ReleaseChanges.Reset();
+        server.RefuseNextMake = true;
+
+        // Delete waits for the first save, which the server turns down.
+        UiTest.Call(view, "NewNote");
+        Type(body, "pond notes");
+        UiTest.Call(view, "SaveSoon");
+        UiTest.Call(view, "OnDeleteClicked", view, new System.Windows.RoutedEventArgs());
+        server.ReleaseChanges.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the first save");
+
+        // Its problem is said, and the note stays open with what was typed.
+        Assert.Single(Ui.TakeUnhandled());
+        Assert.Equal(0, server.NotesMade);
+        Assert.Equal("pond notes", body.Text);
+        Assert.True(UiTest.Named<System.Windows.FrameworkElement>(view, "Editor").IsVisible);
+
+        // Tried again, it's saved.
+        UiTest.Call(view, "SaveSoon");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.NotesMade == 1, "the save tried again");
+        Assert.Equal("pond notes", server.Body(101));
+        Assert.Equal("pond notes", body.Text);
+    });
+
+    [Fact]
+    public void Adding_a_file_to_a_note_returns_at_once_while_the_server_holds_it_and_says_what_to_do_next() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, body, _) = OpenNotes(ui, server);
+        var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid():N}.txt");
+        System.IO.File.WriteAllText(file, "Sow radish in early spring.");
+        try
+        {
+            server.ChangeArrived.Reset();
+            server.ReleaseChanges.Reset();
+            UiTest.Call(view, "AttachFiles", 7L, new List<string> { file });
+
+            // The window carries on while the server holds the file.
+            ServerToDoClickTests.PumpUntil(ui, () => server.ChangeArrived.IsSet, "the file to be sent");
+            ui.Pump();
+            Assert.Empty(server.Changes);
+            Assert.True(work.ChangesWaiting);
+
+            server.ReleaseChanges.Set();
+            var message = UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message");
+            ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && message.Text.Contains("Choose Write notes", StringComparison.Ordinal), "what to do next");
+            Assert.Equal([$"attach 7 {System.IO.Path.GetFileName(file)}"], server.Changes);
+            Assert.Equal("radish", body.Text);
+        }
+        finally
+        {
+            System.IO.File.Delete(file);
+        }
+    });
+
+    [Fact]
+    public void Find_anywhere_jumping_to_a_list_entry_returns_at_once_and_shows_the_entry_once_read() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, work, _, client) = OpenNotes(ui, server, withLists: true);
+
+        // Added from another PC, so it isn't in what was kept, and the lists have to be read again to show it.
+        var chia = new ListEntry(3, "Shopping", "chia seeds", false, new DateTime(2030, 4, 2, 9, 0, 0));
+        server.AddElsewhere(chia);
+        client.Send(HttpMethod.Post, "api/elsewhere");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the page to settle");
+        server.ListReadArrived.Reset();
+        server.ReleaseListReads.Reset();
+
+        view.RevealListEntry(chia);
+
+        // It came back while the server still held the read.
+        Assert.True(server.ListReadArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(work.IsBusy);
+        var lists = UiTest.Named<ListsView>(view, "ListsPanel");
+        var entries = UiTest.Named<ItemsControl>(lists, "Entries");
+        bool Shown() => entries.Items.Cast<object>().Any(row => UiTest.Prop<ListEntry>(row, "Entry")!.Id == chia.Id);
+        Assert.False(Shown());
+
+        server.ReleaseListReads.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Shown(), "the entry");
+        Assert.Equal("Shopping", lists.Selected);
     });
 
     [Fact]

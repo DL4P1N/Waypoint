@@ -196,12 +196,7 @@ public partial class NotesView
             case StudyStatus.Made when outcome.NoteId is { } noteId:
                 var before = outcome.Before;
                 Action? undo = before is not null && !string.IsNullOrWhiteSpace(before.Body)
-                    ? () =>
-                    {
-                        _notes.RestoreNoteBody(noteId, before, DateTime.Now);
-                        ReloadIfOpen(noteId);
-                        Refresh(force: true);
-                    }
+                    ? () => RestoreBody(noteId, before)
                     : null;
 
                 // Opens the new questions unless another note is being typed in.

@@ -54,10 +54,16 @@ public partial class FindView : UserControl
     // What the results shown were found for, so Enter doesn't ask the server again for the same text.
     private string? _shownFor;
 
-    /// <summary>Searches for what's in the box now, without waiting for typing to pause.</summary>
+    /// <summary>Searches for what's in the box now, without waiting for typing to pause. In server mode the results come once the server answers.</summary>
     public void Search()
     {
         _typing.Stop();
+        if (_sources is { ToDo: ServerToDoData } sources)
+        {
+            SearchOffThread(sources);
+            return;
+        }
+
         _searches++;
         var text = SearchBox.Text.Trim();
         Show(text, _sources is null ? [] : FindAnywhere.Search(text, _sources));
@@ -67,7 +73,7 @@ public partial class FindView : UserControl
     /// Once typing pauses. In server mode each page is asked over the network, so the search is made off the window's
     /// thread and typing never waits on the server. Results for text that's been typed over since are dropped.
     /// </summary>
-    private async void SearchSoon()
+    private void SearchSoon()
     {
         if (_sources is not { ToDo: ServerToDoData } sources)
         {
@@ -75,22 +81,70 @@ public partial class FindView : UserControl
             return;
         }
 
+        SearchOffThread(sources);
+    }
+
+    private async void SearchOffThread(FindSources sources) => await SearchOffThreadAsync(sources);
+
+    /// <summary>True once the results are shown, and false when they were dropped for text typed since.</summary>
+    private async System.Threading.Tasks.Task<bool> SearchOffThreadAsync(FindSources sources)
+    {
         var asked = ++_searches;
         var text = SearchBox.Text.Trim();
         var found = await System.Threading.Tasks.Task.Run(() => FindAnywhere.Search(text, sources));
-        if (asked == _searches && SearchBox.Text.Trim() == text)
+        if (asked != _searches || SearchBox.Text.Trim() != text)
         {
-            Show(text, found);
+            return false;
         }
+
+        Show(text, found);
+        return true;
     }
 
-    /// <summary>Searches now, unless in server mode the results shown are already for what's in the box.</summary>
-    private void SearchUnlessShown()
+    /// <summary>
+    /// Searches now, unless in server mode the results shown are already for what's in the box, then carries on. In
+    /// server mode a search still to make carries on once its results are shown, and not at all if more was typed.
+    /// </summary>
+    private void SearchThen(Action then)
     {
-        if (_sources is not { ToDo: ServerToDoData } || _shownFor != SearchBox.Text.Trim())
+        if (_sources is { ToDo: ServerToDoData } sources)
+        {
+            if (_shownFor != SearchBox.Text.Trim())
+            {
+                _typing.Stop();
+                Waiting = ThenLater(SearchOffThreadAsync(sources), then);
+                return;
+            }
+        }
+        else
         {
             Search();
         }
+
+        then();
+    }
+
+    /// <summary>What Enter or Down is waiting on in server mode, so tests can tell when it's done.</summary>
+    internal System.Threading.Tasks.Task Waiting { get; private set; } = System.Threading.Tasks.Task.CompletedTask;
+
+    /// <summary>Carries on once the search is shown, but not if Find was left or the box changed meanwhile.</summary>
+    private async System.Threading.Tasks.Task ThenLater(System.Threading.Tasks.Task<bool> searching, Action then)
+    {
+        var asked = _searches;
+        var text = SearchBox.Text.Trim();
+        if (await searching && asked == _searches && IsVisible && SearchBox.Text.Trim() == text)
+        {
+            then();
+        }
+    }
+
+    /// <summary>Leaving Find drops a search still on its way, so its results don't pull the user anywhere.</summary>
+    public void Leave() => _searches++;
+
+    private void Close()
+    {
+        Leave();
+        Closed?.Invoke();
     }
 
     private void Show(string text, System.Collections.Generic.IReadOnlyList<FoundThing> found)
@@ -120,18 +174,19 @@ public partial class FindView : UserControl
         {
             case Key.Enter:
                 e.Handled = true;
-                SearchUnlessShown();
-                Choose(Results.SelectedItem as FoundThing);
+                SearchThen(() => Choose(Results.SelectedItem as FoundThing));
                 break;
             case Key.Down when Results.Items.Count > 0:
                 e.Handled = true;
-                SearchUnlessShown();
-                Results.SelectedIndex = Math.Min(1, Results.Items.Count - 1);
-                FocusSelected();
+                SearchThen(() =>
+                {
+                    Results.SelectedIndex = Math.Min(1, Results.Items.Count - 1);
+                    FocusSelected();
+                });
                 break;
             case Key.Escape:
                 e.Handled = true;
-                Closed?.Invoke();
+                Close();
                 break;
         }
     }
@@ -150,7 +205,7 @@ public partial class FindView : UserControl
                 break;
             case Key.Escape:
                 e.Handled = true;
-                Closed?.Invoke();
+                Close();
                 break;
         }
     }
@@ -163,7 +218,7 @@ public partial class FindView : UserControl
         }
     }
 
-    private void OnCloseClicked(object sender, RoutedEventArgs e) => Closed?.Invoke();
+    private void OnCloseClicked(object sender, RoutedEventArgs e) => Close();
 
     private void FocusSelected()
     {

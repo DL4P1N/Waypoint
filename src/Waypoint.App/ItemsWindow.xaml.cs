@@ -108,10 +108,21 @@ public partial class ItemsWindow : Window
         _feedback = feedback ?? new LocalFeedbackData(database);
         TodayPage.FeedbackData = _feedback;
         SettingsPage.FeedbackData = _feedback;
-        SessionFeedback.Kept = () => _feedback.AddFeedback(Feedback.Session, _session?.TaskRef, DateTime.Now);
+        // What the card was about is taken as it's pressed, since in server mode it's kept after the card may have moved on.
+        SessionFeedback.Keeping = () =>
+        {
+            var (feedback, reference, at) = (_feedback, _session?.TaskRef, DateTime.Now);
+            return () => feedback.AddFeedback(Feedback.Session, reference, at);
+        };
         SessionFeedback.Noted = (id, note) => _feedback.NoteFeedback(id, note);
-        AfterThisFeedback.Kept = () => _feedback.AddFeedback(Feedback.AfterThisCard, _afterThis is { } held ? ItemRef.Format(held) : null, DateTime.Now);
+        AfterThisFeedback.Keeping = () =>
+        {
+            var (feedback, reference, at) = (_feedback, _afterThis is { } held ? ItemRef.Format(held) : null, DateTime.Now);
+            return () => feedback.AddFeedback(Feedback.AfterThisCard, reference, at);
+        };
         AfterThisFeedback.Noted = (id, note) => _feedback.NoteFeedback(id, note);
+        SessionFeedback.Work = _askWork;
+        AfterThisFeedback.Work = _askWork;
 
         // Shown once means once: closing the window puts it away for good, even if it wasn't answered.
         IsVisibleChanged += (_, _) =>
@@ -464,7 +475,11 @@ public partial class ItemsWindow : Window
     }
 
     /// <summary>Back to the page that was open.</summary>
-    private void CloseFind() => ShowPage(_page);
+    private void CloseFind()
+    {
+        FindPage.Leave();
+        ShowPage(_page);
+    }
 
     /// <summary>Opens the page a result is on and shows it there.</summary>
     private void ShowFound(FoundThing thing)
@@ -911,12 +926,34 @@ public partial class ItemsWindow : Window
         }
     }
 
-    /// <summary>Ends the session through the same call as "cancel" in Ask, without going through sorting.</summary>
-    private void OnSessionEndClicked(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Ends the session through the same call as "cancel" in Ask, without going through sorting. In server mode it's
+    /// sent off the window's thread, and End can't be pressed again until it's back.
+    /// </summary>
+    private async void OnSessionEndClicked(object sender, RoutedEventArgs e)
     {
         _didItOn = null;
         AddToChat(new ChatRow("You chose End", ChatKind.Choice));
-        ShowReply(_sessions.CancelSession(DateTime.Now).Text);
+        var button = sender as UIElement;
+        if (button is not null)
+        {
+            button.IsEnabled = false;
+        }
+
+        OpReply reply;
+        try
+        {
+            reply = await _askWork.Run(() => _sessions.CancelSession(DateTime.Now));
+        }
+        finally
+        {
+            if (button is not null)
+            {
+                button.IsEnabled = true;
+            }
+        }
+
+        ShowReply(reply.Text);
         OnDataChanged();
     }
 
@@ -926,8 +963,58 @@ public partial class ItemsWindow : Window
     /// </summary>
     public void BringBackHeld()
     {
+        // In server mode it's taken off the window's thread, once at a time, and shown when it's back.
+        if (_afterThis is null && !_takingHeld)
+        {
+            System.Threading.Tasks.Task<StoredItem?> taking;
+            _takingHeld = true;
+            try
+            {
+                taking = _askWork.Run(() => _sessions.TakeAfterThis(DateTime.Now));
+            }
+            catch
+            {
+                _takingHeld = false;
+                throw;
+            }
+
+            if (!taking.IsCompleted)
+            {
+                ShowHeldLater(taking);
+                return;
+            }
+
+            _takingHeld = false;
+            ShowHeld(taking.GetAwaiter().GetResult());
+            return;
+        }
+
+        AfterThisCard.Visibility = _afterThis is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>Set while the held item is being taken, so it's asked for once.</summary>
+    private bool _takingHeld;
+
+    private async void ShowHeldLater(System.Threading.Tasks.Task<StoredItem?> taking)
+    {
+        StoredItem? held;
+        try
+        {
+            held = await taking;
+        }
+        finally
+        {
+            _takingHeld = false;
+        }
+
+        // Shown once means once: taken while the window was closed, it's put away, as closing would have.
+        ShowHeld(IsVisible ? held : null);
+    }
+
+    private void ShowHeld(StoredItem? taken)
+    {
         // While its own reminder card is still up, the card already says it, so it isn't shown twice.
-        if (_afterThis is null && _sessions.TakeAfterThis(DateTime.Now) is { } held && CardUpFor?.Invoke(held) != true)
+        if (_afterThis is null && taken is { } held && CardUpFor?.Invoke(held) != true)
         {
             _afterThis = held;
             AfterThisLine.Text = AfterThis.Line(held);
@@ -962,22 +1049,28 @@ public partial class ItemsWindow : Window
     }
 
     /// <summary>The same Start as a reminder's, so its own steps or saved spot come first.</summary>
-    private void OnAfterThisStartClicked(object sender, RoutedEventArgs e)
+    private async void OnAfterThisStartClicked(object sender, RoutedEventArgs e)
     {
         if (_afterThis is not { } held)
         {
             return;
         }
 
-        var open = HeldStillOpen();
+        // Checked where it's started, after anything sent before it. The card goes at once, so it's started once.
+        var started = _session?.TaskRef;
+        var toDo = _toDo;
         PutAwayHeld();
-        if (!open)
+        var reply = await _askWork.Run(() =>
+            toDo.GetOpenItems().Any(item => item.Source == held.Source && item.Id == held.Id) && started != ItemRef.Format(held)
+                ? toDo.StartActivation(ItemRef.Format(held), Activation.ReminderMethod, DateTime.Now)
+                : null);
+        if (reply is null)
         {
             return;
         }
 
         AddToChat(new ChatRow("You chose Start", ChatKind.Choice));
-        ShowReply(_toDo.StartActivation(ItemRef.Format(held), Activation.ReminderMethod, DateTime.Now).Text);
+        ShowReply(reply.Text);
         OnDataChanged();
     }
 

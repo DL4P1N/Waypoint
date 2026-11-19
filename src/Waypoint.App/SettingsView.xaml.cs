@@ -208,8 +208,11 @@ public partial class SettingsView : UserControl
 
         ShowDiscord(reply);
         DiscordToken.Clear();
-        DiscordTokenNote.Visibility = _settings.GetDiscord().HasToken ? Visibility.Visible : Visibility.Collapsed;
-        Refresh();
+
+        // Whether a token is kept now is read in the page's order, so the window isn't held for it in server mode.
+        var hasToken = await Work.Read(() => settings.GetDiscord().HasToken);
+        DiscordTokenNote.Visibility = hasToken ? Visibility.Visible : Visibility.Collapsed;
+        ShowAfterChanges();
     }
 
     private async void OnDiscordTested(object sender, RoutedEventArgs e)
@@ -352,13 +355,23 @@ public partial class SettingsView : UserControl
         FeedbackClear.Visibility = entries.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    /// <summary>Clears the list, with the usual Undo to put it all back.</summary>
-    private void OnFeedbackCleared(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Clears the list, with the usual Undo to put it all back. In server mode it's sent off the window's thread, and
+    /// Clear can't be pressed again until it's back, so what Undo puts back is what was cleared.
+    /// </summary>
+    private async void OnFeedbackCleared(object sender, RoutedEventArgs e)
     {
-        var cleared = FeedbackData?.GetFeedback() ?? [];
+        var feedback = FeedbackData;
+        IReadOnlyList<FeedbackEntry> cleared;
+        FeedbackClear.IsEnabled = false;
         try
         {
-            FeedbackData?.ClearFeedback();
+            cleared = await Work.Run(() =>
+            {
+                var cleared = feedback?.GetFeedback() ?? [];
+                feedback?.ClearFeedback();
+                return cleared;
+            });
         }
         catch (Exception exception) when (exception is ServerUnavailableException or ServerTimedOutException or InvalidOperationException)
         {
@@ -366,20 +379,25 @@ public partial class SettingsView : UserControl
             NoFeedback.Visibility = Visibility.Visible;
             return;
         }
+        finally
+        {
+            FeedbackClear.IsEnabled = true;
+        }
 
         NoFeedback.Text = "Nothing yet.";
-        ShowFeedback();
+        Work.Show(ShowFeedback);
         if (cleared.Count > 0)
         {
             FeedbackBar.Show(cleared.Count == 1 ? "Cleared 1 entry." : $"Cleared {cleared.Count} entries.", () => RestoreFeedback(cleared));
         }
     }
 
-    private void RestoreFeedback(IReadOnlyList<FeedbackEntry> cleared)
+    private async void RestoreFeedback(IReadOnlyList<FeedbackEntry> cleared)
     {
+        var feedback = FeedbackData;
         try
         {
-            FeedbackData?.RestoreFeedback(cleared);
+            await Work.Run(() => feedback?.RestoreFeedback(cleared));
         }
         catch (Exception exception) when (exception is ServerUnavailableException or ServerTimedOutException or InvalidOperationException)
         {
@@ -387,7 +405,7 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        ShowFeedback();
+        Work.Show(ShowFeedback);
     }
 
     /// <summary>
