@@ -61,9 +61,15 @@ public sealed class NoteSaveRaceTests
 
         public string? Reply { get; set; }
 
+        /// <summary>When set, a reply lands before every save.</summary>
+        public bool KeepsReplying { get; set; }
+
+        private int _replies;
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
-            if (targetMethod!.Name is nameof(INotesData.SaveNote) or nameof(INotesData.SaveNoteIfUnchanged) && Reply is { } reply)
+            if (targetMethod!.Name is nameof(INotesData.SaveNote) or nameof(INotesData.SaveNoteIfUnchanged)
+                && (Reply ?? (KeepsReplying ? $"reply {++_replies}" : null)) is { } reply)
             {
                 Reply = null;
                 var id = (long)args![0]!;
@@ -104,6 +110,32 @@ public sealed class NoteSaveRaceTests
         Assert.Equal("radish\n\nbeets too", kept.Body);
     });
 
+    private const string AllReplies = "radish\n\nreply 1\n\nreply 2\n\nreply 3";
+
+    [Fact]
+    public void On_this_PC_a_note_changed_again_before_every_try_keeps_both_texts() => Ui.Run(ui =>
+    {
+        var id = ui.Database.CreateNote("Seed list", "radish", DateTime.Now);
+        var notes = DispatchProxy.Create<INotesData, AppendBeforeSave>();
+        var line = (AppendBeforeSave)(object)notes;
+        line.Inner = new LocalNotesData(ui.Database);
+        line.Database = ui.Database;
+        var view = new NotesView();
+        view.Connect(notes);
+        var body = Open(ui, view, id);
+
+        Type(body, "radish, kale");
+        line.KeepsReplying = true;
+        view.Leave();
+        line.KeepsReplying = false;
+
+        // The note keeps every reply, and what was typed is a note of its own beside it.
+        Assert.Equal(AllReplies, ui.Database.GetNote(id)!.Body);
+        var typed = Assert.Single(ui.Database.GetNotes(), note => note.Id != id && note.Title == "Seed list");
+        Assert.Equal("radish, kale", typed.Body);
+        Assert.Equal(3, ui.Database.GetNotes().Count(note => note.Title == Kept));
+    });
+
     /// <summary>
     /// One note on a server that checks a save against the text expected, the way the server does, or, when
     /// <see cref="Old"/>, a server from before that saves whatever it's sent. A reply can be added just before a save.
@@ -118,6 +150,11 @@ public sealed class NoteSaveRaceTests
 
         /// <summary>Added to the note the next time a save arrives, after anything the PC read before it.</summary>
         public string? Reply { get; set; }
+
+        /// <summary>When set, a reply is added before every save.</summary>
+        public bool KeepsReplying { get; set; }
+
+        private int _replies;
 
         public List<NoteDetail> Made { get; } = [];
 
@@ -137,7 +174,7 @@ public sealed class NoteSaveRaceTests
                 var sent = JsonSerializer.Deserialize<SaveNoteRequest>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                 lock (_gate)
                 {
-                    if (Reply is { } reply)
+                    if ((Reply ?? (KeepsReplying ? $"reply {++_replies}" : null)) is { } reply)
                     {
                         Reply = null;
                         Body = $"{Body}\n\n{reply}";
@@ -172,9 +209,16 @@ public sealed class NoteSaveRaceTests
                     body = new Found<long>(Made[^1].Id);
                 }
             }
+            else if (Made.FirstOrDefault(made => path == $"/api/notes/{made.Id}") is { } made)
+            {
+                body = new Found<NoteDetail>(made);
+            }
             else if (path is "/api/notes" or "/api/notes/in" || path.StartsWith("/api/notes/search", StringComparison.Ordinal))
             {
-                body = new[] { Note() };
+                lock (_gate)
+                {
+                    body = Made.Prepend(Note()).ToArray();
+                }
             }
             else if (path is "/api/notes/folders" or "/api/notes/spots" or "/api/notes/classes" or "/api/lists"
                 || path.EndsWith("/sources", StringComparison.Ordinal) || path.EndsWith("/suggestions", StringComparison.Ordinal))
@@ -262,6 +306,27 @@ public sealed class NoteSaveRaceTests
 
         Assert.Equal("radish, kale", server.Body);
         Assert.Equal(("radish\n\nbeets too", Kept), (Assert.Single(server.Made).Body, server.Made[0].Title));
+    });
+
+    [Fact]
+    public void With_a_server_a_note_changed_again_before_every_try_keeps_both_texts() => Ui.Run(ui =>
+    {
+        var server = new NotesServer();
+        var (view, body) = Open(ui, server);
+
+        Type(body, "radish, kale");
+        server.KeepsReplying = true;
+        UiTest.Call(view, "SaveSoon");
+        WaitForSaved(ui, view);
+        server.KeepsReplying = false;
+
+        // The note keeps every reply, each version seen was kept, and what was typed is a note of its own.
+        Assert.Equal(AllReplies, server.Body);
+        Assert.Equal(3, server.Made.Count(note => note.Title == Kept));
+        Assert.Equal("radish, kale", Assert.Single(server.Made, note => note.Title == "Seed list").Body);
+        Assert.Equal(3, server.UpToSaved(int.MaxValue).Count(entry => entry == $"PUT /api/notes/{NoteId}"));
+        ui.Pump();
+        Assert.Equal("radish, kale", body.Text);
     });
 
     [Fact]

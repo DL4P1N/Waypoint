@@ -27,7 +27,10 @@ public sealed record NoteSaveResult(NoteSaveOutcome Outcome, NoteDetail? Stored 
 /// <summary>How the note editor saves, so a change made elsewhere meanwhile is never lost under it.</summary>
 public static class NoteSaving
 {
-    /// <summary>How many times a save tries again when the note keeps changing under it, before it saves anyway.</summary>
+    /// <summary>
+    /// How many times a save tries again when the note keeps changing under it, before what was typed is kept as a
+    /// note of its own instead.
+    /// </summary>
     public const int Tries = 3;
 
     /// <summary>
@@ -43,7 +46,8 @@ public static class NoteSaving
     /// Discord, another PC, or its .md file, that version is first kept as a note of its own, the same as before,
     /// and the save goes ahead over it. The check and the save are one step where the note is kept, so nothing can
     /// land between them. With no <paramref name="expectedBody"/> there's nothing to compare with, and it simply
-    /// saves. False if the note is gone, so the caller can keep the text as a new note.
+    /// saves. False if the note is gone, or still changed each time it was checked, so the caller keeps the text as a
+    /// new note and the note keeps the version saved elsewhere.
     /// </summary>
     public static bool SaveKeepingOther(INotesData notes, long id, string title, string body, string? expectedBody, DateTime now)
     {
@@ -83,9 +87,9 @@ public static class NoteSaving
             expectedBody = stored.Body;
         }
 
-        // Still changing each time it's checked. Every version seen was kept above, so this saves as before.
-        var saved = notes.SaveNote(id, title, body, now);
-        kept.TryRemove(id, out _);
-        return saved;
+        // Still changing each time it's checked. Saving over it now could lose a change landing after the last check,
+        // so the note keeps whatever it has and what was typed becomes a note of its own. What was kept above stays
+        // known, so a try again after that fails doesn't keep the same version twice.
+        return false;
     }
 }

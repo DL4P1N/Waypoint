@@ -35,12 +35,18 @@ public sealed class NoteSavingTests : IDisposable
         /// <summary>The text added the next time a save arrives, if any.</summary>
         public string? Reply { get; set; }
 
+        /// <summary>When set, a reply lands before every save, as from someone still adding them from Discord.</summary>
+        public bool KeepsReplying { get; set; }
+
         public List<string> Calls { get; } = [];
+
+        private int _replies;
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             Calls.Add(targetMethod!.Name);
-            if (targetMethod.Name is nameof(INotesData.SaveNote) or nameof(INotesData.SaveNoteIfUnchanged) && Reply is { } reply)
+            if (targetMethod.Name is nameof(INotesData.SaveNote) or nameof(INotesData.SaveNoteIfUnchanged)
+                && (Reply ?? (KeepsReplying ? $"reply {++_replies}" : null)) is { } reply)
             {
                 Reply = null;
                 var id = (long)args![0]!;
@@ -108,6 +114,49 @@ public sealed class NoteSavingTests : IDisposable
         var kept = Assert.Single(_database.GetNotes(), note => note.Id != id);
         Assert.Equal("Seed list" + NoteDraft.ElsewhereSuffix, kept.Title);
         Assert.Equal("radish\n\nbeets too", kept.Body);
+    }
+
+    [Fact]
+    public void A_note_changed_again_before_every_try_is_never_saved_over_and_nothing_is_lost()
+    {
+        var (notes, line) = AppendBeforeSave.Over(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        line.KeepsReplying = true;
+
+        // Every try finds another reply landed between its check and its save, so the editor is told to keep what
+        // was typed as a new note, as it does for a note that's gone.
+        Assert.False(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        line.KeepsReplying = false;
+        Assert.DoesNotContain(nameof(INotesData.SaveNote), line.Calls);
+        Assert.Equal(NoteSaving.Tries, line.Calls.Count(call => call == nameof(INotesData.SaveNoteIfUnchanged)));
+
+        // The note still has every reply, and each version seen along the way was kept as well.
+        const string One = "radish\n\nreply 1", Two = One + "\n\nreply 2", Three = Two + "\n\nreply 3";
+        Assert.Equal(Three, _database.GetNote(id)!.Body);
+        Assert.Equal([One, Two, Three], _database.GetNotes().Where(note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix).Select(note => note.Body).Order().ToList());
+
+        // What was typed is kept beside it the way the editor does, and both texts are there.
+        var typed = notes.CreateNote("Seed list", "radish, kale", Now, _database.GetNote(id)!.FolderId);
+        Assert.Equal("radish, kale", _database.GetNote(typed)!.Body);
+        Assert.Equal(Three, _database.GetNote(id)!.Body);
+        Assert.Equal(5, _database.GetNotes().Count);
+    }
+
+    [Fact]
+    public void A_save_tried_again_after_the_note_kept_changing_does_not_keep_the_last_version_twice()
+    {
+        var (notes, line) = AppendBeforeSave.Over(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        line.KeepsReplying = true;
+        Assert.False(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+        line.KeepsReplying = false;
+
+        // Making the new note didn't go through, such as on a busy server, so the editor tries again from the text
+        // it loaded. The last version seen was already kept, and this time nothing lands in between.
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", Now));
+
+        Assert.Equal("radish, kale", _database.GetNote(id)!.Body);
+        Assert.Equal(3, _database.GetNotes().Count(note => note.Title == "Seed list" + NoteDraft.ElsewhereSuffix));
     }
 
     [Fact]
