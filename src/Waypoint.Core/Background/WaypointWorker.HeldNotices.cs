@@ -33,6 +33,18 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>Whether a held notice is going out right now. For tests, to know a round's sends are over.</summary>
+    internal bool SendingHeld
+    {
+        get
+        {
+            lock (_heldSending)
+            {
+                return _heldSending.Count > 0;
+            }
+        }
+    }
+
     /// <summary>
     /// A held notice is kept until it's gone out, and noted before it's sent, so a crash partway sends it once:
     /// never lost, and never twice. It's let go in the same write that notes it's done.

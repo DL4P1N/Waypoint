@@ -134,7 +134,7 @@ public sealed partial class DiscordPhoneTests
         FailPartway("BEFORE INSERT ON preferences WHEN NEW.key = 'discord_pinned_views'");
         var first = Worker(lists: null);
         await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
-        await Task.Delay(50);
+        await first.ViewsSettledAsync();
         first.StopDiscord();
         StopFailingPartway();
         var noted = _database.GetDiscordSends("view:");
@@ -142,7 +142,7 @@ public sealed partial class DiscordPhoneTests
         Assert.All(noted, send => Assert.NotNull(send.MessageId));
         var second = Worker(lists: null);
         await second.RefreshDiscordViewsAsync();
-        await Task.Delay(50);
+        await second.ViewsSettledAsync();
         AssertEachViewMadeOnce();
         Assert.Empty(_database.GetDiscordSends("view:"));
 
@@ -162,7 +162,7 @@ public sealed partial class DiscordPhoneTests
         FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
         var first = Worker(lists: null);
         await Record.ExceptionAsync(() => first.RefreshDiscordViewsAsync());
-        await Task.Delay(50);
+        await first.ViewsSettledAsync();
         first.StopDiscord();
         StopFailingPartway();
         Assert.NotEmpty(ViewsMade());
@@ -171,7 +171,7 @@ public sealed partial class DiscordPhoneTests
         _discord.ListMade = true;
         var second = Worker(lists: null);
         await second.RefreshDiscordViewsAsync();
-        await Task.Delay(50);
+        await second.ViewsSettledAsync();
 
         AssertEachViewMadeOnce();
         Assert.Empty(_database.GetDiscordSends("view:"));
@@ -200,8 +200,10 @@ public sealed partial class DiscordPhoneTests
         var second = Worker(toDo: null, lists: null);
         second.CheckAlerts();
         await Until(() => _database.GetHeldNotices().Count == 0);
+
+        // A round after it's let go starts no send of its own, and the one that sent it is waited out.
         second.CheckAlerts();
-        await Task.Delay(50);
+        await Until(() => !second.SendingHeld);
 
         Assert.Single(CardsAbout("Made up deposit"));
         Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up deposit"));
@@ -254,7 +256,7 @@ public sealed partial class DiscordPhoneTests
 
         await Until(() => _database.GetHeldNotices().Count == 0);
         worker.CheckAlerts();
-        await Task.Delay(50);
+        await Until(() => !worker.SendingHeld);
 
         Assert.Single(_discord.Of(HttpMethod.Post), request => request.Body.Contains("Made up refund"));
         Assert.Empty(_database.GetDiscordSends("held:"));
