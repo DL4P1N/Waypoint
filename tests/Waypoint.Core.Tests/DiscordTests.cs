@@ -633,7 +633,7 @@ public sealed class DiscordTests : IDisposable
     }
 
     [Fact]
-    public async Task Looking_for_an_earlier_post_says_it_isnt_known_when_the_channel_or_the_bot_cant_be_read()
+    public async Task Looking_for_an_earlier_post_says_it_isnt_known_when_the_channel_or_the_bot_cant_be_read_and_refused_when_turned_away()
     {
         var card = new DiscordCard("Made up card", null, [], CardTone.Reminder);
         var channelDown = new FakeDiscord(request => request.RequestUri!.ToString().EndsWith("/users/@me", StringComparison.Ordinal)
@@ -645,7 +645,11 @@ public sealed class DiscordTests : IDisposable
             : (HttpStatusCode.OK, "[]"));
 
         Assert.Equal(SentLookup.Unknown, (await Bridge(channelDown).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
-        Assert.Equal(SentLookup.Unknown, (await Bridge(nobody).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+        var gone = new FakeDiscord(request => request.RequestUri!.ToString().EndsWith("/users/@me", StringComparison.Ordinal)
+            ? (HttpStatusCode.OK, """{"id":"self"}""")
+            : (HttpStatusCode.NotFound, """{"code":10003}"""));
+        Assert.Equal(SentLookup.Refused, (await Bridge(nobody).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
+        Assert.Equal(SentLookup.Refused, (await Bridge(gone).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
         Assert.Equal(SentLookup.NotFound, (await Bridge(empty).FindSentAfterAsync("200", "1", "n", card, new HashSet<string>())).Result);
     }
 }

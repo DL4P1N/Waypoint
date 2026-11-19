@@ -167,7 +167,7 @@ public sealed class PinnedViews(WaypointDatabase database)
             var known = database.GetTrackedMessages(key);
             known.UnionWith(PlacedMessages());
             var search = await bridge.FindSentAsync(view.Channel, send.StartedAt, send.Nonce, view.Card, sameTitleOnly: true, known: known);
-            if (search.Result == SentLookup.Unknown)
+            if (search.CantTell)
             {
                 // Whether it was posted can't be told now, so it's left for a later round instead of posted twice.
                 return null;

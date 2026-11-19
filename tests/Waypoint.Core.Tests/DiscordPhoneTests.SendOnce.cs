@@ -102,6 +102,75 @@ public sealed partial class DiscordPhoneTests
     }
 
     [Fact]
+    public async Task A_reminder_whose_card_cant_be_looked_for_shows_on_the_pc_once_even_after_a_restart()
+    {
+        var (_, key) = DueReminderFor("Made up rent check");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+        _discord.ForgetNonces();
+        _discord.ListFails = true;
+
+        // Within the time sending is tried, it's only looked for again, and shown nowhere yet.
+        var second = Worker(toDo: null, lists: null);
+        await LookedFor(second, 2);
+        Assert.DoesNotContain("Made up rent check", _pc.ShownCopy());
+
+        // After that it shows on the PC, once, and isn't posted again.
+        _now = _now.Add(AlertRetry.Total);
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return _pc.ShownCopy().Contains("Made up rent check");
+        });
+        second.StopDiscord();
+        var third = Worker(toDo: null, lists: null);
+        await LookedFor(third, 3);
+
+        Assert.Single(_pc.ShownCopy(), title => title == "Made up rent check");
+        Assert.Single(CardsAbout("Made up rent check"));
+        Assert.NotNull(_database.GetDiscordSend(key));
+    }
+
+    [Fact]
+    public async Task A_reminder_whose_channel_is_gone_shows_on_the_pc_straight_away()
+    {
+        var (_, key) = DueReminderFor("Made up oil change");
+        var first = Worker(toDo: null, lists: null);
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends");
+        first.CheckAlerts();
+        await Until(() => _discord.MadeMessages.Count > 0 && _database.GetDiscordSend(key) is not null);
+        first.StopDiscord();
+        StopFailingPartway();
+        _discord.ForgetNonces();
+        _discord.ListStatus = System.Net.HttpStatusCode.NotFound;
+
+        var second = Worker(toDo: null, lists: null);
+        await Until(() =>
+        {
+            second.CheckAlerts();
+            return _pc.ShownCopy().Contains("Made up oil change");
+        });
+
+        Assert.Single(CardsAbout("Made up oil change"));
+    }
+
+    /// <summary>Runs rounds until the alerts channel has been read this many more times.</summary>
+    private async Task LookedFor(Background.WaypointWorker worker, int times)
+    {
+        int Reads() => _discord.All.Count(request => request.Method == HttpMethod.Get && request.Url.Contains("/channels/alerts/messages?"));
+        var before = Reads();
+        await Until(() =>
+        {
+            worker.CheckAlerts();
+            return Reads() >= before + times;
+        });
+    }
+
+    [Fact]
     public async Task A_reminder_card_tried_again_soon_after_carries_the_same_nonce_so_discord_makes_it_once()
     {
         var (task, key) = DueReminderFor("Made up form to sign");

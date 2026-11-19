@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 
 namespace Waypoint.Core.Discord;
@@ -11,12 +12,27 @@ public enum SentLookup
 
     /// <summary>The channel, or who the bot is, couldn't be read, so the post may or may not be there.</summary>
     Unknown,
+
+    /// <summary>
+    /// Discord turned the read away for good: the channel is gone, the bot may not see it, or its token no longer
+    /// works. A post there would fail too, so whether one is there isn't known either.
+    /// </summary>
+    Refused,
 }
 
 /// <summary>The answer to looking for an earlier post, with the message when it was found.</summary>
 public readonly record struct SentSearch(SentLookup Result, string? MessageId)
 {
     public static readonly SentSearch NotKnown = new(SentLookup.Unknown, null);
+
+    public static readonly SentSearch TurnedAway = new(SentLookup.Refused, null);
+
+    /// <summary>Unknown or refused: whether the post is there can't be told, so it mustn't be sent again now.</summary>
+    public bool CantTell => Result is SentLookup.Unknown or SentLookup.Refused;
+
+    /// <summary>The answer for a read Discord answered with this status instead of the messages.</summary>
+    internal static SentSearch Failed(HttpStatusCode status) =>
+        status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound ? TurnedAway : NotKnown;
 }
 
 /// <summary>Finding a post that went through before Waypoint could note it, so a post noted beforehand is never made twice.</summary>
@@ -41,9 +57,10 @@ public sealed partial class DiscordBridge
         try
         {
             // Only this bot's own posts count, so one from another bot that looks the same is never taken.
-            if (await OwnUserIdAsync() is not { } self)
+            var (self, refused) = await OwnUserIdAsync();
+            if (self is null)
             {
-                return SentSearch.NotKnown;
+                return refused ? SentSearch.TurnedAway : SentSearch.NotKnown;
             }
 
             for (var page = 0; page < MaxSentPages; page++)
@@ -51,7 +68,7 @@ public sealed partial class DiscordBridge
                 using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/channels/{channel}/messages?limit={SentPageSize}&after={after}"));
                 if (!response.IsSuccessStatusCode)
                 {
-                    return SentSearch.NotKnown;
+                    return SentSearch.Failed(response.StatusCode);
                 }
 
                 using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -100,29 +117,30 @@ public sealed partial class DiscordBridge
     private const int MaxSentPages = 5;
 
     /// <summary>
-    /// This bot's own user ID: the one Discord said on connecting, or else asked for once. Null when it can't be read.
+    /// This bot's own user ID: the one Discord said on connecting, or else asked for once. Null when it can't be read,
+    /// with Refused when Discord says the token no longer works.
     /// </summary>
-    private async Task<string?> OwnUserIdAsync()
+    private async Task<(string? Id, bool Refused)> OwnUserIdAsync()
     {
         if (BotUserId is { } known)
         {
-            return known;
+            return (known, false);
         }
 
         using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Get, $"{ApiBase}/users/@me"));
         if (!response.IsSuccessStatusCode)
         {
-            return null;
+            return (null, response.StatusCode == HttpStatusCode.Unauthorized);
         }
 
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         if (document.RootElement.ValueKind != JsonValueKind.Object || Text(document.RootElement, "id") is not { } id)
         {
-            return null;
+            return (null, false);
         }
 
         BotUserId ??= id;
-        return BotUserId;
+        return (BotUserId, false);
     }
 
     /// <summary>How far before a post's note to look, in case this PC's clock runs a little ahead of Discord's.</summary>
