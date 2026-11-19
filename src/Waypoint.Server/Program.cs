@@ -30,6 +30,7 @@ builder.Services.AddSingleton<ServerHost>();
 builder.Services.AddSingleton<ReportedIdle>();
 builder.Services.AddSingleton<ReplyLog>();
 builder.Services.AddSingleton<WaypointServer>();
+builder.Services.AddSingleton<ServerMaintenance>();
 if (options.RunBackground)
 {
     builder.Services.AddHostedService<BackgroundLoops>();

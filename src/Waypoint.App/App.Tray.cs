@@ -116,10 +116,17 @@ public partial class App
         var icon = new Icon(iconStream, Forms.SystemInformation.SmallIconSize);
 
         var tray = new Forms.NotifyIcon { Icon = icon, Text = Trial.TrayTip(TrayIdle, MaxTrayTextLength), Visible = true, ContextMenuStrip = menu };
-        tray.BalloonTipClicked += (_, _) => _itemsWindow.ShowList();
+        // Nothing opens during a restore. Waypoint starts again once it's done.
+        tray.BalloonTipClicked += (_, _) =>
+        {
+            if (!_restoring)
+            {
+                _itemsWindow.ShowList();
+            }
+        };
         tray.MouseClick += (_, args) =>
         {
-            if (args.Button == Forms.MouseButtons.Left)
+            if (args.Button == Forms.MouseButtons.Left && !_restoring)
             {
                 _itemsWindow.ShowList();
             }

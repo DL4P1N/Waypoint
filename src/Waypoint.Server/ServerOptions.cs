@@ -44,7 +44,10 @@ public sealed class ServerOptions
     /// <summary>Off only in tests, which check the API without reminders going out underneath them.</summary>
     public bool RunBackground { get; set; } = true;
 
-    /// <summary>Whether a restore ends the process so systemd starts it again on the restored data. Off only in tests.</summary>
+    /// <summary>
+    /// Whether a restore ends the process so systemd starts it again on the restored data. Off only in tests, where the
+    /// server stays up after a restore but with everything that writes stopped and changes turned away.
+    /// </summary>
     public bool RestartAfterRestore { get; set; } = true;
 
     /// <summary>The data folder, made if needed. Never the PC app's own folder, so a trial run on Windows can't touch it.</summary>

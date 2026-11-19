@@ -23,6 +23,9 @@ public sealed class CaptureService(
     private static readonly string[] NextStepWords = ["what do i do", "what should i", "what now", "what's next", "whats next", "work on"];
 
     private readonly SemaphoreSlim _processing = new(1, 1);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly Lock _stopGate = new();
+    private Task<bool>? _stopped;
 
     /// <summary>The time as the service sees it. Tests pass a fixed clock so they don't depend on the hour.</summary>
     private DateTime Now => clock?.Invoke() ?? DateTime.Now;
@@ -111,9 +114,24 @@ public sealed class CaptureService(
 
     public async Task ProcessPendingAsync(CancellationToken cancellationToken = default)
     {
-        await _processing.WaitAsync(cancellationToken);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
         try
         {
+            await _processing.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+            return;
+        }
+
+        cancellationToken = linked.Token;
+        try
+        {
+            if (_stop.IsCancellationRequested)
+            {
+                return;
+            }
+
             LastError = null;
             foreach (var capture in database.GetPendingCaptures())
             {
@@ -186,6 +204,10 @@ public sealed class CaptureService(
                 await RunStepsAsync(capture, progress with { Applied = [.. applied] }, context, cancellationToken);
             }
         }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+            // Stopped for a restore. One cut off partway picks up where it stopped next start.
+        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             LastError = exception.Message;
@@ -196,6 +218,26 @@ public sealed class CaptureService(
         {
             _processing.Release();
         }
+    }
+
+    /// <summary>
+    /// Stops sorting for good, as before a restore: a sort under way is told to stop, and none starts after. True once
+    /// none is running, within <paramref name="limit"/>. Calling it again gives the same answer.
+    /// </summary>
+    public Task<bool> StopAsync(TimeSpan limit)
+    {
+        lock (_stopGate)
+        {
+            return _stopped ??= StopCoreAsync(limit);
+        }
+    }
+
+    private async Task<bool> StopCoreAsync(TimeSpan limit)
+    {
+        _stop.Cancel();
+
+        // Taken and never given back, so nothing sorts again in this run.
+        return await _processing.WaitAsync(limit);
     }
 
     /// <summary>Said for a step that was running when Waypoint stopped, since it can't be told whether it went through.</summary>

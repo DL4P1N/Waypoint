@@ -75,7 +75,18 @@ public sealed class BackgroundLoops(WaypointServer server, IOptions<ServerOption
         await server.Host.StopAsync(OrderedWork.DefaultStopLimit);
     }
 
-        private async Task PingAsync(string url, CancellationToken stoppingToken)
+    /// <summary>
+    /// Stops the loops, Discord, and the work they handed on, the same as shutting down, before a restore. True once
+    /// the loops have ended within <paramref name="limit"/>. The host stops it again on the way out, which does nothing more.
+    /// </summary>
+    public async Task<bool> StopForRestoreAsync(TimeSpan limit)
+    {
+        using var timeout = new CancellationTokenSource(limit);
+        await StopAsync(timeout.Token);
+        return ExecuteTask is not { IsCompleted: false };
+    }
+
+    private async Task PingAsync(string url, CancellationToken stoppingToken)
     {
         if (server.Problem(DateTime.Now, runsBackground: true) is { } problem)
         {

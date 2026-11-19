@@ -17,10 +17,39 @@ namespace Waypoint.App;
 /// <summary>Writing notes from a note's sources: asking before replacing, finishing a write, undoing it, and the status line and Stop.</summary>
 public partial class NotesView
 {
+    private bool _stoppedForRestore;
+
+    /// <summary>
+    /// Before a restore: stops notes being written, and waits up to <paramref name="limit"/> for them and practice
+    /// questions under way to end. None starts after, and what they'd show or ask at the end is skipped, since
+    /// Waypoint starts again. True once none is left.
+    /// </summary>
+    public async Task<bool> StopWritingAsync(TimeSpan limit)
+    {
+        _stoppedForRestore = true;
+        foreach (var job in _jobs.Values)
+        {
+            job.Stop.Cancel();
+        }
+
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (_jobs.Count > 0 || _studying.Count > 0)
+        {
+            if (waited.Elapsed >= limit)
+            {
+                return false;
+            }
+
+            await Task.Delay(50);
+        }
+
+        return true;
+    }
+
     /// <summary>The user said yes before this is called, or there was nothing of theirs to replace.</summary>
     private async Task WriteNotesAsync(long noteId, string? request)
     {
-        if (_maker is not { } maker || _jobs.ContainsKey(noteId))
+        if (_maker is not { } maker || _jobs.ContainsKey(noteId) || _stoppedForRestore)
         {
             return;
         }
@@ -63,7 +92,10 @@ public partial class NotesView
             }
         }
 
-        await Finish(noteId, outcome);
+        if (!_stoppedForRestore)
+        {
+            await Finish(noteId, outcome);
+        }
     }
 
     private async Task Finish(long noteId, NoteWriteOutcome outcome)

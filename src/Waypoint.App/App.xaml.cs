@@ -104,6 +104,12 @@ public partial class App : System.Windows.Application
             ? $@"Local\Waypoint-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(chosen).ToUpperInvariant())))[..16]}"
             : @"Local\Waypoint";
         _singleInstance = new Mutex(initiallyOwned: true, instance, out var isFirstInstance);
+        var afterRestore = e.Args.Length > 1 && e.Args[0] == AfterRestoreArgument ? e.Args[1] : null;
+        if (!isFirstInstance && afterRestore is not null)
+        {
+            isFirstInstance = WaitForEarlierCopy(_singleInstance);
+        }
+
         _showList = new EventWaitHandle(false, EventResetMode.AutoReset, $"{instance}.ShowList");
         if (!isFirstInstance)
         {
@@ -396,7 +402,13 @@ public partial class App : System.Windows.Application
         {
             while (_showList.WaitOne())
             {
-                Dispatcher.BeginInvoke(() => _itemsWindow.ShowLastPage());
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (!_restoring)
+                    {
+                        _itemsWindow.ShowLastPage();
+                    }
+                });
             }
         })
         { IsBackground = true };
@@ -425,6 +437,12 @@ public partial class App : System.Windows.Application
 
         // A recording cut off by a crash or power cut is fixed and offered once things have settled.
         Dispatcher.BeginInvoke(() => Guarded(() => _recorder?.OfferUnfinished()), DispatcherPriority.ApplicationIdle);
+
+        // Started again after a restore, it says how that went.
+        if (afterRestore is not null)
+        {
+            Dispatcher.BeginInvoke(() => NoteConfirmWindow.Tell(null, RestoreTitle, afterRestore), DispatcherPriority.ApplicationIdle);
+        }
     }
 
     private void StartLater(bool atLogin)
