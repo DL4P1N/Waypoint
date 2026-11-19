@@ -233,6 +233,34 @@ public sealed partial class ServerClient
         throw Unavailable();
     }
 
+    [ThreadStatic]
+    private static int t_noFallbacks;
+
+    /// <summary>
+    /// Until it's disposed, a read on this thread with nothing kept and no server throws
+    /// <see cref="ServerUnavailableException"/> instead of giving its empty fallback, so a search can tell a page it
+    /// couldn't reach from one where nothing matched.
+    /// </summary>
+    public static IDisposable NoFallbacks()
+    {
+        t_noFallbacks++;
+        return new FallbacksBack();
+    }
+
+    private sealed class FallbacksBack : IDisposable
+    {
+        private bool _done;
+
+        public void Dispose()
+        {
+            if (!_done)
+            {
+                _done = true;
+                t_noFallbacks--;
+            }
+        }
+    }
+
     /// <summary>
     /// A read for a page. With nothing kept yet and no server, it gives <paramref name="empty"/> so the window can
     /// still open, and the status line says why it's empty.
@@ -245,7 +273,7 @@ public sealed partial class ServerClient
         {
             return Get<T>(path, out fresh);
         }
-        catch (ServerUnavailableException)
+        catch (ServerUnavailableException) when (t_noFallbacks == 0)
         {
             fresh = false;
             return empty;

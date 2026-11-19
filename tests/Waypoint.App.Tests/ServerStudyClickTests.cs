@@ -139,13 +139,44 @@ public sealed class ServerStudyClickTests
         public NoteAudioResult Delete(long noteId) => new(false, "");
     }
 
-    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, StudyServer server)
+    /// <summary>Note 7 has kept audio until it's deleted. Deleting can be held, or fail as if the server were away.</summary>
+    private sealed class HeldAudio : INoteAudio
+    {
+        private int _deletes;
+        private volatile bool _deleted;
+
+        public ManualResetEventSlim ReleaseDelete { get; } = new(initialState: true);
+
+        public bool ServerAway { get; set; }
+
+        public int Deletes => Volatile.Read(ref _deletes);
+
+        public IReadOnlyList<NoteRecording> For(long noteId) =>
+            noteId == 7 && !_deleted ? [new NoteRecording(3, "Lecture", @"C:\made-up\lecture.m4a", null, [])] : [];
+
+        public Task<NoteAudioResult> KeepAsync(long noteId, CancellationToken cancellationToken = default) => Task.FromResult(new NoteAudioResult(false, ""));
+
+        public NoteAudioResult Delete(long noteId)
+        {
+            Interlocked.Increment(ref _deletes);
+            ReleaseDelete.Wait(TimeSpan.FromSeconds(10));
+            if (ServerAway)
+            {
+                throw new ServerUnavailableException("The server couldn't be reached.");
+            }
+
+            _deleted = true;
+            return new NoteAudioResult(true, "Deleted this note's audio. The transcript and notes are still here.");
+        }
+    }
+
+    private static (NotesView View, PageWork Work, MarkdownBox Body, ServerClient Client) OpenNotes(UiTest ui, StudyServer server, INoteAudio? audio = null)
     {
         var client = new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token");
         var work = new PageWork(client);
         var view = new NotesView { Work = work };
         view.Connect(new ServerNotesData(client));
-        view.ConnectStudy(new NoAudio());
+        view.ConnectStudy(audio ?? new NoAudio());
         ui.Host(view);
         work.Show(() => view.Refresh(force: true));
         var body = UiTest.Named<MarkdownBox>(view, "BodyBox");
@@ -281,5 +312,52 @@ public sealed class ServerStudyClickTests
         // The other note shows its own, none, rather than the late answer for note 7.
         Assert.Empty(Shown());
         Assert.Equal(Visibility.Collapsed, panel.Visibility);
+    });
+
+    [Fact]
+    public void Deleting_a_notes_audio_returns_at_once_the_button_is_off_until_it_is_done_and_the_bar_says_how_it_went() => Ui.Run(ui =>
+    {
+        var server = new StudyServer();
+        var audio = new HeldAudio();
+        var (view, work, _, _) = OpenNotes(ui, server, audio);
+        var button = UiTest.Named<Button>(view, "AudioButton");
+        ServerToDoClickTests.PumpUntil(ui, () => button.Visibility == Visibility.Visible && button.IsEnabled, "the audio button");
+
+        // Deleting is held on the server. The window carries on, the button is off, and the bar says it's on its way.
+        audio.ReleaseDelete.Reset();
+        var deleting = (Task)UiTest.Call(view, "DeleteAudio", 7L, audio)!;
+        ServerToDoClickTests.PumpUntil(ui, () => audio.Deletes == 1, "the delete to be sent");
+        Assert.False(deleting.IsCompleted);
+        Assert.False(button.IsEnabled);
+        Assert.Equal("Deleting this note's audio...", BarText(view));
+
+        // A second press meanwhile does nothing.
+        UiTest.Call(view, "OnAudioClicked", button, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(1, audio.Deletes);
+
+        audio.ReleaseDelete.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && !work.IsBusy, "the delete to finish");
+        ui.Pump();
+        Assert.Equal("Deleted this note's audio. The transcript and notes are still here.", BarText(view));
+        Assert.Equal(Visibility.Collapsed, button.Visibility);
+        Assert.True(button.IsEnabled);
+    });
+
+    [Fact]
+    public void Deleting_a_notes_audio_while_the_server_is_away_says_so_and_turns_the_button_back_on() => Ui.Run(ui =>
+    {
+        var server = new StudyServer();
+        var audio = new HeldAudio { ServerAway = true };
+        var (view, work, _, _) = OpenNotes(ui, server, audio);
+        var button = UiTest.Named<Button>(view, "AudioButton");
+        ServerToDoClickTests.PumpUntil(ui, () => button.Visibility == Visibility.Visible && button.IsEnabled, "the audio button");
+
+        var deleting = (Task)UiTest.Call(view, "DeleteAudio", 7L, audio)!;
+        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && !work.IsBusy, "the delete to fail");
+        ui.Pump();
+        Assert.Equal("The audio couldn't be deleted, because the server couldn't be reached. Try again in a moment.", BarText(view));
+        Assert.Equal(Visibility.Visible, button.Visibility);
+        Assert.True(button.IsEnabled);
     });
 }

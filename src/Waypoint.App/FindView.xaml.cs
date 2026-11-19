@@ -16,8 +16,20 @@ public partial class FindView : UserControl
 {
     public const string StartHint = "Type to look through To do, Notes, lists, History, and Budget at once.";
 
+    public const string SearchingHint = "Searching...";
+
+    public const string PartialHint = "Some places couldn't be searched just now.";
+
+    public const string NoneReachedHint = "Nothing could be searched just now, because the server couldn't be reached. Try again in a moment.";
+
     private readonly DispatcherTimer _typing = new() { Interval = TimeSpan.FromMilliseconds(200) };
+
+    // Searching... only shows for a search that takes a moment, so a quick one doesn't flicker.
+    private readonly DispatcherTimer _searching = new() { Interval = TimeSpan.FromMilliseconds(400) };
     private FindSources? _sources;
+
+    // What the hint says for the results shown, to go back to if a search is dropped.
+    private string _hint = StartHint;
 
     public FindView()
     {
@@ -28,6 +40,7 @@ public partial class FindView : UserControl
             _typing.Stop();
             SearchSoon();
         };
+        _searching.Tick += (_, _) => OnSearchingTick();
     }
 
     /// <summary>A result was picked, to be shown on its page.</summary>
@@ -66,7 +79,7 @@ public partial class FindView : UserControl
 
         _searches++;
         var text = SearchBox.Text.Trim();
-        Show(text, _sources is null ? [] : FindAnywhere.Search(text, _sources));
+        Show(text, _sources is null ? Nothing : FindAnywhere.Look(text, _sources));
     }
 
     /// <summary>
@@ -91,14 +104,42 @@ public partial class FindView : UserControl
     {
         var asked = ++_searches;
         var text = SearchBox.Text.Trim();
-        var found = await System.Threading.Tasks.Task.Run(() => FindAnywhere.Search(text, sources));
+        _searching.Stop();
+        _searching.Start();
+        FindResult found;
+        try
+        {
+            found = await System.Threading.Tasks.Task.Run(() => FindAnywhere.Look(text, sources));
+        }
+        finally
+        {
+            if (asked == _searches)
+            {
+                _searching.Stop();
+            }
+        }
+
         if (asked != _searches || SearchBox.Text.Trim() != text)
         {
+            if (asked == _searches)
+            {
+                ShowHint(_hint);
+            }
+
             return false;
         }
 
         Show(text, found);
         return true;
+    }
+
+    private static FindResult Nothing => new([], [], []);
+
+    /// <summary>A search is still on its way after a moment, so the hint says so. The results shown stay until it answers.</summary>
+    private void OnSearchingTick()
+    {
+        _searching.Stop();
+        ShowHint(SearchingHint);
     }
 
     /// <summary>
@@ -139,7 +180,12 @@ public partial class FindView : UserControl
     }
 
     /// <summary>Leaving Find drops a search still on its way, so its results don't pull the user anywhere.</summary>
-    public void Leave() => _searches++;
+    public void Leave()
+    {
+        _searches++;
+        _searching.Stop();
+        ShowHint(_hint);
+    }
 
     private void Close()
     {
@@ -147,8 +193,13 @@ public partial class FindView : UserControl
         Closed?.Invoke();
     }
 
-    private void Show(string text, System.Collections.Generic.IReadOnlyList<FoundThing> found)
+    /// <summary>
+    /// Shows the results. "Nothing matches" is only said when every page answered. When some couldn't be reached
+    /// the results that came show with a quiet note, and when none could, the hint says so instead.
+    /// </summary>
+    private void Show(string text, FindResult result)
     {
+        var found = result.Found;
         _shownFor = text;
         Results.ItemsSource = found;
         if (found.Count > 0)
@@ -156,10 +207,18 @@ public partial class FindView : UserControl
             Results.SelectedIndex = 0;
         }
 
-        Hint.Text = text.Length < FindAnywhere.MinLength
-            ? StartHint
-            : found.Count == 0 ? $"Nothing on any page matches \"{text}\"." : "";
-        Hint.Visibility = Hint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _hint = text.Length < FindAnywhere.MinLength ? StartHint
+            : result.Partial && result.Answered.Count == 0 ? NoneReachedHint
+            : result.Partial ? PartialHint
+            : found.Count == 0 ? $"Nothing on any page matches \"{text}\"."
+            : "";
+        ShowHint(_hint);
+    }
+
+    private void ShowHint(string hint)
+    {
+        Hint.Text = hint;
+        Hint.Visibility = hint.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)

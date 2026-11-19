@@ -132,4 +132,111 @@ public sealed class ServerFindClickTests
 
         Assert.Null(chosen);
     });
+
+    /// <summary>Answers each read, or throws as if the server can't be reached. Open to-dos include one to find.</summary>
+    private sealed class Reachable(bool up) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (!up)
+            {
+                throw new HttpRequestException("No route to host");
+            }
+
+            object body = request.RequestUri!.AbsolutePath == "/api/items/open"
+                ? new List<StoredItem> { new(9, ItemKind.Task, "Feed the zebra", null, null, false) }
+                : new List<object>();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(body, body.GetType(), RemoteJson.Options), Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private static ServerClient Client(HttpMessageHandler handler) => new(new HttpClient(handler) { BaseAddress = new Uri("http://server/") }, "token");
+
+    private static (FindView View, ListBox Results, TextBlock Hint) Searched(UiTest ui, FindSources sources, string text = "zebra")
+    {
+        var view = new FindView();
+        view.Connect(sources);
+        ui.Host(view);
+        var results = UiTest.Named<ListBox>(view, "Results");
+        var hint = UiTest.Named<TextBlock>(view, "Hint");
+        UiTest.Named<TextBox>(view, "SearchBox").Text = text;
+        view.Search();
+        ServerToDoClickTests.PumpUntil(ui, () => hint.Text != FindView.StartHint && hint.Text != FindView.SearchingHint, "the search");
+        ui.Pump();
+        return (view, results, hint);
+    }
+
+    [Fact]
+    public void Searching_shows_only_once_a_search_takes_a_moment_and_goes_once_it_answers() => Ui.Run(ui =>
+    {
+        var (view, box, server) = Open(ui);
+        var hint = UiTest.Named<TextBlock>(view, "Hint");
+        var results = UiTest.Named<ListBox>(view, "Results");
+
+        view.Search();
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.NotEqual(FindView.SearchingHint, hint.Text);
+        Assert.True(UiTest.Field<System.Windows.Threading.DispatcherTimer>(view, "_searching")!.IsEnabled);
+
+        // The moment passes with the server still held.
+        UiTest.Call(view, "OnSearchingTick");
+        Assert.Equal(FindView.SearchingHint, hint.Text);
+        Assert.Equal(Visibility.Visible, hint.Visibility);
+
+        server.Release.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => results.Items.Count == 1, "the results");
+        Assert.Equal(Visibility.Collapsed, hint.Visibility);
+        Assert.False(UiTest.Field<System.Windows.Threading.DispatcherTimer>(view, "_searching")!.IsEnabled);
+    });
+
+    [Fact]
+    public void Leaving_find_while_searching_shows_takes_the_searching_note_away() => Ui.Run(ui =>
+    {
+        var (view, box, server) = Open(ui);
+        var hint = UiTest.Named<TextBlock>(view, "Hint");
+
+        ui.Press(box, Key.Enter);
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        UiTest.Call(view, "OnSearchingTick");
+        Assert.Equal(FindView.SearchingHint, hint.Text);
+        view.Leave();
+        Assert.Equal(FindView.StartHint, hint.Text);
+
+        Answer(ui, view, server);
+        Assert.Equal(FindView.StartHint, hint.Text);
+        Assert.Empty(UiTest.Named<ListBox>(view, "Results").Items);
+    });
+
+    [Fact]
+    public void When_some_places_cant_be_reached_the_results_that_came_show_with_a_quiet_note() => Ui.Run(ui =>
+    {
+        var up = Client(new Reachable(up: true));
+        var away = Client(new Reachable(up: false));
+        var (_, results, hint) = Searched(ui, new FindSources(new ServerToDoData(up), new ServerListsData(away), null, null, null));
+
+        Assert.Equal(["Feed the zebra"], results.Items.Cast<FoundThing>().Select(thing => thing.Title));
+        Assert.Equal(FindView.PartialHint, hint.Text);
+        Assert.Equal("Some places couldn't be searched just now.", hint.Text);
+    });
+
+    [Fact]
+    public void When_no_place_can_be_reached_find_says_so_rather_than_nothing_matches() => Ui.Run(ui =>
+    {
+        var away = Client(new Reachable(up: false));
+        var (_, results, hint) = Searched(ui, new FindSources(new ServerToDoData(away), new ServerListsData(away), new ServerNotesData(away), new ServerHistoryData(away), new ServerBudgetData(away)));
+
+        Assert.Empty(results.Items);
+        Assert.Equal(FindView.NoneReachedHint, hint.Text);
+        Assert.DoesNotContain("matches", hint.Text, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void When_every_place_answers_and_nothing_matches_find_says_nothing_matches() => Ui.Run(ui =>
+    {
+        var up = Client(new Reachable(up: true));
+        var (_, results, hint) = Searched(ui, new FindSources(new ServerToDoData(up), new ServerListsData(up), null, null, null), "giraffe");
+
+        Assert.Empty(results.Items);
+        Assert.Equal("Nothing on any page matches \"giraffe\".", hint.Text);
+    });
 }

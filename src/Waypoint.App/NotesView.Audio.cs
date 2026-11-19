@@ -107,8 +107,8 @@ public partial class NotesView
                 return;
             }
 
-            StopPlayback();
-            result = audio.Delete(noteId);
+            await DeleteAudio(noteId, audio);
+            return;
         }
         else
         {
@@ -127,6 +127,43 @@ public partial class NotesView
             {
                 _audioBusy = false;
             }
+        }
+
+        Bar.Show(result.Message);
+        if (_draft.Id == noteId)
+        {
+            _sourcesShown = "";
+            ShowNoteExtras();
+        }
+    }
+
+    /// <summary>
+    /// Deletes a note's kept audio. In server mode that waits on the server, so it goes with the page's other
+    /// changes, the button is off until it's done, and the bar says how it went.
+    /// </summary>
+    private async Task DeleteAudio(long noteId, INoteAudio audio)
+    {
+        StopPlayback();
+        _audioBusy = true;
+        AudioButton.IsEnabled = false;
+        if (!Work.RunsNow)
+        {
+            Bar.Show("Deleting this note's audio...");
+        }
+
+        NoteAudioResult result;
+        try
+        {
+            result = await Work.Run(() => audio.Delete(noteId));
+        }
+        catch (Waypoint.Core.Remote.ServerUnavailableException)
+        {
+            result = new NoteAudioResult(false, "The audio couldn't be deleted, because the server couldn't be reached. Try again in a moment.");
+        }
+        finally
+        {
+            _audioBusy = false;
+            AudioButton.IsEnabled = true;
         }
 
         Bar.Show(result.Message);
