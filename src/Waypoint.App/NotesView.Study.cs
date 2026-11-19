@@ -304,8 +304,8 @@ public partial class NotesView
                     var opens = _opens;
                     var note = await Work.Read(() => _notes.GetNote(noteId));
 
-                    // In server mode it isn't opened over another note opened and typed in while it was read.
-                    if (_opens == opens || !Editor.IsKeyboardFocusWithin)
+                    // In server mode it isn't opened over a note opened, or typed in, while it was read.
+                    if (_draft.Id == noteId || (_opens == opens && !Editor.IsKeyboardFocusWithin))
                     {
                         Flush();
                         Open(note);
@@ -326,6 +326,12 @@ public partial class NotesView
                 }
 
                 var title = (await Work.Read(() => _notes.GetNote(changedId)))?.Title ?? StudyGuide.Title(exam.Title);
+
+                // In server mode anything typed in it while its title was read is saved before the question.
+                if (!Work.RunsNow && _draft.Id == changedId)
+                {
+                    Flush();
+                }
                 var ask = new NoteConfirmWindow(
                     Window.GetWindow(this),
                     $"{title} changed while new questions were being written. Use the new questions?",
