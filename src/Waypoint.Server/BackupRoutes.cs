@@ -44,62 +44,75 @@ public static class BackupRoutes
                 return Results.Ok(new BackupRestored(false, null, "A restore is already running on the server.", false));
             }
 
-            if (!await maintenance.DrainChangesAsync(ExclusiveRestore.StopLimit))
-            {
-                maintenance.EndRestore();
-                return Results.Ok(new BackupRestored(false, null, "The server was still saving other changes, so nothing was changed. Try the restore again in a moment.", false));
-            }
-
-            // Then everything else that writes: the background loops with Discord and the work they handed on, capture
-            // sorting, and notes being written. None of it starts again here, so the server always starts again after.
+            // Whatever goes wrong from here, a restore that has started stopping things always ends with the server
+            // starting again, and one that hasn't takes changes again, so the 503s never stay on by mistake.
             var log = logs.CreateLogger("Waypoint.Backups");
-            var worker = server.Worker;
-            IEnumerable<Func<TimeSpan, Task<bool>>> stops =
-            [
-                .. services.GetServices<IHostedService>().OfType<BackgroundLoops>().Select(loops => (Func<TimeSpan, Task<bool>>)loops.StopForRestoreAsync),
-                worker.Captures.StopAsync,
-                async limit =>
-                {
-                    await worker.StopDiscordAsync(limit);
-                    return true;
-                },
-                async limit => await server.Host.StopAsync(limit) == 0,
-                .. maintenance.Writers,
-            ];
-
-            RestoreResult result;
-            if (!await ExclusiveRestore.StopWritersAsync(stops, ExclusiveRestore.StopLimit, exception => log.LogError(exception, "Stopping for a restore failed")))
-            {
-                result = new RestoreResult(false, null, ExclusiveRestore.StillBusy);
-            }
-            else
-            {
-                try
-                {
-                    result = server.Database.RestoreBackup(backup.Path, DateTime.Now);
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
-                {
-                    log.LogError(exception, "Restoring {Backup} failed", backup.Path);
-                    result = new RestoreResult(false, null, $"The restore didn't work, so nothing was changed. {PlainProblem.Report(exception)} Try again, or pick another backup.");
-                }
-            }
-
             var restarting = options.Value.RestartAfterRestore;
-            if (restarting)
+            var stopping = false;
+            RestoreResult? result = null;
+            try
             {
-                // Reminders, Discord, and bedtime were read from the old data and are stopped now, so the server starts
-                // again to read the restored copy, or the same one when the restore was given up. The pause lets this
-                // answer reach the PC first.
-                log.LogWarning(result.Restored ? "Restored {Backup}. Restarting to load it." : "Gave up restoring {Backup}. Restarting to start everything again.", backup.Path);
-                _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(_ =>
+                if (!await maintenance.DrainChangesAsync(ExclusiveRestore.StopLimit))
                 {
-                    Environment.ExitCode = RestartExitCode;
-                    lifetime.StopApplication();
-                }, TaskScheduler.Default);
-            }
+                    return Results.Ok(new BackupRestored(false, null, "The server was still saving other changes, so nothing was changed. Try the restore again in a moment.", false));
+                }
 
-            return Results.Ok(new BackupRestored(result.Restored, result.SafetyCopy is { } copy ? Path.GetFileName(copy) : null, result.Problem, restarting));
+                // Then everything else that writes: the background loops with Discord and the work they handed on,
+                // capture sorting, and notes being written. None of it starts again here, so the server always starts
+                // again after.
+                stopping = true;
+                var worker = server.Worker;
+                IEnumerable<Func<TimeSpan, Task<bool>>> stops =
+                [
+                    .. services.GetServices<IHostedService>().OfType<BackgroundLoops>().Select(loops => (Func<TimeSpan, Task<bool>>)loops.StopForRestoreAsync),
+                    worker.Captures.StopAsync,
+                    async limit =>
+                    {
+                        await worker.StopDiscordAsync(limit);
+                        return true;
+                    },
+                    async limit => await server.Host.StopAsync(limit) == 0,
+                    .. maintenance.Writers,
+                ];
+
+                if (!await ExclusiveRestore.StopWritersAsync(stops, ExclusiveRestore.StopLimit, exception => log.LogError(exception, "Stopping for a restore failed")))
+                {
+                    result = new RestoreResult(false, null, ExclusiveRestore.StillBusy);
+                }
+                else
+                {
+                    try
+                    {
+                        result = server.Database.RestoreBackup(backup.Path, DateTime.Now);
+                    }
+                    catch (Exception exception) when (exception is not OutOfMemoryException)
+                    {
+                        log.LogError(exception, "Restoring {Backup} failed", backup.Path);
+                        result = new RestoreResult(false, null, $"The restore didn't work, so nothing was changed. {PlainProblem.Report(exception)} Try again, or pick another backup.");
+                    }
+                }
+
+                return Results.Ok(new BackupRestored(result.Restored, result.SafetyCopy is { } copy ? Path.GetFileName(copy) : null, result.Problem, restarting));
+            }
+            finally
+            {
+                if (!stopping)
+                {
+                    maintenance.EndRestore();
+                }
+                else if (restarting)
+                {
+                    // Reminders, Discord, and bedtime were read from the old data and are stopped now, so the server
+                    // starts again to read the restored copy, or the same one when the restore was given up. The pause
+                    // lets this answer reach the PC first.
+                    log.LogWarning(result?.Restored == true ? "Restored {Backup}. Restarting to load it." : "Gave up restoring {Backup}. Restarting to start everything again.", backup.Path);
+                    _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(_ =>
+                    {
+                        Environment.ExitCode = RestartExitCode;
+                        lifetime.StopApplication();
+                    }, TaskScheduler.Default);
+                }
+            }
         }).WithMetadata(Api.RestoreRoute.Instance);
 
         api.MapGet("/export/notes", (WaypointServer server) =>
