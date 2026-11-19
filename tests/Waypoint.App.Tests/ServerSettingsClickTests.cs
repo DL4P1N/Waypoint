@@ -39,9 +39,62 @@ public sealed class ServerSettingsClickTests
             new(2, new DateTime(2030, 4, 1, 9, 5, 0), Feedback.Row, null, null, null),
         ];
 
+        private ClassesForm _classes = new(null, null,
+        [
+            new("Art 101", "", [DayOfWeek.Monday], new TimeOnly(9, 0), new TimeOnly(10, 0)),
+            new("Bio 102", "", [DayOfWeek.Tuesday], new TimeOnly(11, 0), new TimeOnly(12, 0)),
+            new("Chem 103", "", [DayOfWeek.Friday], new TimeOnly(13, 0), new TimeOnly(14, 0)),
+        ]);
+
+        /// <summary>While set, each read of the classes waits until <see cref="LetClassReadsGo"/>.</summary>
+        public bool HoldClassReads { get; set; }
+
+        public int ClassReadsWaiting => Volatile.Read(ref _classReadsWaiting);
+
+        private int _classReadsWaiting;
+
+        private readonly SemaphoreSlim _classReads = new(0);
+
+        public void LetOneClassReadGo() => _classReads.Release();
+
+        public void LetClassReadsGo()
+        {
+            HoldClassReads = false;
+            _classReads.Release(100);
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/settings/classes")
+            {
+                if (request.Method == HttpMethod.Put)
+                {
+                    var sent = JsonSerializer.Deserialize<ClassesForm>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
+                    SaveArrived.Set();
+                    await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                    lock (_gate)
+                    {
+                        _classes = sent;
+                        Saves.Add($"classes {string.Join(", ", sent.Classes.Select(meeting => meeting.Course))}");
+                    }
+
+                    return Json(new TextValue("Saved. Waypoint uses these classes straight away."));
+                }
+
+                if (HoldClassReads)
+                {
+                    Interlocked.Increment(ref _classReadsWaiting);
+                    await _classReads.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+                    Interlocked.Decrement(ref _classReadsWaiting);
+                }
+
+                lock (_gate)
+                {
+                    return Json(_classes);
+                }
+            }
+
             if (path == "/api/settings/discord")
             {
                 if (request.Method == HttpMethod.Put)
@@ -215,6 +268,62 @@ public sealed class ServerSettingsClickTests
         Assert.True(clear.IsEnabled);
         Assert.Empty(UiTest.Named<ItemsControl>(view, "FeedbackRows").Items);
         Assert.Equal(Visibility.Visible, UiTest.Named<TextBlock>(view, "NoFeedback").Visibility);
+    });
+
+    private static List<string> ClassLines(SettingsView view) =>
+        ((System.Collections.IEnumerable)UiTest.Named<ItemsControl>(view, "ClassRows").ItemsSource).Cast<object>().Select(row => row.ToString()!.Split("  ")[0]).ToList();
+
+    private static void RemoveClass(UiTest ui, SettingsView view, string course)
+    {
+        ui.Pump();
+        var remove = UiTest.Descendants<Button>(view).Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == $"Remove {course}");
+        UiTest.Call(view, "OnClassRemoved", remove, new RoutedEventArgs());
+    }
+
+    [Fact]
+    public void Two_quick_class_removals_both_stay_removed_even_when_a_read_from_between_them_comes_back_late() => Ui.Run(ui =>
+    {
+        var server = new SettingsServer();
+        var (view, work) = Open(ui, server);
+        view.ShowSection("classes");
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && ClassLines(view).Count == 3, "the classes");
+
+        // The first removal is held by the server, and the list shows it gone straight away.
+        server.Release.Reset();
+        server.SaveArrived.Reset();
+        RemoveClass(ui, view, "Art 101");
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(["Bio 102", "Chem 103"], ClassLines(view));
+
+        // Once it's saved, the read of the classes after it is held too. Reads made as part of the save itself go on.
+        server.HoldClassReads = true;
+        server.Release.Set();
+        ServerToDoClickTests.PumpUntil(ui, () =>
+        {
+            if (server.ClassReadsWaiting > 0 && work.ChangesWaiting)
+            {
+                server.LetOneClassReadGo();
+            }
+
+            return server.ClassReadsWaiting > 0 && !work.ChangesWaiting;
+        }, "the read after the first removal");
+
+        // The second removal is asked for while that read is still out, and starts from the first.
+        server.Release.Reset();
+        server.SaveArrived.Reset();
+        RemoveClass(ui, view, "Bio 102");
+        Assert.Equal(["Chem 103"], ClassLines(view));
+
+        // The read from before the second removal comes back, and doesn't bring Bio 102 back.
+        server.LetClassReadsGo();
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        ui.Pump();
+        Assert.Equal(["Chem 103"], ClassLines(view));
+
+        server.Release.Set();
+        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Saves.Count == 2, "the removals");
+        Assert.Equal(["classes Bio 102, Chem 103", "classes Chem 103"], server.Saves);
+        Assert.Equal(["Chem 103"], ClassLines(view));
     });
 
     [Fact]
