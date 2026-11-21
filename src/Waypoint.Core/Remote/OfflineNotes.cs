@@ -140,12 +140,20 @@ public sealed class OfflineNotes(string path)
     }
 
     /// <summary>Keeps a new note, with an id below zero that stands for it until the server gives it a real one.</summary>
-    /// <param name="clientId">The id it was already sent with, when the server may have made it without the PC hearing.</param>
+    /// <param name="clientId">
+    /// The id it was already sent with, when the server may have made it without the PC hearing. One already kept
+    /// under the same id is handed back, so making it again offline never keeps two.
+    /// </param>
     public OfflineNote AddNew(string title, string body, long? folderId, DateTime now, string? clientId = null)
     {
         lock (_gate)
         {
             var waiting = Read();
+            if (clientId is not null && waiting.FirstOrDefault(note => note.IsNew && note.ClientId == clientId) is { } kept)
+            {
+                return kept;
+            }
+
             // From the clock, so an id is never handed out twice, even after an earlier one was sent and forgotten.
             var id = -Math.Max(DateTime.UtcNow.Ticks, 1 - waiting.Select(note => note.Id).DefaultIfEmpty(0).Min());
             var note = new OfflineNote(id, title, body, clientId is null ? null : body, folderId, now, clientId ?? Guid.NewGuid().ToString("N"));

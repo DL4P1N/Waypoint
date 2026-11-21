@@ -21,7 +21,7 @@ public sealed partial class WaypointWorker
         var sent = send.MessageId;
         if (sent is null && !send.Fresh)
         {
-            sent = await FindNoticeAsync(discord, thread, send.Nonce, card);
+            sent = (await FindUnkeptAsync(discord, thread, send.Nonce, card)).MessageId;
         }
 
         if (sent is null)
@@ -55,15 +55,15 @@ public sealed partial class WaypointWorker
             return 0;
         });
 
-    /// <summary>A notice of Waypoint's in a post that isn't one of the post's parts or a notice already kept.</summary>
-    private async Task<string?> FindNoticeAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card)
+    /// <summary>A message of Waypoint's in a post, such as a notice or a part, that isn't one of the post's parts or a notice already kept.</summary>
+    private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card)
     {
         var known = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
             .Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message))
             .Append(thread)
             .ToHashSet(StringComparer.Ordinal);
         var after = known.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
-        return (await discord.FindSentAfterAsync(thread, after, nonce, card, known)).MessageId;
+        return await discord.FindSentAfterAsync(thread, after, nonce, card, known);
     }
 
     private async Task ClearNoticesAsync(DiscordBridge discord, string thread, bool all)

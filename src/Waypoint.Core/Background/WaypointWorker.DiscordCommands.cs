@@ -147,7 +147,13 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>Replies in Discord to something typed there, so the same reply never shows up in both places.</summary>
-    public void ReplyInDiscord(CaptureOutcome outcome, string reply)
+    public void ReplyInDiscord(CaptureOutcome outcome, string reply) => _ = Tracked(() => ReplyInDiscordAsync(outcome, reply));
+
+    /// <summary>
+    /// The same, finishing once the answer has gone or been given up on. The pauses between tries end as soon as
+    /// Discord is stopped, so closing or a restore never waits out minutes of them.
+    /// </summary>
+    internal async Task ReplyInDiscordAsync(CaptureOutcome outcome, string reply)
     {
         // A button's answer already replaced the card that was pressed.
         if (outcome.CaptureId is { } answered && _answeredOnCard.TryRemove(answered, out _))
@@ -168,9 +174,28 @@ public sealed partial class WaypointWorker
             card = card with { Fields = [.. card.Fields, DiscordText.HeardField(heard)] };
         }
 
-        if (Discord is { } discord)
+        if (Discord is not { } discord)
         {
-            _ = Tracked(() => discord.ReplyAsync(target?.MessageId, card), null);
+            return;
+        }
+
+        // Tried again if it doesn't go, with the same nonce each time, so a try that went through unheard isn't posted twice.
+        var nonce = outcome.CaptureId is { } capture ? $"r{capture}{Hash(reply)[..10]}" : Guid.NewGuid().ToString("N")[..24];
+        var stop = _discordStop?.Token ?? CancellationToken.None;
+        var pause = RetryWait ?? (span => Task.Delay(span, stop));
+        try
+        {
+            await AlertRetry.RunAsync(
+                async () => (await discord.DeliverReplyAsync(target?.MessageId, card, nonce)).Sent,
+                async span =>
+                {
+                    await pause(span).WaitAsync(stop);
+                    stop.ThrowIfCancellationRequested();
+                });
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            // Discord was stopped, so the answer is let go.
         }
     }
 

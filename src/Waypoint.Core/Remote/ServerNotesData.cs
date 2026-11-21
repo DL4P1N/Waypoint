@@ -205,11 +205,12 @@ public sealed class ServerNotesData : INotesData
         WithOffline(Read<List<NoteDetail>>($"api/notes/in?subfolders={includeSubfolders}{Folder(folderId)}", []), made => made.FolderId == folderId);
 
     /// <summary>A new note works while the server is away: it's kept here and made there when it's back.</summary>
-    public long CreateNote(string title, string body, DateTime now, long? folderId = null)
+    // The server may make it and the answer still be lost, so it's sent with an id that sending it again from
+    // here reuses, and the server gives back the same note.
+    public long CreateNote(string title, string body, DateTime now, long? folderId = null) => CreateNoteOnce(Guid.NewGuid().ToString("N"), title, body, now, folderId);
+
+    public long CreateNoteOnce(string clientId, string title, string body, DateTime now, long? folderId)
     {
-        // The server may make it and the answer still be lost, so it's sent with an id that sending it again from
-        // here reuses, and the server gives back the same note.
-        var clientId = Guid.NewGuid().ToString("N");
         try
         {
             var id = _server.Send<Found<long>>(Post, "api/notes", new NewNoteRequest(title, body, folderId, Sent(clientId))).Value;

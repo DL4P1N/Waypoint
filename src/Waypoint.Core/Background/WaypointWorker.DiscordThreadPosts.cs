@@ -27,19 +27,33 @@ public sealed partial class WaypointWorker
         var send = _database.BeginDiscordSend(sendKey, forum, _clock());
         var post = send.MessageId is { } known ? new ForumPost(known, known) : null;
         var recovered = post is not null;
+
+        // An earlier try made its post with the name it had then, which the note's title may have changed from since.
+        var madeAs = send.Fresh ? wanted.Name : _database.GetDiscordSendTriedName(sendKey) ?? wanted.Name;
         if (post is null && !send.Fresh)
         {
-            post = await FindMadePostAsync(discord, forum, wanted.Name);
+            var (lookup, found) = await FindMadePostAsync(discord, forum, madeAs);
+            if (lookup == SentLookup.Unknown)
+            {
+                // The forum's posts couldn't be read, so an earlier try may have made it. It's looked for again later,
+                // and the Discord status says why it's waiting, since it waits for as long as that lasts.
+                discord.PostHeldBack(DiscordBridge.PostUnchecked);
+                BackOff(key);
+                return;
+            }
+
+            post = found;
             recovered = post is not null;
         }
 
         if (post is null)
         {
+            madeAs = wanted.Name;
+            _database.SetDiscordSendTriedName(sendKey, wanted.Name);
             var made = await discord.CreateForumPostAsync(forum, wanted.Name, tags, wanted.Parts[0]);
             if (made.Post is not { } fresh)
             {
-                var wait = _postBackoff.TryGetValue(key, out var before) ? TimeSpan.FromTicks(Math.Min(before.Wait.Ticks * 2, LongestBackoff.Ticks)) : FirstBackoff;
-                _postBackoff[key] = (_clock() + wait, wait);
+                BackOff(key);
                 if (made.TurnedDown)
                 {
                     // A tag may have been deleted by hand, so the forum's tags are read again next time. Nothing was
@@ -57,9 +71,9 @@ public sealed partial class WaypointWorker
 
         _newPostsThisRound++;
         _postBackoff.Remove(key);
-        // A post made by an earlier try may show an older first part and older tags, so it's kept as needing both
-        // drawn again, and the sync just below brings it up to date.
-        var meta = recovered ? Hash(wanted.Name) + ":" : Meta(wanted.Name, tags);
+        // A post made by an earlier try may show an older name, first part, and tags, so it's kept as showing the
+        // name it was made with and needing the rest drawn again, and the sync just below brings it up to date.
+        var meta = recovered ? Hash(madeAs) + ":" : Meta(wanted.Name, tags);
         var row = new DiscordThreadRow(post.Thread, wanted.Kind, wanted.Key, forum, WaypointDatabase.PostLive, false, meta, [new DiscordThreadPart(post.Message, recovered ? "" : Hash(wanted.Parts[0]))], post.Message);
         var replaced = _database.InOneWrite(() =>
         {
@@ -75,23 +89,31 @@ public sealed partial class WaypointWorker
         await SyncPostAsync(discord, forum, wanted, row);
     }
 
+    /// <summary>A post that wasn't made, or might have been, waits longer each time before it's tried again.</summary>
+    private void BackOff(string key)
+    {
+        var wait = _postBackoff.TryGetValue(key, out var before) ? TimeSpan.FromTicks(Math.Min(before.Wait.Ticks * 2, LongestBackoff.Ticks)) : FirstBackoff;
+        _postBackoff[key] = (_clock() + wait, wait);
+    }
+
     /// <summary>
     /// A post of the bot's in this forum with this name that no record knows, made by a try that went through before
-    /// it could be saved. Its first message has the post's own ID. Null when there's none or the posts can't be read.
+    /// it could be saved. Its first message has the post's own ID. Unknown when the posts can't be read, so it may be there.
     /// </summary>
-    private async Task<ForumPost?> FindMadePostAsync(DiscordBridge discord, string forum, string name)
+    private async Task<(SentLookup Result, ForumPost? Post)> FindMadePostAsync(DiscordBridge discord, string forum, string name)
     {
         _guildId ??= (await discord.GetForumAsync(forum))?.GuildId;
         if (_guildId is not { } guild || await discord.ActiveThreadsAsync(guild) is not { } threads)
         {
-            return null;
+            return (SentLookup.Unknown, null);
         }
 
         var shown = DiscordBridge.ThreadName(name);
-        return threads
+        var found = threads
             .Where(thread => thread.ParentId == forum && IsBots(discord, thread.OwnerId) && thread.Name == shown && _database.FindDiscordThread(thread.Id) is null)
             .Select(thread => new ForumPost(thread.Id, thread.Id))
             .FirstOrDefault();
+        return found is null ? (SentLookup.NotFound, null) : (SentLookup.Found, found);
     }
 
     /// <summary>Whether the bot made a post: by its own user ID once Discord has said it, or else as not the owner's.</summary>
