@@ -9,6 +9,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Application event log, where a trial run or the tests would leave Discord and sorting messages.
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
+// The heartbeat's address can hold a secret, and HttpClient logs every request's address at Information.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 builder.Services.AddSystemd();
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.Section));
 var options = builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions();
