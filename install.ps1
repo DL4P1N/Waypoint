@@ -314,7 +314,12 @@ if ($realInstall) {
     # The Install profile builds one small exe that uses the installed .NET 10 Desktop runtime, so that runtime has
     # to be here first. Checked before anything is built or stopped, so a missing runtime never leaves Waypoint
     # stopped.
-    $desktopRuntime = & dotnet --list-runtimes 2>$null | Where-Object { $_ -match '^Microsoft\.WindowsDesktop\.App 10\.' }
+    # Anything dotnet writes to stderr, or dotnet not being found at all, would stop the script under 'Stop' in
+    # Windows PowerShell 5.1, so it's run with errors only counted as a missing runtime.
+    $desktopRuntime = & {
+        $ErrorActionPreference = 'Continue'
+        try { & dotnet --list-runtimes 2>$null } catch { }
+    } | Where-Object { $_ -match '^Microsoft\.WindowsDesktop\.App 10\.' }
     if (-not $desktopRuntime) {
         throw @'
 The .NET 10 Desktop Runtime isn't installed, and Waypoint needs it to run. Nothing was changed.
