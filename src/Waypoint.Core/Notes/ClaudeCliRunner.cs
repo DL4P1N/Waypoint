@@ -32,39 +32,9 @@ public sealed class ClaudeCliRunner(string workingDirectory, TimeSpan? timeout =
         "CLAUDE_CODE_ENTRYPOINT",
     ];
 
-    public async Task<string> RunAsync(string systemPrompt, string schema, string input, CancellationToken cancellationToken)
+    public Task<string> RunAsync(string systemPrompt, string schema, string input, CancellationToken cancellationToken)
     {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        limit.CancelAfter(timeout ?? DefaultTimeout);
-
-        using var process = Process.Start(CreateStartInfo(systemPrompt, schema))!;
-        var output = process.StandardOutput.ReadToEndAsync(limit.Token);
-        var errors = process.StandardError.ReadToEndAsync(limit.Token);
-
-        try
-        {
-            await process.StandardInput.WriteAsync(input);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(limit.Token);
-
-            var json = await output;
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                throw new InvalidOperationException($"Claude Code exited with code {process.ExitCode}. {await errors}".Trim());
-            }
-
-            return json;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("Claude Code took too long to respond.");
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
+        return ClaudeCliProcess.RunAsync(CreateStartInfo(systemPrompt, schema), input, timeout ?? DefaultTimeout, cancellationToken);
     }
 
     /// <summary>The structured answer from the CLI's JSON output, or null if it finished without one. Reported errors throw.</summary>

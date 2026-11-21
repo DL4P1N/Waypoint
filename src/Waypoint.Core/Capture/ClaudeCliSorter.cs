@@ -406,39 +406,9 @@ public sealed class ClaudeCliSorter(string workingDirectory) : ICaptureSorter, I
             account = item.Account,
         }));
 
-    private async Task<string> RunAsync(string systemPrompt, string schema, string input, CancellationToken cancellationToken)
+    private Task<string> RunAsync(string systemPrompt, string schema, string input, CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(Timeout);
-
-        using var process = Process.Start(CreateStartInfo(systemPrompt, schema))!;
-        var output = process.StandardOutput.ReadToEndAsync(timeout.Token);
-        var errors = process.StandardError.ReadToEndAsync(timeout.Token);
-
-        try
-        {
-            await process.StandardInput.WriteAsync(input);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(timeout.Token);
-
-            var json = await output;
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                throw new InvalidOperationException($"Claude Code exited with code {process.ExitCode}. {await errors}".Trim());
-            }
-
-            return json;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("Claude Code took too long to respond.");
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
+        return Notes.ClaudeCliProcess.RunAsync(CreateStartInfo(systemPrompt, schema), input, Timeout, cancellationToken);
     }
 
     /// <summary>Reads the CLI's JSON output. Returns null if it finished without a structured result.</summary>
