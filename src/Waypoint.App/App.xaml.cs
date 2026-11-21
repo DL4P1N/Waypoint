@@ -359,8 +359,10 @@ public partial class App : System.Windows.Application
                 _alertTimer = new DispatcherTimer { Interval = WaypointWorker.AlertCheckInterval };
                 _alertTimer.Tick += (_, _) =>
                 {
-                    // Separately, so a problem in one can't stop the alerts after it.
-                    _worker.CheckAlerts();
+                    // Separately, so a problem in one can't stop the alerts after it. The checks and the daily backup
+                    // run off the window thread, and the cards they show come back to it. The recording offer opens a
+                    // window, so it stays here.
+                    _ = _worker.StartAlertRound();
                     if (Trial.OffersRecording)
                     {
                         Guarded(CheckRecordOffer);
