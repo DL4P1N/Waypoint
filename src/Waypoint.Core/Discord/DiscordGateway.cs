@@ -151,7 +151,8 @@ public sealed class GatewaySession(string token)
 /// </summary>
 /// <param name="arrived">Told about each event as it's read, before it waits its turn, so a press can be answered
 /// in time even while a slow one ahead of it is still being handled.</param>
-public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent, Action<Exception>? failed = null, Action<string, JsonElement>? arrived = null)
+/// <param name="stopped">Called once events have stopped being handled, so any read but left undone can say so.</param>
+public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent, Action<Exception>? failed = null, Action<string, JsonElement>? arrived = null, Func<Task>? stopped = null)
 {
     /// <summary>How long stopping waits for events already read, such as a capture being saved.</summary>
     public static readonly TimeSpan EventDrainLimit = TimeSpan.FromSeconds(5);
@@ -195,6 +196,17 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
         {
             // Events already read are captures, edits, and presses, so they're finished rather than dropped.
             await _events.StopAsync(EventDrainLimit);
+            if (stopped is not null)
+            {
+                try
+                {
+                    await stopped();
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    (failed ?? (_ => { }))(exception);
+                }
+            }
         }
     }
 

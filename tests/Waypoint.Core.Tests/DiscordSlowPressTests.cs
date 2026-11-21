@@ -113,4 +113,31 @@ public sealed class DiscordSlowPressTests : IDisposable
         Assert.Contains("Done with m1", Requests().Single(request => request.Url.EndsWith("/webhooks/app1/tok1/messages/@original")).Body);
         Assert.Contains("Done with m2", Requests().Single(request => request.Url.EndsWith("/webhooks/app1/tok2/messages/@original")).Body);
     }
+
+    [Fact]
+    public async Task Taps_left_undone_when_Waypoint_closes_say_plainly_they_didnt_go_through()
+    {
+        var bridge = Bridge(TimeSpan.FromMilliseconds(50));
+
+        // One is read and promised, but never dealt with before closing.
+        bridge.EventArrived("INTERACTION_CREATE", Press("1", "m1"));
+        Assert.True(SpinWait.SpinUntil(() => Callbacks("1") == 1, TimeSpan.FromSeconds(30)));
+
+        // Another is read just as it closes, before its promise.
+        bridge.DeferAfter = TimeSpan.FromMinutes(1);
+        bridge.EventArrived("INTERACTION_CREATE", Press("2", "m2"));
+
+        await bridge.AnswerDroppedAsync();
+        await bridge.AnswerDroppedAsync();
+
+        // The promised one gets a note under the card, which stays as it was. The other is answered with the note.
+        var note = Requests().Single(request => request.Url.EndsWith("/webhooks/app1/tok1"));
+        Assert.Contains("go through and nothing changed", note.Body);
+        Assert.Contains("\"flags\":64", note.Body);
+        Assert.Equal(1, Callbacks("1"));
+        var answered = Requests().Single(request => request.Url.Contains("/interactions/2/tok2/callback"));
+        Assert.Contains("\"type\":4", answered.Body);
+        Assert.Contains("go through and nothing changed", answered.Body);
+        Assert.DoesNotContain(Requests(), request => request.Url.Contains("/messages/@original"));
+    }
 }

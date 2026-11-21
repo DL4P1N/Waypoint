@@ -188,7 +188,7 @@ public sealed partial class WaypointWorker
         };
 
         var stop = new CancellationTokenSource();
-        var gateway = new DiscordGateway(settings.BotToken, bridge.HandleEventAsync, _logError, bridge.EventArrived);
+        var gateway = new DiscordGateway(settings.BotToken, bridge.HandleEventAsync, _logError, bridge.EventArrived, bridge.AnswerDroppedAsync);
         Discord = bridge;
         _gateway = gateway;
         _discordStop = stop;

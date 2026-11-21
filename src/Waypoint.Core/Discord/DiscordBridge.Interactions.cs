@@ -32,6 +32,59 @@ public sealed partial class DiscordBridge
         }
     }
 
+    /// <summary>Said to a tap that was read but never dealt with, because Waypoint was closing.</summary>
+    public const string TapDropped = "Waypoint was closing, so this tap didn't go through and nothing changed. Tap it again once Waypoint is running.";
+
+    /// <summary>
+    /// Called once events have stopped being handled, such as when Waypoint closes. Any tap read but left undone says
+    /// plainly that it didn't go through, rather than looking as if it's still coming, and is let go.
+    /// </summary>
+    public async Task AnswerDroppedAsync()
+    {
+        foreach (var id in _arrived.Keys.ToList())
+        {
+            if (!_arrived.TryRemove(id, out var pending) || pending.Interaction is not { } interaction || TypeOf(interaction) == OptionTyped)
+            {
+                continue;
+            }
+
+            try
+            {
+                var notice = MessageBody(DiscordText.Notice("Didn't go through", TapDropped, CardTone.Attention), flags: OnlySeenByPresser);
+                if (pending.Take())
+                {
+                    await CallbackAsync(interaction, Body(new Answer(ReplyToPresser, notice)));
+                }
+                else if (await pending.Promised)
+                {
+                    // A promised reply is filled in. A promised change to the card leaves the card as it was, with a note under it.
+                    await (pending.Replies ? EditOriginalAsync(interaction, notice) : FollowUpAsync(interaction, notice));
+                }
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                LastError = exception.Message;
+            }
+        }
+    }
+
+    /// <summary>A message of its own after an interaction's answer, seen only by the presser.</summary>
+    private async Task FollowUpAsync(JsonElement interaction, object data)
+    {
+        if (Text(interaction, "application_id") is not { } application)
+        {
+            return;
+        }
+
+        using var sent = await SendWithLimitsAsync(() =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiBase}/webhooks/{application}/{Text(interaction, "token")}") { Content = JsonContent.Create(data) };
+            request.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+            return request;
+        });
+        sent.EnsureSuccessStatusCode();
+    }
+
     /// <summary>
     /// Answers in turn. The next event waits until this one is done, its sort included, so what each press changes
     /// happens in the order they were made. Only the promise runs ahead, timed from when the press arrived.
@@ -77,7 +130,7 @@ public sealed partial class DiscordBridge
     /// </summary>
     private PendingAnswer Arrive(JsonElement interaction)
     {
-        var pending = new PendingAnswer();
+        var pending = new PendingAnswer { Interaction = interaction };
         try
         {
             var type = TypeOf(interaction);
@@ -98,6 +151,7 @@ public sealed partial class DiscordBridge
 
             // A command's answer then shows only to the owner.
             var replies = type is CommandUsed or FormSent || press == PressReply.Private;
+            pending.Replies = replies;
             var promise = Body(new Answer(replies ? DeferredReply : DeferredUpdate, replies ? new { flags = OnlySeenByPresser } : null));
             pending.Promised = PromiseAsync(interaction, promise, DeferAfter, pending);
         }
@@ -141,6 +195,11 @@ public sealed partial class DiscordBridge
 
         /// <summary>True once a promise or a working card was sent, false if none was or it failed.</summary>
         public Task<bool> Promised { get; set; } = Task.FromResult(false);
+
+        public JsonElement? Interaction { get; init; }
+
+        /// <summary>Whether the promise is of a reply of its own, rather than of a change to the pressed card.</summary>
+        public bool Replies { get; set; }
 
         public bool Take() => Interlocked.Exchange(ref _taken, 1) == 0;
     }
