@@ -220,7 +220,13 @@ function Switch-To([string]$name) {
             }
         }
         foreach ($relative in $files) { Remove-Item -LiteralPath ((Join-Path $InstallRoot $relative) + '.new') -Force -ErrorAction SilentlyContinue }
-        if ($oldCurrent) { Set-Current $oldCurrent } else { Remove-Item -LiteralPath $currentFile -Force -ErrorAction SilentlyContinue }
+        # Even if current.txt can't be written back, the restart below still has to happen.
+        try {
+            if ($oldCurrent) { Set-Current $oldCurrent } else { Remove-Item -LiteralPath $currentFile -Force -ErrorAction SilentlyContinue }
+        } catch {
+            Write-Warning "Couldn't write current.txt back to $oldCurrent ($_), so it was left as it was."
+        }
+        Remove-Item -LiteralPath "$currentFile.new" -Force -ErrorAction SilentlyContinue
         if ((Test-Path -LiteralPath $exe) -and (Test-Start)) {
             throw "Version $name couldn't be switched in ($failure), so the files that were there were put back and Waypoint was started again. Nothing was changed."
         }
