@@ -10,8 +10,9 @@ StartLimitIntervalSec=0
 Type=notify
 User=waypoint
 Group=waypoint
-WorkingDirectory=/opt/waypoint
-ExecStart=/usr/bin/dotnet /opt/waypoint/waypoint-server.dll
+# current points at the release in use, under /opt/waypoint/releases, which install.sh switches.
+WorkingDirectory=/opt/waypoint/current
+ExecStart=/usr/bin/dotnet /opt/waypoint/current/waypoint-server.dll
 EnvironmentFile=/etc/waypoint/waypoint.env
 Environment=DOTNET_ENVIRONMENT=Production
 Environment=WAYPOINT_DATA_DIR=/var/lib/waypoint

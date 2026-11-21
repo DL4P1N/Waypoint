@@ -4,8 +4,12 @@
 #
 #   sudo ./install.sh /path/to/published/server
 #
-# It's safe to run again after publishing a new version. It never touches waypoint.db or settings.json once they
-# exist. Signing in to Tailscale and to Claude are left to you, since both open a browser link.
+# It's safe to run again after publishing a new version. Each version goes in a folder of its own under
+# /opt/waypoint/releases, and /opt/waypoint/current points at the one in use. waypoint.db is copied to
+# /var/backups/waypoint before the new version starts, and if it doesn't answer /health, current is pointed back at
+# the previous version, that copy is put back, and the previous version is started again. settings.json and
+# /etc/waypoint are never replaced. Signing in to Tailscale and to Claude are left to you, since both open a
+# browser link.
 #
 # Security updates install themselves, but the machine never reboots on its own unless you ask for it:
 #
@@ -107,8 +111,16 @@ if ! getent group waypoint-backup > /dev/null; then
 fi
 
 echo "== Program files"
-install -d -m 755 /opt/waypoint /opt/waypoint/deploy
-cp -r "$published"/. /opt/waypoint/
+# The new version goes in a folder of its own beside the running one, so nothing in use is copied over.
+releases=/opt/waypoint/releases
+stamp="$(date -u +%Y%m%d-%H%M%S)"
+release="$releases/$stamp"
+if [ -e "$release" ]; then
+    echo "$release is already there. Wait a second and run this again." >&2
+    exit 1
+fi
+install -d -m 755 /opt/waypoint /opt/waypoint/deploy "$releases" "$release"
+cp -r "$published"/. "$release"/
 install -m 755 "$here/waypoint-backup.sh" /opt/waypoint/deploy/waypoint-backup.sh
 chown -R root:root /opt/waypoint
 
@@ -128,7 +140,107 @@ install -m 644 "$here/waypoint-backup.service" /etc/systemd/system/waypoint-back
 install -m 644 "$here/waypoint-backup.timer" /etc/systemd/system/waypoint-backup.timer
 systemctl daemon-reload
 systemctl enable waypoint.service
-systemctl restart waypoint.service
+
+echo "== Switching to the new version"
+data=/var/lib/waypoint
+db="$data/waypoint.db"
+saved=/var/backups/waypoint
+current=/opt/waypoint/current
+
+# Points current at a release in one step, so it never names a half-made link.
+point_at() {
+    ln -sfn "$1" "$current.next"
+    mv -Tf "$current.next" "$current"
+}
+
+# True once the server answers /health on the address it listens on, within about a minute.
+healthy() {
+    local listen url
+    listen="$(sed -n 's/^Waypoint__Listen=//p' /etc/waypoint/waypoint.env | tail -n 1)"
+    listen="${listen:-http://127.0.0.1:5280}"
+    url="${listen%%;*}"
+    url="$(printf '%s' "$url" | sed -E 's#//(0\.0\.0\.0|\[::\]|\*|\+)(:|/|$)#//127.0.0.1\2#')"
+    for _ in $(seq 1 30); do
+        if systemctl is-active --quiet waypoint.service && curl -fsS -m 3 "${url%/}/health" > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+# Stopped first, so the copy of waypoint.db holds everything written, and nothing is written after it.
+systemctl stop waypoint.service || true
+
+previous=""
+if [ -L "$current" ]; then
+    previous="$(readlink -f "$current")"
+elif [ -f /opt/waypoint/waypoint-server.dll ]; then
+    # An install from before releases had their own folders: its files become the previous release.
+    previous="$releases/$stamp-before"
+    install -d -m 755 "$previous"
+    find /opt/waypoint -mindepth 1 -maxdepth 1 ! -name releases ! -name deploy ! -name current ! -name current.next \
+        -exec mv -t "$previous" -- {} +
+fi
+
+backup=""
+if [ -f "$db" ]; then
+    install -d -m 700 -o root -g root "$saved"
+    backup="$saved/waypoint-$stamp.db"
+    # Made by the service user inside the data folder, so sqlite3 never leaves root-owned files beside waypoint.db.
+    rm -f -- "$data/upgrade-backup.db"
+    if ! runuser -u waypoint -- sqlite3 "$db" ".backup '$data/upgrade-backup.db'"; then
+        echo "waypoint.db couldn't be copied, so the new version wasn't started. The one before is started again." >&2
+        rm -f -- "$data/upgrade-backup.db"
+        rm -rf -- "$release"
+        if [ -n "$previous" ]; then
+            point_at "$previous"
+            systemctl start waypoint.service || true
+        fi
+        exit 1
+    fi
+    mv -- "$data/upgrade-backup.db" "$backup"
+    chown root:root "$backup"
+    chmod 600 "$backup"
+    echo "   waypoint.db copied to $backup"
+    # The last five copies are kept.
+    find "$saved" -maxdepth 1 -type f -name 'waypoint-*.db' -printf '%f\n' | sort | head -n -5 \
+        | while read -r old; do rm -f -- "$saved/$old"; done
+fi
+
+point_at "$release"
+systemctl start waypoint.service || true
+if healthy; then
+    echo "   Running $stamp."
+    # The new release and the one before it are kept, so the next install can go back to this one.
+    for old in "$releases"/*; do
+        if [ "$old" != "$release" ] && [ "$old" != "$previous" ]; then
+            rm -rf -- "$old"
+        fi
+    done
+elif [ -n "$previous" ] && [ -d "$previous" ]; then
+    echo "The new version didn't answer /health, so the previous one is going back in. See: journalctl -u waypoint -n 50" >&2
+    systemctl stop waypoint.service || true
+    point_at "$previous"
+    if [ -n "$backup" ]; then
+        # The new version may have changed the database for itself, so the copy from just before it goes back.
+        install -m 600 -o waypoint -g waypoint "$backup" "$data/upgrade-restore.db"
+        runuser -u waypoint -- sqlite3 "$db" ".restore '$data/upgrade-restore.db'"
+        rm -f -- "$data/upgrade-restore.db"
+        echo "   waypoint.db put back from $backup" >&2
+    fi
+    rm -rf -- "$release"
+    systemctl start waypoint.service || true
+    if healthy; then
+        echo "   The previous version is running again. Nothing else was changed by this install." >&2
+    else
+        echo "   The previous version didn't answer /health either. See: journalctl -u waypoint -n 50" >&2
+    fi
+    exit 1
+else
+    echo "The server didn't answer /health, and there's no earlier version to go back to. See: journalctl -u waypoint -n 50" >&2
+    exit 1
+fi
 
 # The nightly backup is turned on only once it has somewhere to go, so it never fails every night unnoticed.
 backup_ready() {

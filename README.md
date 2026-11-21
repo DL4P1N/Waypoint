@@ -487,7 +487,9 @@ chmod +x install.sh
 sudo ./install.sh ~/server
 ```
 
-`install.sh` installs the .NET 10 runtime (adding `ppa:dotnet/backports`, or Microsoft's feed for your Ubuntu release, when Ubuntu's own archive doesn't have it), SQLite, `age`, `tesseract-ocr`, and `poppler-utils`, shows the time zone, turns on automatic security updates, creates a `waypoint` user, and installs the `waypoint` service (restarts on failure and at boot) and the nightly backup. Run it again after publishing a new version. It never replaces `waypoint.db`, `settings.json`, or anything in `/etc/waypoint`.
+`install.sh` installs the .NET 10 runtime (adding `ppa:dotnet/backports`, or Microsoft's feed for your Ubuntu release, when Ubuntu's own archive doesn't have it), SQLite, `age`, `tesseract-ocr`, and `poppler-utils`, shows the time zone, turns on automatic security updates, creates a `waypoint` user, and installs the `waypoint` service (restarts on failure and at boot) and the nightly backup. Run it again after publishing a new version. It never replaces `settings.json` or anything in `/etc/waypoint`.
+
+Each version goes in a folder of its own under `/opt/waypoint/releases`, and `/opt/waypoint/current` points at the one in use, so a new version is never copied over a running one. Installing a new version stops the server, copies `waypoint.db` with `sqlite3 .backup` to `/var/backups/waypoint` (the last five are kept), points `current` at the new folder, and starts it. If it doesn't answer `/health` within about a minute, `current` goes back to the previous version, that copy of `waypoint.db` is put back, the previous version is started again, and the script ends with an error. The new version and the one before it are kept, and older ones are removed. An install from before this layout has its files moved into a release folder of their own the first time.
 
 Two things it leaves off until you're ready:
 
