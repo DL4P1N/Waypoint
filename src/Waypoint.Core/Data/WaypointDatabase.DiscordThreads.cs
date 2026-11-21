@@ -291,18 +291,36 @@ public sealed partial class WaypointDatabase
     /// Saves a note only if its text is still <paramref name="expectedBody"/>, with the same write the Notes page
     /// makes, so text added from Discord never overwrites a change saved meanwhile. False when it changed or is gone.
     /// With <paramref name="readTo"/>, the post the text came from is marked read up to that message in the same
-    /// write, so a crash in between can never add the same text twice.
+    /// write, so a crash in between can never add the same text twice. With <paramref name="expectedTitle"/>, the
+    /// title it had then, a note renamed meanwhile keeps its new title when this save leaves the title as it was,
+    /// and is turned down as changed when this save renames it too.
     /// </summary>
-    public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, (string Thread, string Message)? readTo = null)
+    public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, (string Thread, string Message)? readTo = null, string? expectedTitle = null)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        using var check = connection.CreateCommand();
-        check.CommandText = "SELECT COALESCE(i.body, c.text) FROM items i JOIN captures c ON c.id = i.capture_id WHERE i.id = $id AND i.kind = 'Note' AND i.canceled = 0";
-        check.Parameters.AddWithValue("$id", id);
-        if (check.ExecuteScalar() as string != expectedBody)
+        string storedTitle;
+        using (var check = connection.CreateCommand())
         {
-            return false;
+            check.CommandText = "SELECT i.title, COALESCE(i.body, c.text) FROM items i JOIN captures c ON c.id = i.capture_id WHERE i.id = $id AND i.kind = 'Note' AND i.canceled = 0";
+            check.Parameters.AddWithValue("$id", id);
+            using var reader = check.ExecuteReader();
+            if (!reader.Read() || reader.GetString(1) != expectedBody)
+            {
+                return false;
+            }
+
+            storedTitle = reader.GetString(0);
+        }
+
+        if (expectedTitle is not null && storedTitle != NoteTitle(expectedTitle, expectedBody))
+        {
+            if (title != expectedTitle)
+            {
+                return false;
+            }
+
+            title = storedTitle;
         }
 
         var saved = WriteNote(connection, id, NoteTitle(title, body), body, now);

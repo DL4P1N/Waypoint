@@ -177,7 +177,7 @@ public static class NotesRoutes
             return new NoteSaveReply(data.SaveNote(id, request.Title, request.Body, DateTime.Now));
         }
 
-        var result = data.SaveNoteIfUnchanged(id, request.Title, request.Body, expected, DateTime.Now);
+        var result = data.SaveNoteIfUnchanged(id, request.Title, request.Body, expected, DateTime.Now, request.ExpectedTitle);
         return new NoteSaveReply(result.Outcome == NoteSaveOutcome.Saved, Checked: true, result.Stored);
     }
 

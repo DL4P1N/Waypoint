@@ -376,8 +376,9 @@ public sealed class NoteFiles(INoteFileStore database, string root)
                 if (!waypointChanged)
                 {
                     // Saved only over the text read at the start of this pass, so a save from the editor meanwhile
-                    // isn't lost under the file's. Then it was changed on both sides after all.
-                    var saved = database.SaveNoteIfUnchanged(note.Id, note.Title, text, note.Body, now);
+                    // isn't lost under the file's. Then it was changed on both sides after all. A rename from the
+                    // editor meanwhile keeps its new title.
+                    var saved = database.SaveNoteIfUnchanged(note.Id, note.Title, text, note.Body, now, note.Title);
                     if (saved.Outcome == NoteSaveOutcome.Saved)
                     {
                         Remember(note with { Body = text }, record.Path);

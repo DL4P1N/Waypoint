@@ -6,9 +6,11 @@ namespace Waypoint.Core.Remote;
 /// A note typed while the server was away. Id is the note's own id for an edit, and below zero for a note made
 /// while away. BasedOn is the server's text the edit started from, so a change made elsewhere meanwhile is noticed.
 /// For a new note it's the text first sent, in case the server made it then without the PC hearing. ClientId goes
-/// with what's made from it, so sending it again after a lost answer doesn't make a second note.
+/// with what's made from it, so sending it again after a lost answer doesn't make a second note. BasedOnTitle is
+/// the title the edit started from, when known, so a rename made elsewhere meanwhile is kept, and is missing from
+/// files written before it was kept.
 /// </summary>
-public sealed record OfflineNote(long Id, string Title, string Body, string? BasedOn, long? FolderId, DateTime At, string? ClientId = null)
+public sealed record OfflineNote(long Id, string Title, string Body, string? BasedOn, long? FolderId, DateTime At, string? ClientId = null, string? BasedOnTitle = null)
 {
     public bool IsNew => Id < 0;
 }
@@ -154,7 +156,7 @@ public sealed class OfflineNotes(string path)
     }
 
     /// <summary>Keeps the latest text for a note. The first edit's starting point is what counts.</summary>
-    public void Keep(long id, string title, string body, string? basedOn, long? folderId, DateTime now)
+    public void Keep(long id, string title, string body, string? basedOn, long? folderId, DateTime now, string? basedOnTitle = null)
     {
         lock (_gate)
         {
@@ -166,7 +168,7 @@ public sealed class OfflineNotes(string path)
             }
             else
             {
-                waiting.Add(new OfflineNote(id, title, body, basedOn, folderId, now, Guid.NewGuid().ToString("N")));
+                waiting.Add(new OfflineNote(id, title, body, basedOn, folderId, now, Guid.NewGuid().ToString("N"), basedOn is null ? null : basedOnTitle));
             }
 
             Write(waiting);

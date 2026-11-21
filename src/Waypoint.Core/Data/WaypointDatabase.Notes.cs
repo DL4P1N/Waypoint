@@ -134,7 +134,8 @@ public sealed partial class WaypointDatabase
         transaction.Commit();
     }
 
-    private static string NoteTitle(string title, string body)
+    /// <summary>The title a note is saved with: the one given, tidied, or else its first line.</summary>
+    internal static string NoteTitle(string title, string body)
     {
         var clean = title.Trim();
         return clean.Length > 0 ? clean : FirstLine(body) is { Length: > 0 } line ? line : UntitledNote;

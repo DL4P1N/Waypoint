@@ -85,6 +85,7 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
             {
                 var sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject();
                 sent.Remove("expectedBody");
+                sent.Remove("expectedTitle");
                 request.Content = new StringContent(sent.ToJsonString(), Encoding.UTF8, "application/json");
             }
 
@@ -422,5 +423,86 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
         var made = Assert.Single(Database.GetNotes(), note => note.Id != sent.NoteId);
         Assert.Equal("radish\n\nbeets too", made.Body);
         Assert.Equal(0, notes.WaitingToSave);
+    }
+
+    [Fact]
+    public void A_note_renamed_elsewhere_while_its_editor_is_open_keeps_its_new_title_when_the_text_is_saved()
+    {
+        var notes = new ServerNotesData(Client());
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        // Renamed on the server, from Discord or another PC, while only the text is typed here.
+        Database.SaveNote(id, "Garden seeds", "radish", DateTime.Now);
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now, "Seed list"));
+
+        var note = Assert.Single(Database.GetNotes());
+        Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
+        Assert.Equal("Garden seeds", notes.GetNote(id)!.Title);
+    }
+
+    [Fact]
+    public void A_note_renamed_on_a_server_from_before_is_found_by_the_read_first_and_keeps_its_new_title()
+    {
+        var (notes, _, _) = OldPc();
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        Database.SaveNote(id, "Garden seeds", "radish", DateTime.Now);
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now, "Seed list"));
+
+        var note = Assert.Single(Database.GetNotes());
+        Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
+    }
+
+    [Fact]
+    public void A_title_and_text_changed_on_the_server_and_here_keeps_both_versions()
+    {
+        INotesData notes = new ServerNotesData(Client());
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+        Database.SaveNote(id, "Garden seeds", "radish\n\nbeets too", DateTime.Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Spring seeds", "radish, kale", "radish", DateTime.Now, "Seed list"));
+
+        var note = Database.GetNote(id)!;
+        Assert.Equal(("Spring seeds", "radish, kale"), (note.Title, note.Body));
+        var kept = Assert.Single(Database.GetNotes(), other => other.Id != id);
+        Assert.Equal(("Garden seeds" + NoteDraft.ElsewhereSuffix, "radish\n\nbeets too"), (kept.Title, kept.Body));
+    }
+
+    [Fact]
+    public async Task A_pc_from_before_that_sends_only_the_text_it_expects_still_saves_as_it_did()
+    {
+        var id = Database.CreateNote("Seed list", "radish", DateTime.Now);
+        Database.SaveNote(id, "Garden seeds", "radish", DateTime.Now);
+        using var http = new HttpClient(_factory.Server.CreateHandler()) { BaseAddress = _factory.Server.BaseAddress };
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+
+        using var response = await http.PutAsync($"/api/notes/{id}", new StringContent("""{"title":"Seed list","body":"radish, kale","expectedBody":"radish"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reply = JsonSerializer.Deserialize<NoteSaveReply>(await response.Content.ReadAsStringAsync(), RemoteJson.Options)!;
+        Assert.True(reply.Value);
+        Assert.True(reply.Checked);
+        Assert.Equal(("Seed list", "radish, kale"), (Database.GetNote(id)!.Title, Database.GetNote(id)!.Body));
+    }
+
+    [Fact]
+    public async Task Typing_kept_while_away_keeps_a_title_renamed_on_the_server_meanwhile()
+    {
+        var line = NewLine();
+        var client = Client(line);
+        var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_folder, "pc-notes.json")));
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        line.Down = true;
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now, "Seed list"));
+        Database.SaveNote(id, "Garden seeds", "radish", DateTime.Now);
+
+        line.Down = false;
+        await client.CheckAsync();
+        var sent = Assert.Single(await notes.SendOfflineAsync());
+
+        Assert.False(sent.KeptBoth);
+        var note = Assert.Single(Database.GetNotes());
+        Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
     }
 }

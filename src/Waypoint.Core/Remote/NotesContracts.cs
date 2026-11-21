@@ -13,14 +13,15 @@ public sealed record NewNoteRequest(string Title, string Body, long? FolderId, s
 
 /// <summary>
 /// With ExpectedBody, the server saves only if the note's text is still that. A server from before ignores it and
-/// saves anyway, and a PC from before never sends it.
+/// saves anyway, and a PC from before never sends it. ExpectedTitle, sent with it, is the title the note had then:
+/// a note renamed meanwhile keeps its new title unless this save renames it too. Without it only the text counts.
 /// </summary>
-public sealed record SaveNoteRequest(string Title, string Body, string? ExpectedBody = null);
+public sealed record SaveNoteRequest(string Title, string Body, string? ExpectedBody = null, string? ExpectedTitle = null);
 
 /// <summary>
 /// The answer to a note save. Value is the same as the plain answer a PC from before reads. Checked says the server
 /// compared ExpectedBody first, which a server from before never says. Stored is the note as it is now, when it
-/// had changed, and is missing when it's gone.
+/// had changed, and is missing when it's gone. On a save that kept a newer title, it's the note as saved.
 /// </summary>
 public sealed record NoteSaveReply(bool Value, bool Checked = false, NoteDetail? Stored = null);
 
