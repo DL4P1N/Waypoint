@@ -595,7 +595,7 @@ The PC's Discord starts within about 7 minutes, once the server's pinned note go
 
 The PC runs no alerts, Discord, calendar, email, or backups, so nothing is sent twice. Every page goes through the server.
 
-Only one copy ever uses the bot. The copy running Discord keeps a pinned note in the alerts channel saying where it runs, updated every 2 minutes, and every copy reads it first. A PC left in Local mode that finds the server's note sends no reminders or alerts and reads nothing from Discord, and says "Discord is running on ..." in the tray, the status line, and Settings. The server always wins over a PC. A copy takes over only once the other's note is more than 7 minutes old. The bot needs the Pin Messages and Read Message History permissions in the alerts channel for this, and Settings says so if it can't check.
+Only one copy ever uses the bot. The copy running Discord keeps a pinned note in the alerts channel saying where it runs, updated every 2 minutes, and every copy reads the pins every 30 seconds. A PC left in Local mode that finds the server's note sends no reminders or alerts and reads nothing from Discord, and says "Discord is running on ..." in the tray, the status line, and Settings. The server always wins over a PC. A copy takes over only once the other's note is more than 7 minutes old. When the server starts while a PC is still in Local mode, the two can both use the bot for up to 30 seconds, until the PC's next read of the pins: the pins are the only place both can see, so nothing shorter than that read can tell the PC sooner. The bot needs the Pin Messages and Read Message History permissions in the alerts channel for this, and Settings says so if it can't check.
 
 What lives where:
 

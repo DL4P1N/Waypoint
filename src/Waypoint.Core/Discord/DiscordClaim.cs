@@ -39,8 +39,14 @@ public sealed record ClaimCheck(ClaimState State, string? RunningOn = null, stri
 /// </summary>
 public sealed class DiscordClaim(HttpClient http, DiscordSettings settings, string host, DiscordRunner runner, Func<DateTimeOffset> clock)
 {
-    /// <summary>How often the note is read and updated.</summary>
-    public static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// How often the pins are read. This is how long a PC in Local mode can go on using the bot after the server
+    /// starts, so it's short, and reading the pins is one light request.
+    /// </summary>
+    public static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(30);
+
+    /// <summary>How often this copy's own note is rewritten, well inside <see cref="Stale"/>, so it isn't edited each check.</summary>
+    public static readonly TimeSpan WriteEvery = TimeSpan.FromMinutes(2);
 
     /// <summary>A note not updated for this long belongs to a copy that has stopped, so another may take over.</summary>
     public static readonly TimeSpan Stale = TimeSpan.FromMinutes(7);
@@ -96,6 +102,13 @@ public sealed class DiscordClaim(HttpClient http, DiscordSettings settings, stri
             foreach (var note in notes.Where(note => (!IsMine(note) && !IsFresh(note, now)) || (mine.Count > 1 && IsMine(note) && note != mine[0])))
             {
                 await DeleteAsync(channel, note.MessageId, cancellationToken);
+            }
+
+            // A pinned note this copy wrote a moment ago still says it's running, so it's left as it is. A note
+            // from before a restart is always written again.
+            if (mine.FirstOrDefault() is { } pinned && pinned.MessageId == _lastId && (now - pinned.CheckedAt).Duration() < WriteEvery)
+            {
+                return new ClaimCheck(ClaimState.Here);
             }
 
             var problem = await WriteNoteAsync(channel, mine.FirstOrDefault()?.MessageId, now, cancellationToken);
