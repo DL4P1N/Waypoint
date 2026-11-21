@@ -73,7 +73,7 @@ public sealed partial class WaypointWorker
                 return 0;
             });
         }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
+        catch (Exception exception) when (exception is not OutOfMemoryException && !Stopping(exception))
         {
             _logError(exception);
         }
