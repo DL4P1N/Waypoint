@@ -104,6 +104,35 @@ public sealed partial class DiscordThreadTests
         Assert.Equal(note.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), _database.FindDiscordThread(post.Id)!.Key);
     }
 
+    [Fact]
+    public async Task A_deleted_post_with_a_part_left_noted_from_a_cut_off_try_is_made_again()
+    {
+        var body = string.Join("\n\n", Enumerable.Range(1, 90).Select(line => $"Made up line {line} about a made up topic that runs on for a while."));
+        var id = _database.CreateNote("Made up long reading", body, _now);
+        var worker = await Started(lists: null);
+        var old = PostFor(id);
+        Assert.Equal(2, old.Messages.Count(message => message.Bot));
+
+        // A try at the second part was cut off before it was kept, and then the post was deleted on Discord.
+        var row = _database.FindDiscordThread(old.Id)!;
+        _database.SetDiscordThreadParts(old.Id, [row.Parts[0]]);
+        _database.BeginDiscordSend($"part:{old.Id}:1", old.Id, _now);
+        lock (_discord.Posts)
+        {
+            _discord.Posts.Remove(old.Id);
+        }
+
+        // The bot knows who it is, as it does once connected, so the post's messages can be looked through.
+        await worker.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await worker.SyncDiscordThreadsAsync();
+
+        var post = Assert.Single(_discord.PostsIn(NotesForum));
+        Assert.NotEqual(old.Id, post.Id);
+        Assert.Same(post, PostFor(id));
+        Assert.Equal(2, post.Messages.Count(message => message.Bot));
+        Assert.Empty(_database.GetDiscordSends("part:"));
+    }
+
     /// <summary>
     /// Discord makes the note's post, then Waypoint stops before it hears which post it is, while the forum's posts
     /// can't be read, so the try straight after can't look for it. They stay unreadable until a test says otherwise.

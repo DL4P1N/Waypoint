@@ -362,9 +362,17 @@ public sealed partial class WaypointWorker
             if (sent is null && !send.Fresh)
             {
                 var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card);
-                if (search.CantTell)
+                if (search.Result == SentLookup.Unknown)
                 {
                     return;
+                }
+
+                // Turned away for good, such as a post that's been deleted, so it's noted afresh and sent, which says
+                // whether the post is gone and makes it again if so.
+                if (search.Result == SentLookup.Refused)
+                {
+                    _database.FinishDiscordSend(sendKey);
+                    send = _database.BeginDiscordSend(sendKey, row.Thread, _clock()) with { Fresh = false };
                 }
 
                 sent = search.MessageId;
