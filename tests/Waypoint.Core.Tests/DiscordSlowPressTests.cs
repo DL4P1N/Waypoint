@@ -113,45 +113,4 @@ public sealed class DiscordSlowPressTests : IDisposable
         Assert.Contains("Done with m1", Requests().Single(request => request.Url.EndsWith("/webhooks/app1/tok1/messages/@original")).Body);
         Assert.Contains("Done with m2", Requests().Single(request => request.Url.EndsWith("/webhooks/app1/tok2/messages/@original")).Body);
     }
-
-    [Fact]
-    public async Task A_press_only_waiting_for_its_answer_lets_the_next_one_go_ahead()
-    {
-        var bridge = Bridge(TimeSpan.FromMinutes(1));
-        var gateway = new DiscordGateway("token", bridge.HandleEventAsync, arrived: bridge.EventArrived);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        bridge.Acted = async press =>
-        {
-            if (press.MessageId == "m1")
-            {
-                // Saved, and now only waiting, like a press waiting on its sort.
-                press.OnlyWaiting?.Invoke();
-                await release.Task;
-            }
-            else
-            {
-                second.TrySetResult();
-            }
-
-            return new ButtonResult(Outcome: $"Done with {press.MessageId}");
-        };
-
-        try
-        {
-            gateway.Deliver("INTERACTION_CREATE", Press("1", "m1"));
-            gateway.Deliver("INTERACTION_CREATE", Press("2", "m2"));
-
-            Assert.True(await Task.WhenAny(second.Task, Task.Delay(TimeSpan.FromSeconds(30))) == second.Task, "The second press waited behind the first");
-            Assert.True(SpinWait.SpinUntil(() => Callbacks("2") == 1, TimeSpan.FromSeconds(30)));
-            Assert.Contains("Done with m2", Requests().Single(request => request.Url.Contains("/interactions/2/")).Body);
-        }
-        finally
-        {
-            release.TrySetResult();
-        }
-
-        Assert.True(SpinWait.SpinUntil(() => Callbacks("1") == 1, TimeSpan.FromSeconds(30)));
-        Assert.Contains("Done with m1", Requests().Single(request => request.Url.Contains("/interactions/1/")).Body);
-    }
 }

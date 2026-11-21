@@ -18,7 +18,7 @@ public sealed partial class DiscordBridge
     /// Anyone but the owner is turned away.
     /// </summary>
     public Task HandleInteractionAsync(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command = null) =>
-        AnswerInteraction(interaction, apply, command, Arrive(interaction)).Finished;
+        AnswerInteraction(interaction, apply, command, Arrive(interaction));
 
     /// <summary>
     /// Told about each event as soon as it's read, before it waits its turn behind the ones ahead. An interaction's
@@ -33,18 +33,14 @@ public sealed partial class DiscordBridge
     }
 
     /// <summary>
-    /// Starts answering in turn. The first task ends once the press has saved what it changes, or says it is only
-    /// waiting now, so the next event can go. The second ends once Discord has its answer.
+    /// Answers in turn. The next event waits until this one is done, its sort included, so what each press changes
+    /// happens in the order they were made. Only the promise runs ahead, timed from when the press arrived.
     /// </summary>
-    private (Task InOrder, Task Finished) AnswerInteraction(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command, PendingAnswer pending)
+    private Task AnswerInteraction(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command, PendingAnswer pending)
     {
-        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnlyWaiting() => waiting.TrySetResult();
-
         // Suggestions can't be promised, so they're always answered at once.
-        var work = TypeOf(interaction) == OptionTyped ? Respond(interaction, apply, command, OnlyWaiting) : Task.Run(() => Respond(interaction, apply, command, OnlyWaiting));
-        var finished = FinishAsync(interaction, work, pending);
-        return (Task.WhenAny(finished, waiting.Task), finished);
+        var work = TypeOf(interaction) == OptionTyped ? Respond(interaction, apply, command) : Task.Run(() => Respond(interaction, apply, command));
+        return FinishAsync(interaction, work, pending);
     }
 
     private async Task FinishAsync(JsonElement interaction, Task<Answer?> work, PendingAnswer pending)
@@ -280,7 +276,7 @@ public sealed partial class DiscordBridge
         answer.EnsureSuccessStatusCode();
     }
 
-    private async Task<Answer?> Respond(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command, Action? onlyWaiting = null)
+    private async Task<Answer?> Respond(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command)
     {
         var type = TypeOf(interaction);
         if (!interaction.TryGetProperty("data", out var data))
@@ -429,7 +425,7 @@ public sealed partial class DiscordBridge
             ButtonResult? result;
             try
             {
-                result = await acted(new ButtonPress(button, known, messageId, channel) { OnlyWaiting = onlyWaiting });
+                result = await acted(new ButtonPress(button, known, messageId, channel));
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {

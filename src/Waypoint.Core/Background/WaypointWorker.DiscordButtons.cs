@@ -71,7 +71,7 @@ public sealed partial class WaypointWorker
 
         if (word is not null)
         {
-            return await AnswerOnCardAsync(word, press.OnlyWaiting);
+            return await AnswerOnCardAsync(word);
         }
 
         if (press.Kind == AlertActionKind.StartNext)
@@ -96,7 +96,7 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>A button's words go through capture like typing, and the answer replaces the card that was pressed.</summary>
-    private async Task<ButtonResult?> AnswerOnCardAsync(string word, Action? onlyWaiting = null)
+    private async Task<ButtonResult?> AnswerOnCardAsync(string word)
     {
         var wait = new TaskCompletionSource<CaptureOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         long id;
@@ -111,8 +111,6 @@ public sealed partial class WaypointWorker
             _pressAnswers[id] = wait;
         }
 
-        // The press is saved as a capture, so the next event needn't wait for its sort.
-        onlyWaiting?.Invoke();
         _ = Captures.ProcessPendingAsync();
         if (await Task.WhenAny(wait.Task, Task.Delay(PressAnswerWait)) != wait.Task)
         {

@@ -85,14 +85,7 @@ public sealed record CommandReply(DiscordCard Card, bool Private = false)
 }
 
 /// <summary>A button pressed on a card. Kind is set for the fixed buttons, and CustomId says what a carrying button acts on.</summary>
-public sealed record ButtonPress(string CustomId, AlertActionKind? Kind, string MessageId, string? ChannelId)
-{
-    /// <summary>
-    /// Called once the press has saved what it changes and is only waiting for its answer, such as a sort, so the
-    /// next event from Discord doesn't wait behind it.
-    /// </summary>
-    public Action? OnlyWaiting { get; init; }
-}
+public sealed record ButtonPress(string CustomId, AlertActionKind? Kind, string MessageId, string? ChannelId);
 
 /// <summary>What a press comes to: a card to replace the pressed one, or a line to show under it as it turns gray.</summary>
 public sealed record ButtonResult(DiscordCard? Card = null, string? Outcome = null)
