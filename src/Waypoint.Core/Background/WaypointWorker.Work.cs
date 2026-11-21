@@ -80,9 +80,11 @@ public sealed partial class WaypointWorker
             idle = _workIdle?.Task ?? Task.CompletedTask;
         }
 
-        // Posts in the notes and lists forums are kept track of on their own, and are waited for too.
+        // Everything stopping waits for, on the PC and the server alike. Posts in the notes and lists forums are kept
+        // track of on their own, so they're added here. Other work kept apart from this count goes in this list too.
         _workStop.Cancel();
-        return WaitForWorkAsync(Task.WhenAll(idle, ThreadsSettledAsync()), limit, cancellationToken);
+        Task[] waits = [idle, ThreadsSettledAsync()];
+        return WaitForWorkAsync(Task.WhenAll(waits), limit, cancellationToken);
     }
 
     private static async Task<bool> WaitForWorkAsync(Task idle, TimeSpan limit, CancellationToken cancellationToken)
@@ -92,7 +94,7 @@ public sealed partial class WaypointWorker
             await idle.WaitAsync(limit, cancellationToken).ConfigureAwait(false);
             return true;
         }
-        catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             return false;
         }
