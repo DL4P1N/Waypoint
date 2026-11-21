@@ -213,8 +213,8 @@ function Switch-To([string]$name) {
     } catch {
         $failure = $_
         $script:switchUndone = $true
-        Write-Host "Switching to version $name failed after Waypoint was closed: $failure"
-        Write-Host 'Putting back the files that were there...'
+        Write-Host "Switching to version $name failed partway: $failure"
+        Write-Host $(if ($oldCurrent) { 'Putting back the files that were there...' } else { 'Removing the files it copied...' })
         foreach ($relative in $added) { Remove-Item -LiteralPath (Join-Path $InstallRoot $relative) -Force -ErrorAction SilentlyContinue }
         foreach ($relative in $movedAside) {
             $target = Join-Path $InstallRoot $relative
@@ -231,6 +231,9 @@ function Switch-To([string]$name) {
             Write-Warning "Couldn't write current.txt back to $oldCurrent ($_), so it was left as it was."
         }
         Remove-Item -LiteralPath "$currentFile.new" -Force -ErrorAction SilentlyContinue
+        if (-not $oldCurrent) {
+            throw "Version $name couldn't be installed ($failure). Nothing was installed here before, so the files it copied were removed. Run this again once that's fixed."
+        }
         if ((Test-Path -LiteralPath $exe) -and (Test-Start)) {
             throw "Version $name couldn't be switched in ($failure), so the files that were there were put back and Waypoint was started again. Nothing was changed."
         }
