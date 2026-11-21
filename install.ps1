@@ -159,8 +159,8 @@ function Get-Versions {
 
 # Makes the files at the install root the given version's. Each file is copied beside its old one as .new and checked
 # first, then switched in by rename, with the old Waypoint.exe kept as Waypoint.previous.exe. Files the version
-# doesn't have are removed afterwards.
-function Switch-To([string]$name) {
+# doesn't have are removed afterwards. -restartAfterUndo $false leaves starting anything to the caller when it fails.
+function Switch-To([string]$name, [bool]$restartAfterUndo = $true) {
     $source = Join-Path $versionsDir $name
     $files = @(Get-RelativeFiles $source)
     foreach ($relative in $files) {
@@ -234,6 +234,9 @@ function Switch-To([string]$name) {
         if (-not $oldCurrent) {
             throw "Version $name couldn't be installed ($failure). Nothing was installed here before, so the files it copied were removed. Run this again once that's fixed."
         }
+        if (-not $restartAfterUndo) {
+            throw "Version $name couldn't be switched in ($failure), so the files of version $oldCurrent were put back."
+        }
         if ((Test-Path -LiteralPath $exe) -and (Test-Start)) {
             throw "Version $name couldn't be switched in ($failure), so the files that were there were put back and Waypoint was started again. Nothing was changed."
         }
@@ -252,8 +255,8 @@ function Switch-To([string]$name) {
     }
 }
 
-# Starts Waypoint.exe and checks it's still running after a while.
-function Test-Start {
+# Starts Waypoint.exe, or another copy given, and checks it's still running after a while.
+function Test-Start([string]$path = $exe) {
     # Start-Process passes this session's environment on, so it's set for the moment of starting and then put back.
     $saved = @{}
     foreach ($variable in $childEnvironment.Keys) {
@@ -261,7 +264,7 @@ function Test-Start {
         [Environment]::SetEnvironmentVariable($variable, $childEnvironment[$variable], 'Process')
     }
     try {
-        $process = Start-Process -FilePath $exe -WorkingDirectory $InstallRoot -PassThru
+        $process = Start-Process -FilePath $path -WorkingDirectory (Split-Path $path) -PassThru
     } finally {
         foreach ($variable in $saved.Keys) { [Environment]::SetEnvironmentVariable($variable, $saved[$variable], 'Process') }
     }
@@ -433,7 +436,18 @@ if (-not $previous) {
     throw "Version $name didn't stay running after $StartCheckSeconds seconds, and there's no earlier version to go back to. Look in errors.log in the data folder."
 }
 Write-Host "Version $name didn't stay running after $StartCheckSeconds seconds. Going back to version $previous..."
-Switch-To $previous
+try {
+    Switch-To $previous $false
+} catch {
+    # The files at the install root are still the version that failed, so the one that was running before is started
+    # from its own version folder instead, to keep Waypoint open until this is sorted out.
+    $switchBackFailure = $_
+    $previousCopy = Join-Path (Join-Path $versionsDir $previous) 'Waypoint.exe'
+    if ((Test-Path -LiteralPath $previousCopy) -and (Test-Start $previousCopy)) {
+        throw "Version $name didn't stay running, and going back to version $previous failed ($switchBackFailure), so $name is still the one installed. Version $previous was started from its folder in $versionsDir for now. Run -Rollback to go back to it properly."
+    }
+    throw "Version $name didn't stay running, and going back to version $previous failed ($switchBackFailure), so $name is still the one installed and Waypoint isn't running. Run -Rollback to go back to $previous."
+}
 # Waypoint.previous.exe is now the version that failed, and nothing should go back to it.
 Remove-Item -LiteralPath $previousExe -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force
