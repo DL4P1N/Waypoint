@@ -48,12 +48,25 @@ public sealed partial class WaypointWorker
             {
                 if (entry.FromOwner && entry.Message is { } message)
                 {
-                    var (dealt, said) = await DealWithAsync(discord, row, message, told);
-                    told |= said;
-                    if (!dealt)
+                    // Only tries while its note or list is still there count, since one deleted on the PC keeps it unread on purpose.
+                    var tryKey = $"{row.Thread}:{message.Id}";
+                    if (row.State != WaypointDatabase.PostPending && StillThere(row)
+                        && _threadMessageTries.AddOrUpdate(tryKey, 1, (_, tries) => tries + 1) > MaxThreadMessageTries)
                     {
-                        return;
+                        // Tried enough, so it's left in the post with a word why, and the messages after it are read.
+                        await NoticeAsync(discord, row.Thread, DiscordText.Notice("Not added", "A message here couldn't be added after several tries, so it was left as it is. Send it again to try once more.", CardTone.Attention));
                     }
+                    else
+                    {
+                        var (dealt, said) = await DealWithAsync(discord, row, message, told);
+                        told |= said;
+                        if (!dealt)
+                        {
+                            return;
+                        }
+                    }
+
+                    _threadMessageTries.TryRemove(tryKey, out _);
                 }
 
                 _database.AdvanceDiscordThread(row.Thread, entry.Id);
@@ -66,6 +79,11 @@ public sealed partial class WaypointWorker
             }
         }
     }
+
+    /// <summary>How many times one message in a post is tried, while the app runs, before it's left as it is.</summary>
+    private const int MaxThreadMessageTries = 5;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _threadMessageTries = new();
 
     /// <summary>
     /// One of the owner's messages in a post. Dealt is true once it's saved, or once there's nothing more to do with
@@ -173,13 +191,14 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>A message's files, downloaded and read, and what went wrong with any that couldn't be.</summary>
-    private sealed record ThreadFiles(IReadOnlyList<FileText> Files, IReadOnlyList<string> Problems);
+    private sealed record ThreadFiles(IReadOnlyList<(string AttachmentId, FileText File)> Files, IReadOnlyList<string> Problems);
 
+    /// <summary>A file already added from an earlier read of the same message is skipped, so it's never added twice.</summary>
     private async Task<ThreadFiles> ReadThreadFilesAsync(DiscordBridge discord, DiscordMessage message)
     {
-        var files = new List<FileText>();
+        var files = new List<(string, FileText)>();
         var problems = new List<string>();
-        foreach (var attachment in message.Attachments)
+        foreach (var attachment in message.Attachments.Where(attachment => !_database.WasDiscordFileAttached(attachment.Id)))
         {
             if (await ReadThreadFileAsync(discord, attachment) is not { } file)
             {
@@ -191,7 +210,7 @@ public sealed partial class WaypointWorker
             }
             else
             {
-                files.Add(file.File!);
+                files.Add((attachment.Id, file.File!));
             }
         }
 
@@ -202,7 +221,7 @@ public sealed partial class WaypointWorker
     private async Task<bool> AttachThreadFilesAsync(DiscordBridge discord, string thread, long noteId, ThreadFiles read)
     {
         var problems = read.Problems.ToList();
-        foreach (var file in read.Files)
+        foreach (var (attachmentId, file) in read.Files)
         {
             var attached = NoteFiles is { CanMakeNotes: true } notes
                 ? notes.AttachFile(noteId, file, _clock())
@@ -210,6 +229,10 @@ public sealed partial class WaypointWorker
             if (attached.Problem is { } problem)
             {
                 problems.Add(problem);
+            }
+            else
+            {
+                _database.MarkDiscordFileAttached(attachmentId, noteId, _clock());
             }
         }
 
