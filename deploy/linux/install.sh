@@ -132,6 +132,8 @@ fi
 if [ ! -f /etc/waypoint/backup.env ]; then
     install -m 600 -o root -g root "$here/backup.env.example" /etc/waypoint/backup.env
 fi
+# rclone's settings for an offsite copy: only the backup unit's group can open this, not the running server.
+install -d -m 2770 -o root -g waypoint-backup /etc/waypoint/rclone
 install -d -m 700 -o waypoint -g waypoint /var/lib/waypoint
 
 echo "== systemd"

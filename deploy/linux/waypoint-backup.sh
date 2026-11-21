@@ -42,6 +42,15 @@ if [ -z "${BACKUP_DIR:-}" ]; then
 fi
 DATA_DIR="${DATA_DIR:-/var/lib/waypoint}"
 KEEP_DAYS="${KEEP_DAYS:-30}"
+# How many backups the rclone remote keeps, the newest. About two months of nightly ones.
+RCLONE_KEEP="${RCLONE_KEEP:-60}"
+# Kept in a folder only the backup unit's group can open, so the running server can't read the remote's sign-in.
+export RCLONE_CONFIG="${RCLONE_CONFIG:-/etc/waypoint/rclone/rclone.conf}"
+
+# Never 0 or less, which would leave none.
+if ! [[ "$RCLONE_KEEP" =~ ^[1-9][0-9]*$ ]]; then
+    fail "RCLONE_KEEP in /etc/waypoint/backup.env has to be a whole number of 1 or more."
+fi
 
 if [ "${BACKUP_DIR_IS_MOUNT:-yes}" = "yes" ] && ! mountpoint -q "$BACKUP_DIR"; then
     fail "$BACKUP_DIR isn't mounted, so nothing was backed up."
@@ -70,7 +79,7 @@ fi
 
 # Regular files only. A symlink put in place of one is left out rather than followed.
 members=(backup-snapshot.db)
-for file in settings.json outlook.token discord.token server-token.sha256; do
+for file in settings.json bank-profiles.json outlook.token discord.token server-token.sha256; do
     if [ -f "$DATA_DIR/$file" ] && [ ! -L "$DATA_DIR/$file" ]; then
         members+=("$file")
     fi
@@ -90,8 +99,28 @@ tar -C "$DATA_DIR" --create --gzip --file=- --exclude='*.part' \
 mv -- "$target.partial" "$target"
 
 # An optional copy somewhere else, such as an rclone remote. It only ever sees the encrypted file.
-if [ -n "${RCLONE_REMOTE:-}" ] && ! rclone copy "$target" "$RCLONE_REMOTE"; then
-    fail "the backup was made in $BACKUP_DIR, but copying it to $RCLONE_REMOTE didn't work."
+if [ -n "${RCLONE_REMOTE:-}" ]; then
+    if [ ! -r "$RCLONE_CONFIG" ]; then
+        fail "the backup was made in $BACKUP_DIR, but rclone's settings aren't in $RCLONE_CONFIG. See RCLONE_REMOTE in /etc/waypoint/backup.env."
+    fi
+    if ! rclone copy "$target" "$RCLONE_REMOTE"; then
+        fail "the backup was made in $BACKUP_DIR, but copying it to $RCLONE_REMOTE didn't work."
+    fi
+
+    # The newest RCLONE_KEEP are kept there, and older ones removed. Names sort by date.
+    case "$RCLONE_REMOTE" in
+        *:) remote_prefix="$RCLONE_REMOTE" ;;
+        *) remote_prefix="${RCLONE_REMOTE%/}/" ;;
+    esac
+    if ! listing="$(rclone lsf --files-only --max-depth 1 --include 'waypoint-*.tar.gz.age' "$RCLONE_REMOTE")"; then
+        fail "the backup was copied to $RCLONE_REMOTE, but its older backups couldn't be listed to remove."
+    fi
+    old_remote="$(printf '%s\n' "$listing" | grep -v '^$' | sort | head -n -"$RCLONE_KEEP" || true)"
+    while read -r old; do
+        if [ -n "$old" ] && ! rclone deletefile "$remote_prefix$old"; then
+            fail "the backup was copied to $RCLONE_REMOTE, but $old couldn't be removed from there."
+        fi
+    done <<< "$old_remote"
 fi
 
 find "$BACKUP_DIR" -maxdepth 1 -type f -name 'waypoint-*.tar.gz.age' -mtime +"$KEEP_DAYS" -delete
