@@ -46,7 +46,7 @@ An update can't leave a half-copied install behind:
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Rollback
   ```
 
-To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
+To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`: a new or empty one, or one it installed into before, since it won't use a folder with other things in it. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
 
 Left-click the tray icon, or choose **Open Waypoint**, to open the window. A fresh copy shows a **Getting set up** card on To do with four steps: add a first task, add work hours, say how you're paid, and connect Discord. Each line opens the right place and goes away once it's done. **Hide this** puts the card away for good.
 
