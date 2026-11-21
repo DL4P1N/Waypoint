@@ -108,6 +108,7 @@ public sealed class BudgetServerModeTests
             var total = UiTest.Named<TextBlock>(first, "MonthTotal").Text;
             Assert.Contains("$42.00", total);
 
+            before.FlushSavedReads();
             fake.Up = false;
             var after = new ServerClient(new HttpClient(fake) { BaseAddress = new Uri("http://server/") }, "token");
             after.SaveReadsIn(saved);

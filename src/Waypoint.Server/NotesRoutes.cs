@@ -100,9 +100,10 @@ public static class NotesRoutes
             return Results.NoContent();
         });
         group.MapPut("/{id:long}/folder", (long id, MoveNoteRequest request) => new FlagValue(notes.Value.Data.MoveNoteToFolder(id, request.FolderId)));
-        group.MapGet("/search", (string? words) => notes.Value.Data.SearchNotes(words));
-        group.MapGet("/search/in", (string? words, long? folder, bool? subfolders) => notes.Value.Data.SearchNotesInFolder(words, folder, subfolders ?? true));
-        group.MapGet("/in", (long? folder, bool? subfolders) => notes.Value.Data.GetNotesInFolder(folder, subfolders ?? false));
+        // Lists carry each note's first line rather than its whole body. The note is read whole when it's opened.
+        group.MapGet("/search", (string? words) => NoteListing.Slim(notes.Value.Data.SearchNotes(words)));
+        group.MapGet("/search/in", (string? words, long? folder, bool? subfolders) => NoteListing.Slim(notes.Value.Data.SearchNotesInFolder(words, folder, subfolders ?? true)));
+        group.MapGet("/in", (long? folder, bool? subfolders) => NoteListing.Slim(notes.Value.Data.GetNotesInFolder(folder, subfolders ?? false)));
         group.MapGet("/spots", (string? words) => notes.Value.Data.GetSavedSpots(string.IsNullOrEmpty(words) ? null : words));
         group.MapGet("/spots/waiting", () => new SpotValue(notes.Value.Data.GetWaitingSpot(DateTime.Now)));
         group.MapPost("/spots/next", (TextValue request) => notes.Value.Data.SetSpotNext(request.Value ?? "", DateTime.Now));

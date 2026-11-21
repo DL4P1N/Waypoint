@@ -258,7 +258,7 @@ public static class Api
                 ? Results.Ok(server.Database.GetShifts(day))
                 : Results.BadRequest());
         api.MapGet("/lists", (WaypointServer server) => server.Database.GetListOverview(includeEmptyShopping: true));
-        api.MapGet("/notes", (WaypointServer server) => server.Database.GetNotes());
+        api.MapGet("/notes", (WaypointServer server) => Waypoint.Core.Notes.NoteListing.Slim(server.Database.GetNotes()));
         api.MapGet("/budget", (WaypointServer server) => server.Database.GetBudgetReport(DateOnly.FromDateTime(DateTime.Now)));
     }
 

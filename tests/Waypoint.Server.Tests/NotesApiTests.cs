@@ -258,6 +258,23 @@ public sealed class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public void Lists_of_notes_carry_each_notes_first_line_and_opening_one_gives_it_whole()
+    {
+        var notes = Pc().Notes;
+        var folder = notes.CreateNoteFolder("CHEM 120", null, DateTime.Now);
+        var body = "# Lab 3\n\nTitration with **phenolphthalein**\nSecond line\nThird line";
+        var id = notes.CreateNote("Lab 3", "", DateTime.Now, folder.Id);
+        Assert.True(notes.SaveNote(id, "Lab 3", body, DateTime.Now));
+
+        var other = Elsewhere();
+        Assert.Equal("Titration with **phenolphthalein**", other.GetNotes().Single(note => note.Id == id).Body);
+        Assert.Equal("Titration with **phenolphthalein**", Assert.Single(other.GetNotesInFolder(folder.Id)).Body);
+        Assert.Equal("Titration with **phenolphthalein**", Assert.Single(other.SearchNotes("Third")).Body);
+        Assert.Equal(id, Assert.Single(other.GetNotes("third line")).Id);
+        Assert.Equal(body, other.GetNote(id)!.Body);
+    }
+
+    [Fact]
     public async Task Notes_from_a_file_are_written_on_the_server_and_saved_with_suggestions()
     {
         INotesData notes = Pc().Notes;
