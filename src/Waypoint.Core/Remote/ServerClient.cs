@@ -309,6 +309,26 @@ public sealed partial class ServerClient
     /// <summary>How many reads the saved view keeps, the most recent ones, so dated reads don't pile up.</summary>
     public const int MaxSavedReads = 256;
 
+    /// <summary>
+    /// How large the kept reads can grow, as UTF-8, so a few long notes can't make the file, and each write of it,
+    /// large. The oldest go first, but the newest is always kept.
+    /// </summary>
+    public const long MaxSavedReadBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// How long the file waits after a change before it's written, so a run of changes, such as typing in a note,
+    /// is written and encrypted once rather than each time.
+    /// </summary>
+    public static readonly TimeSpan SavedReadsDelay = TimeSpan.FromSeconds(2);
+
+    private long _readBytes;
+
+    private bool _savePending;
+
+    private Timer? _saveTimer;
+
+    private readonly object _writeGate = new();
+
     private string? _savedReadsPath;
 
     private IFileProtection? _savedReadsProtection;
@@ -339,22 +359,25 @@ public sealed partial class ServerClient
                 {
                     foreach (var (read, json) in saved.Reads)
                     {
-                        _lastReads.TryAdd(read, json);
+                        if (_lastReads.TryAdd(read, json))
+                        {
+                            _readBytes += Size(read, json);
+                        }
                     }
 
                     LastContact ??= saved.Contact;
                 }
 
-                if (plain)
-                {
-                    WriteSavedReads();
-                }
+                // Written again encrypted now, rather than waiting for the next change.
+                _savePending |= plain;
             }
             catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
             {
                 // A saved view that can't be read is only a missing one. The server fills it in again.
             }
         }
+
+        FlushSavedReads();
     }
 
     /// <summary>A file saved before it was encrypted: JSON text, which an encrypted one never starts like.</summary>
@@ -367,26 +390,88 @@ public sealed partial class ServerClient
     /// <summary>Called under the gate. The newest read goes last, so the oldest are the ones dropped.</summary>
     private void Remember(string path, string json)
     {
-        if (_lastReads.TryGetValue(path, out var kept) && kept == json)
+        if (_lastReads.TryGetValue(path, out var kept))
         {
-            return;
+            if (kept == json)
+            {
+                return;
+            }
+
+            _readBytes -= Size(path, kept);
         }
 
         _lastReads.Remove(path);
         _lastReads[path] = json;
-        while (_lastReads.Count > MaxSavedReads)
+        _readBytes += Size(path, json);
+        while (_lastReads.Count > MaxSavedReads || (_readBytes > MaxSavedReadBytes && _lastReads.Count > 1))
         {
-            _readAt.Remove(_lastReads.GetAt(0).Key);
+            var (oldest, oldJson) = _lastReads.GetAt(0);
+            _readBytes -= Size(oldest, oldJson);
+            _readAt.Remove(oldest);
             _lastReads.RemoveAt(0);
         }
 
-        WriteSavedReads();
+        SaveSoon();
     }
 
-    /// <summary>Called under the gate. Written whole to a temporary file first, so a crash never leaves half of it.</summary>
-    private void WriteSavedReads()
+    private static long Size(string path, string json) => Encoding.UTF8.GetByteCount(path) + Encoding.UTF8.GetByteCount(json);
+
+    /// <summary>Called under the gate. Writes the file once changes have stopped for <see cref="SavedReadsDelay"/>.</summary>
+    private void SaveSoon()
     {
-        if (_savedReadsPath is not { } file)
+        if (_savedReadsPath is null)
+        {
+            return;
+        }
+
+        _savePending = true;
+        _saveTimer ??= new Timer(_ => FlushSavedReads());
+        _saveTimer.Change(SavedReadsDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Writes any kept reads not yet in the file now, such as when the app closes.</summary>
+    public void FlushSavedReads()
+    {
+        // The snapshot is taken inside the write gate, so an older one is never written over a newer one.
+        lock (_writeGate)
+        {
+            SavedReads? snapshot;
+            lock (_gate)
+            {
+                if (!_savePending)
+                {
+                    return;
+                }
+
+                _savePending = false;
+                _saveTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                snapshot = SnapshotSavedReads();
+            }
+
+            WriteSavedReads(snapshot);
+        }
+    }
+
+    /// <summary>
+    /// Called under the gate. What goes in the file: every kept read but searches, which are only worth keeping
+    /// for now and can hold a lot of text.
+    /// </summary>
+    private SavedReads? SnapshotSavedReads() =>
+        _savedReadsPath is null
+            ? null
+            : new SavedReads(LastContact, _lastReads.Where(read => !IsSearch(read.Key)).ToDictionary(read => read.Key, read => read.Value));
+
+    /// <summary>A read for some words typed in a search box, as opposed to a page's own list.</summary>
+    internal static bool IsSearch(string path)
+    {
+        var query = path.IndexOf('?');
+        return query >= 0 && path[(query + 1)..].Split('&').Any(part => part.StartsWith("words=", StringComparison.Ordinal) && part.Length > "words=".Length);
+    }
+
+    /// <summary>Called under the write gate. Written whole to a temporary file first, so a crash never leaves half of it.</summary>
+    private void WriteSavedReads(SavedReads? snapshot)
+    {
+        if (snapshot is null || _savedReadsPath is not { } file)
         {
             return;
         }
@@ -394,7 +479,7 @@ public sealed partial class ServerClient
         try
         {
             var temp = file + ".tmp";
-            var json = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new SavedReads(LastContact, new Dictionary<string, string>(_lastReads)), RemoteJson.Options));
+            var json = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(snapshot, RemoteJson.Options));
             File.WriteAllBytes(temp, _savedReadsProtection is { } protection ? protection.Protect(json) : json);
             File.Move(temp, file, overwrite: true);
         }

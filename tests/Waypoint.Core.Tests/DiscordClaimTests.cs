@@ -170,6 +170,24 @@ public sealed class DiscordClaimTests : IDisposable
     }
 
     [Fact]
+    public async Task The_pins_are_read_each_check_but_the_note_is_only_rewritten_every_few_minutes()
+    {
+        var channel = new FakeChannel();
+        var pc = Claim(channel, "DESK", DiscordRunner.Pc);
+        await pc.CheckAsync();
+
+        _now += DiscordClaim.CheckEvery;
+        Assert.Equal(ClaimState.Here, (await pc.CheckAsync()).State);
+        Assert.DoesNotContain(channel.Calls, call => call.Method == HttpMethod.Patch);
+
+        _now += DiscordClaim.WriteEvery;
+        Assert.Equal(ClaimState.Here, (await pc.CheckAsync()).State);
+        Assert.Single(channel.Calls, call => call.Method == HttpMethod.Patch);
+        Assert.Contains($"at={_now.ToUnixTimeSeconds()}", channel.Messages[Assert.Single(channel.Pinned)]);
+        Assert.True(DiscordClaim.CheckEvery < DiscordClaim.WriteEvery && DiscordClaim.WriteEvery * 2 < DiscordClaim.Stale);
+    }
+
+    [Fact]
     public async Task A_note_left_by_a_copy_that_stopped_is_taken_over_and_cleared_away()
     {
         var channel = new FakeChannel();

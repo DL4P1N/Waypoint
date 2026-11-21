@@ -172,6 +172,9 @@ public partial class App
         Step(() => _itemsWindow?.SavePlace());
         Step(() => _noteSync?.Finish());
 
+        // The pages' saved view waits a moment after each change before it's written, so what's left is written now.
+        Step(() => _server?.Client.FlushSavedReads());
+
         // Finishes the file, so what was recorded is offered as notes next start.
         Step(() => _recorder?.Dispose());
 

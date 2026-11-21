@@ -52,6 +52,7 @@ public sealed class ServerReadsTests : IDisposable
         var before = Client(fake);
         before.SaveReadsIn(ReadsFile, UserProtection);
         new ServerToDoData(before).GetOpenItems();
+        before.FlushSavedReads();
 
         var stored = File.ReadAllBytes(ReadsFile);
         Assert.DoesNotContain("Email the landlord", Encoding.UTF8.GetString(stored));
@@ -70,6 +71,7 @@ public sealed class ServerReadsTests : IDisposable
         var plain = Client(fake);
         plain.SaveReadsIn(ReadsFile);
         new ServerToDoData(plain).GetOpenItems();
+        plain.FlushSavedReads();
         Assert.Contains("Email the landlord", File.ReadAllText(ReadsFile));
 
         fake.Up = false;

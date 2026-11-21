@@ -373,6 +373,7 @@ public sealed class PagesApiTests : IDisposable
         Assert.False(ServerSettingsFollow.Apply(ServerSettingsFollow.FindClasses(online), ServerSettingsFollow.FindBedtime(online), here, bedtime, Database));
 
         // After a restart with the server away, the last answer kept in the saved reads is used.
+        online.FlushSavedReads();
         var away = new ServerClient(new HttpClient(new Unreachable()) { BaseAddress = new Uri("http://server/") }, _token);
         away.SaveReadsIn(reads);
         var restarted = new ClassSchedule(new DateOnly(2027, 1, 11), new DateOnly(2027, 5, 7), [fileMeeting], []);

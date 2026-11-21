@@ -383,13 +383,53 @@ public sealed class ApiTests : IDisposable
         var host = _factory.Services.GetRequiredService<WaypointServer>().Host;
         host.ShowNotice("Wait list", "Still want the headphones?");
         var tries = new List<string>();
+        var nonces = new List<string>();
 
-        await host.RetryNoticesAsync((title, _) => { tries.Add(title); return Task.FromResult(false); });
+        await host.RetryNoticesAsync((title, _, nonce) => { tries.Add(title); nonces.Add(nonce); return Task.FromResult(false); });
         Assert.Single(_factory.Services.GetRequiredService<WaypointServer>().Database.GetUndeliveredNotices());
 
-        await host.RetryNoticesAsync((title, _) => { tries.Add(title); return Task.FromResult(true); });
+        await host.RetryNoticesAsync((title, _, nonce) => { tries.Add(title); nonces.Add(nonce); return Task.FromResult(true); });
         Assert.Empty(_factory.Services.GetRequiredService<WaypointServer>().Database.GetUndeliveredNotices());
         Assert.Equal(["Wait list", "Wait list"], tries);
+
+        // Tried again with the same nonce, so a try whose answer was lost isn't sent twice.
+        Assert.Equal(nonces[0], nonces[1]);
+        Assert.InRange(nonces[0].Length, 1, 25);
+    }
+
+    [Fact]
+    public async Task A_kept_notice_is_claimed_before_it_goes_to_discord_so_the_pc_never_shows_it_too()
+    {
+        var server = _factory.Services.GetRequiredService<WaypointServer>();
+        server.Host.ShowNotice("Time to leave", "Bus in 10 minutes.");
+        var pc = new ServerClient(Paired(), _token);
+        await pc.CheckAsync();
+        var claimedByPc = new List<bool>();
+
+        // While it's being sent, the PC asks for it, and is turned down.
+        await server.Host.RetryNoticesAsync(async (_, _, _) =>
+        {
+            claimedByPc.Add(await pc.ClaimNoticeAsync(Assert.Single(pc.LastStatus!.Notices!).Id));
+            return true;
+        });
+
+        Assert.Equal([false], claimedByPc);
+        Assert.Empty(server.Database.GetUndeliveredNotices());
+    }
+
+    [Fact]
+    public async Task A_notice_the_pc_shows_while_discord_is_away_is_not_sent_again_later()
+    {
+        var server = _factory.Services.GetRequiredService<WaypointServer>();
+        server.Host.ShowNotice("Morning briefing", "Two classes today.");
+        await server.Host.RetryNoticesAsync((_, _, _) => Task.FromResult(false));
+        var pc = new ServerClient(Paired(), _token);
+        await pc.CheckAsync();
+
+        Assert.Single(await pc.TakeNoticesAsync());
+        var tries = 0;
+        await server.Host.RetryNoticesAsync((_, _, _) => { tries++; return Task.FromResult(true); });
+        Assert.Equal(0, tries);
     }
 
     [Fact]

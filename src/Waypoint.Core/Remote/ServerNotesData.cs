@@ -183,12 +183,14 @@ public sealed class ServerNotesData : INotesData
         return Overlay(note);
     }
 
+    /// <summary>
+    /// Every note, each with only its first line, as the list shows it. Words to look for are looked for on the
+    /// server, which has the whole of each note.
+    /// </summary>
     public IReadOnlyList<NoteDetail> GetNotes(string? filter = null)
     {
         var clean = filter?.Trim() ?? "";
-        return WithOffline(Read<List<NoteDetail>>("api/notes", []), _ => true)
-            .Where(note => clean.Length == 0 || $"{note.Title}\n{note.Body}\n{note.About}".Contains(clean, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        return clean.Length > 0 ? SearchNotes(clean) : WithOffline(Read<List<NoteDetail>>("api/notes", []), _ => true);
     }
 
     public IReadOnlyList<NoteDetail> SearchNotes(string? words) =>

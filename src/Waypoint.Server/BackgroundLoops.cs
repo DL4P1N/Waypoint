@@ -41,14 +41,14 @@ public sealed class BackgroundLoops(WaypointServer server, IOptions<ServerOption
         loops.Add(Every(WaypointWorker.DiscordPollInterval, () => worker.PollDiscordAsync(), stoppingToken));
 
         // Notices that couldn't be sent are tried again until Discord takes them or the PC shows them.
-        loops.Add(Every(WaypointWorker.DiscordPollInterval, () => server.Host.RetryNoticesAsync(async (title, text) =>
+        loops.Add(Every(WaypointWorker.DiscordPollInterval, () => server.Host.RetryNoticesAsync(async (title, text, nonce) =>
         {
             if (worker.Discord is not { } discord)
             {
                 return false;
             }
 
-            var sent = (await discord.DeliverAsync(DiscordText.Notice(title, text))).Sent;
+            var sent = (await discord.DeliverOnceAsync(discord.AlertsChannelFor(), DiscordText.Notice(title, text), nonce)).Sent;
             worker.DiscordHealth.Sent(sent, DateTime.Now);
             return sent;
         }), stoppingToken));

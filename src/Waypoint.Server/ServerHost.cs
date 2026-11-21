@@ -46,18 +46,49 @@ public sealed class ServerHost(ILogger<ServerHost> logger) : IWorkerHost, IAsync
         Database?.AddUndeliveredNotice(title, text, DateTime.Now);
     }
 
-    /// <summary>Sends kept notices again, oldest first, and stops at the first that still doesn't go so the order holds.</summary>
-    public async Task RetryNoticesAsync(Func<string, string, Task<bool>> send)
+    /// <summary>
+    /// Sends kept notices again, oldest first, and stops at the first that still doesn't go so the order holds.
+    /// Each is claimed before it's sent, the same claim the PC makes before showing one, so the two never both
+    /// show it. One that doesn't go is put back as it was, and goes again with the same nonce, so a try whose
+    /// answer was lost isn't sent twice.
+    /// </summary>
+    public async Task RetryNoticesAsync(Func<string, string, string, Task<bool>> send)
     {
         foreach (var notice in Database?.GetUndeliveredNotices() ?? [])
         {
-            if (!await send(notice.Title, notice.Text))
+            if (!Database!.MarkNoticeDelivered(notice.Id))
             {
-                return;
+                // The PC showed it first.
+                continue;
             }
 
-            Database!.MarkNoticeDelivered(notice.Id);
+            bool sent;
+            try
+            {
+                sent = await send(notice.Title, notice.Text, NoticeNonce(notice));
+            }
+            catch
+            {
+                Database.RestoreUndeliveredNotice(notice);
+                throw;
+            }
+
+            if (!sent)
+            {
+                Database.RestoreUndeliveredNotice(notice);
+                return;
+            }
         }
+    }
+
+    /// <summary>
+    /// Discord's nonce for a kept notice: its id, and a short hash of the rest, since an id can be used again once
+    /// the notice before it is gone. Within Discord's 25 characters.
+    /// </summary>
+    public static string NoticeNonce(UndeliveredNotice notice)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{notice.At:O}\n{notice.Title}\n{notice.Text}"));
+        return $"n{notice.Id}-{Convert.ToHexString(hash, 0, 4)}";
     }
 
     public void ShowReminder(DueReminder reminder, Action closed)

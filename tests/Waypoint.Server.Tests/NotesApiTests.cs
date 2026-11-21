@@ -258,6 +258,23 @@ public sealed class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public void Lists_of_notes_carry_each_notes_first_line_and_opening_one_gives_it_whole()
+    {
+        var notes = Pc().Notes;
+        var folder = notes.CreateNoteFolder("CHEM 120", null, DateTime.Now);
+        var body = "# Lab 3\n\nTitration with **phenolphthalein**\nSecond line\nThird line";
+        var id = notes.CreateNote("Lab 3", "", DateTime.Now, folder.Id);
+        Assert.True(notes.SaveNote(id, "Lab 3", body, DateTime.Now));
+
+        var other = Elsewhere();
+        Assert.Equal("Titration with **phenolphthalein**", other.GetNotes().Single(note => note.Id == id).Body);
+        Assert.Equal("Titration with **phenolphthalein**", Assert.Single(other.GetNotesInFolder(folder.Id)).Body);
+        Assert.Equal("Titration with **phenolphthalein**", Assert.Single(other.SearchNotes("Third")).Body);
+        Assert.Equal(id, Assert.Single(other.GetNotes("third line")).Id);
+        Assert.Equal(body, other.GetNote(id)!.Body);
+    }
+
+    [Fact]
     public async Task Notes_from_a_file_are_written_on_the_server_and_saved_with_suggestions()
     {
         INotesData notes = Pc().Notes;
@@ -448,6 +465,36 @@ public sealed class NotesApiTests : IDisposable
 
         Assert.Null(Assert.Single(notes.GetNoteSources(id)).FilePath);
         Assert.Empty(Directory.Exists(Path.Combine(_folder, "attachments")) ? Directory.GetFiles(Path.Combine(_folder, "attachments")) : []);
+    }
+
+    [Fact]
+    public async Task Two_files_sent_at_once_for_one_source_each_arrive_whole_and_leave_nothing_behind()
+    {
+        var notes = Pc().Notes;
+        var id = notes.StartForRecording("Lecture 7.m4a", null, false, DateTime.Now).NoteId;
+        notes.AttachTranscript(id, "Lecture 7.m4a", "Osmosis.", null, DateTime.Now);
+        var source = Assert.Single(notes.GetNoteSources(id));
+        var path = $"/api/notes/{id}/sources/{source.Id}/file";
+        var first = Enumerable.Repeat((byte)1, 600).ToArray();
+        var second = Enumerable.Repeat((byte)2, 600).ToArray();
+        var release = new TaskCompletionSource();
+        var a = new GatedContent(first, release.Task);
+        var b = new GatedContent(second, release.Task);
+
+        // Both are part way through before either finishes.
+        var sendA = Paired().PutAsync(path, a);
+        var sendB = Paired().PutAsync(path, b);
+        await Task.WhenAll(a.Halfway, b.Halfway).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(100);
+        release.SetResult();
+        var responses = await Task.WhenAll(sendA, sendB);
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.NoContent, response.StatusCode));
+        var attachments = Path.Combine(_folder, "attachments");
+        var kept = Assert.Single(Directory.GetFiles(attachments));
+        var bytes = await File.ReadAllBytesAsync(kept);
+        Assert.True(bytes.SequenceEqual(first) || bytes.SequenceEqual(second));
+        Assert.Equal(kept, Assert.Single(notes.GetNoteSources(id)).FilePath);
     }
 
     [Fact]
@@ -957,6 +1004,30 @@ public sealed class NotesApiTests : IDisposable
     }
 
     /// <summary>A body sent in pieces with no length given up front, as a client streaming a file might.</summary>
+    /// <summary>Sends half its bytes, then waits to be let go before sending the rest.</summary>
+    private sealed class GatedContent(byte[] bytes, Task release) : HttpContent
+    {
+        private readonly TaskCompletionSource _halfway = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Halfway => _halfway.Task;
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            var half = bytes.Length / 2;
+            await stream.WriteAsync(bytes.AsMemory(0, half));
+            await stream.FlushAsync();
+            _halfway.SetResult();
+            await release;
+            await stream.WriteAsync(bytes.AsMemory(half));
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
     private sealed class PushStreamContent(byte[] bytes) : HttpContent
     {
         protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)

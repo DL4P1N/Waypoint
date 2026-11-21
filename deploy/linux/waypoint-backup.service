@@ -22,9 +22,10 @@ NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=full
-# The home folder is read-only, except rclone's settings, which it rewrites when a sign-in is refreshed.
+# The home folder is read-only. rclone's settings, which it rewrites when a sign-in is refreshed, live in
+# /etc/waypoint/rclone, which only the waypoint-backup group can open, so the server can't read the remote's sign-in.
 ProtectHome=read-only
-ReadWritePaths=-/home/waypoint/.config/rclone
+ReadWritePaths=-/etc/waypoint/rclone
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true

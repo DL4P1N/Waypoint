@@ -278,6 +278,7 @@ public sealed class ServerClientTests : IDisposable
         var before = Client();
         before.SaveReadsIn(ReadsFile, new Scramble());
         new ServerToDoData(before).GetOpenItems();
+        before.FlushSavedReads();
 
         var stored = File.ReadAllBytes(ReadsFile);
         Assert.DoesNotContain("Read chapter 4", System.Text.Encoding.UTF8.GetString(stored));
@@ -295,6 +296,7 @@ public sealed class ServerClientTests : IDisposable
         var plain = Client();
         plain.SaveReadsIn(ReadsFile);
         new ServerToDoData(plain).GetOpenItems();
+        plain.FlushSavedReads();
         Assert.Contains("Read chapter 4", File.ReadAllText(ReadsFile));
 
         _fake.Up = false;
@@ -321,6 +323,67 @@ public sealed class ServerClientTests : IDisposable
         var later = Client();
         later.SaveReadsIn(ReadsFile, new Scramble());
         new ServerToDoData(later).GetOpenItems();
+        later.FlushSavedReads();
         Assert.Contains("Read chapter 4", System.Text.Encoding.UTF8.GetString(new Scramble().Unprotect(File.ReadAllBytes(ReadsFile))));
+    }
+
+    [Fact]
+    public async Task A_run_of_changes_is_written_once_they_stop_rather_than_each_time()
+    {
+        var client = Client();
+        client.SaveReadsIn(ReadsFile);
+        for (var n = 0; n < 20; n++)
+        {
+            client.Keep("api/notes/1", $"Draft {n}");
+        }
+
+        Assert.False(File.Exists(ReadsFile));
+
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (!File.Exists(ReadsFile) && waited.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Contains("Draft 19", File.ReadAllText(ReadsFile));
+        Assert.DoesNotContain("Draft 18", File.ReadAllText(ReadsFile));
+    }
+
+    [Fact]
+    public void Searches_are_kept_for_now_but_not_saved_in_the_file()
+    {
+        var client = Client();
+        client.SaveReadsIn(ReadsFile);
+        client.Keep("api/notes/search?words=mitosis", new[] { "Found by a search" });
+        client.Keep("api/notes/search/in?words=&subfolders=True", new[] { "Unfiled list" });
+        client.Keep("api/history?filter=All&limit=50&words=", new[] { "History page" });
+        client.FlushSavedReads();
+
+        var saved = File.ReadAllText(ReadsFile);
+        Assert.DoesNotContain("Found by a search", saved);
+        Assert.Contains("Unfiled list", saved);
+        Assert.Contains("History page", saved);
+        _fake.Up = false;
+        Assert.Equal(["Found by a search"], client.Get<string[]>("api/notes/search?words=mitosis"));
+    }
+
+    [Fact]
+    public void The_saved_file_stays_under_its_size_and_keeps_the_newest()
+    {
+        var client = Client();
+        client.SaveReadsIn(ReadsFile);
+        var big = new string('x', 1024 * 1024);
+        for (var n = 0; n < 10; n++)
+        {
+            client.Keep($"api/notes/{n}", $"{n}{big}");
+        }
+
+        client.FlushSavedReads();
+
+        Assert.True(new FileInfo(ReadsFile).Length <= ServerClient.MaxSavedReadBytes + 4096);
+        _fake.Up = false;
+        var after = Client();
+        after.SaveReadsIn(ReadsFile);
+        Assert.StartsWith("9", after.Get<string>("api/notes/9"));
     }
 }
