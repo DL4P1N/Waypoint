@@ -158,6 +158,7 @@ public sealed partial class WaypointDatabase
         CreateNoteJobTables();
         CreateDiscordInboxTables();
         AddDiscordGivenUp();
+        AddDiscordSendTriedName();
         CreateCaptureProgressTables();
         AddColumnIfMissing("sent_reminders", "source", "TEXT NOT NULL DEFAULT 'Capture'");
         AddColumnIfMissing("sent_reminders", "start_only", "INTEGER NOT NULL DEFAULT 0");
