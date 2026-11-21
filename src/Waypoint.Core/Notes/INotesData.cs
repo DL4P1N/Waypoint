@@ -219,8 +219,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public bool SaveNote(long id, string title, string body, DateTime now) => database.SaveNote(id, title, body, now);
 
     public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, string? expectedTitle = null) =>
-        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now, expectedTitle: expectedTitle)
-            ? expectedTitle is not null && database.GetNote(id) is { } saved && saved.Title != WaypointDatabase.NoteTitle(title, body) ? new NoteSaveResult(NoteSaveOutcome.Saved, saved) : NoteSaveResult.Saved
+        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now, out var saved, expectedTitle: expectedTitle)
+            ? saved is not null && saved.Title != WaypointDatabase.NoteTitle(title, body) ? new NoteSaveResult(NoteSaveOutcome.Saved, saved) : NoteSaveResult.Saved
         : database.GetNote(id) is { } stored ? NoteSaveResult.Changed(stored)
         : NoteSaveResult.Gone;
 

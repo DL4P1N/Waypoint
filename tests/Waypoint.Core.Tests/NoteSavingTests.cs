@@ -350,6 +350,12 @@ public sealed class NoteSavingTests : IDisposable
         var id = _database.CreateNote("Seed list", "radish", Now);
         _database.SaveNote(id, "Garden seeds", "radish", Now);
 
+        // The save says the title it kept.
+        INotesData notes = new LocalNotesData(_database);
+        var saved = notes.SaveNoteIfUnchanged(id, "Seed list", "radish", "radish", Now, "Seed list");
+        Assert.Equal((NoteSaveOutcome.Saved, "Garden seeds"), (saved.Outcome, saved.Stored!.Title));
+        Assert.Null(notes.SaveNoteIfUnchanged(id, "Garden seeds", "radish", "radish", Now, "Garden seeds").Stored);
+
         // Read before the rename, saved after it, the way a reply from Discord is added.
         Assert.True(_database.SaveNoteIfUnchanged(id, "Seed list", "radish\n\nbeets too", "radish", Now, expectedTitle: "Seed list"));
         Assert.Equal(("Garden seeds", "radish\n\nbeets too"), (_database.GetNote(id)!.Title, _database.GetNote(id)!.Body));

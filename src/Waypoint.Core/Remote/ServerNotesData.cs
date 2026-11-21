@@ -302,7 +302,7 @@ public sealed class ServerNotesData : INotesData
                         return NoteSaveResult.Changed(stored);
                     }
 
-                    title = stored.Title;
+                    title = expectedTitle = stored.Title;
                 }
             }
 
@@ -632,16 +632,18 @@ public sealed class ServerNotesData : INotesData
             }
 
             var current = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{waiting.Id}").Value;
-            if (current is not null && waiting.BasedOn is { } bodyThen)
+            if (current is not null && waiting.BasedOn is { } bodyThen && waiting.BasedOnTitle is { } titleThen)
             {
                 // What changed only on the server stays as it is there: the text, when only the title was typed
                 // here, and the title, when only the text was. Only a title changed in both places keeps both.
+                // Without the title the edit started from, a rename there can't be told apart, so it's sent as
+                // before and both versions are kept if the text changed there.
                 if (waiting.Body == bodyThen)
                 {
                     waiting = waiting with { Body = current.Body };
                 }
 
-                if (waiting.BasedOnTitle is { } titleThen && current.Title != WaypointDatabase.NoteTitle(titleThen, bodyThen)
+                if (current.Title != WaypointDatabase.NoteTitle(titleThen, bodyThen)
                     && current.Title != WaypointDatabase.NoteTitle(titleThen, current.Body))
                 {
                     if (waiting.Title == titleThen)

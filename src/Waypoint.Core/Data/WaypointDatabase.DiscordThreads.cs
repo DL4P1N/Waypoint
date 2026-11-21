@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using Waypoint.Core.Capture;
 
 namespace Waypoint.Core.Data;
 
@@ -295,42 +296,47 @@ public sealed partial class WaypointDatabase
     /// title it had then, a note renamed meanwhile keeps its new title when this save leaves the title as it was,
     /// and is turned down as changed when this save renames it too.
     /// </summary>
-    public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, (string Thread, string Message)? readTo = null, string? expectedTitle = null)
+    public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, (string Thread, string Message)? readTo = null, string? expectedTitle = null) =>
+        SaveNoteIfUnchanged(id, title, body, expectedBody, now, out _, readTo, expectedTitle);
+
+    /// <summary>The same, with <paramref name="saved"/> the note as this save wrote it, with the title it kept.</summary>
+    public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, out NoteDetail? saved, (string Thread, string Message)? readTo = null, string? expectedTitle = null)
     {
+        saved = null;
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        string storedTitle;
+        NoteDetail stored;
         using (var check = connection.CreateCommand())
         {
-            check.CommandText = "SELECT i.title, COALESCE(i.body, c.text) FROM items i JOIN captures c ON c.id = i.capture_id WHERE i.id = $id AND i.kind = 'Note' AND i.canceled = 0";
+            check.CommandText = $"SELECT {NoteColumns} FROM items i JOIN captures c ON c.id = i.capture_id WHERE i.id = $id AND i.kind = 'Note' AND i.canceled = 0";
             check.Parameters.AddWithValue("$id", id);
             using var reader = check.ExecuteReader();
-            if (!reader.Read() || reader.GetString(1) != expectedBody)
+            if (!reader.Read() || (stored = ReadNote(reader)).Body != expectedBody)
             {
                 return false;
             }
-
-            storedTitle = reader.GetString(0);
         }
 
-        if (expectedTitle is not null && storedTitle != NoteTitle(expectedTitle, expectedBody))
+        if (expectedTitle is not null && stored.Title != NoteTitle(expectedTitle, expectedBody))
         {
             if (title != expectedTitle)
             {
                 return false;
             }
 
-            title = storedTitle;
+            title = stored.Title;
         }
 
-        var saved = WriteNote(connection, id, NoteTitle(title, body), body, now);
-        if (saved && readTo is { } read)
+        var written = NoteTitle(title, body);
+        var done = WriteNote(connection, id, written, body, now);
+        if (done && readTo is { } read)
         {
             Advance(connection, read.Thread, read.Message);
         }
 
         transaction.Commit();
-        return saved;
+        saved = done ? stored with { Title = written, Body = body } : null;
+        return done;
     }
 
     /// <summary>

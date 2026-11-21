@@ -428,15 +428,26 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
     [Fact]
     public void A_note_renamed_elsewhere_while_its_editor_is_open_keeps_its_new_title_when_the_text_is_saved()
     {
-        var notes = new ServerNotesData(Client());
+        var line = NewLine();
+        var notes = new ServerNotesData(Client(line));
         var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
 
-        // Renamed on the server, from Discord or another PC, while only the text is typed here.
+        // Renamed on the server, from Discord or another PC, while only the text is typed here. The first save
+        // reads first, since this PC hasn't heard yet that the server checks, and one save is enough after that.
         Database.SaveNote(id, "Garden seeds", "radish", DateTime.Now);
+        line.Requests.Clear();
         Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale", "radish", DateTime.Now, "Seed list"));
 
+        Assert.Equal([$"GET /api/notes/{id}", $"PUT /api/notes/{id}"], line.Requests);
         var note = Assert.Single(Database.GetNotes());
         Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
+        Assert.Equal("Garden seeds", notes.GetNote(id)!.Title);
+
+        // Now that it's known the server checks, the save goes straight there, and still keeps the new title.
+        line.Requests.Clear();
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Seed list", "radish, kale, leeks", "radish, kale", DateTime.Now, "Seed list"));
+        Assert.Equal([$"PUT /api/notes/{id}"], line.Requests);
+        Assert.Equal(("Garden seeds", "radish, kale, leeks"), (Database.GetNote(id)!.Title, Database.GetNote(id)!.Body));
         Assert.Equal("Garden seeds", notes.GetNote(id)!.Title);
     }
 
@@ -504,5 +515,30 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
         Assert.False(sent.KeptBoth);
         var note = Assert.Single(Database.GetNotes());
         Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
+    }
+
+    [Fact]
+    public async Task Typing_kept_while_away_without_the_title_it_started_from_never_writes_over_a_rename_on_the_server()
+    {
+        var line = NewLine();
+        var client = Client(line);
+        var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_folder, "pc-notes.json")));
+        var id = notes.CreateNote("Seed list", "radish", DateTime.Now);
+
+        // Saved without a check, so what's waiting has the text it started from but not the title.
+        line.Down = true;
+        Assert.True(notes.SaveNote(id, "Spring seeds", "radish", DateTime.Now));
+        Assert.Null(Assert.Single(new OfflineNotes(Path.Combine(_folder, "pc-notes.json")).All).BasedOnTitle);
+
+        // Renamed and added to on the server meanwhile.
+        Database.SaveNote(id, "Garden seeds", "radish\n\nbeets too", DateTime.Now);
+
+        line.Down = false;
+        await client.CheckAsync();
+        var sent = Assert.Single(await notes.SendOfflineAsync());
+
+        Assert.True(sent.KeptBoth);
+        Assert.Equal(("Garden seeds", "radish\n\nbeets too"), (Database.GetNote(id)!.Title, Database.GetNote(id)!.Body));
+        Assert.Equal(("Spring seeds" + OfflineNotes.KeptBothSuffix, "radish"), (Database.GetNote(sent.NoteId)!.Title, Database.GetNote(sent.NoteId)!.Body));
     }
 }

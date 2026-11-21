@@ -515,8 +515,8 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             var moved = note with { Title = title, FolderId = folder };
 
             // Saved only over the text read at the start of this pass, so a save from the editor meanwhile isn't
-            // lost under the file's. Then it was changed on both sides after all.
-            var saved = record.BodyHash == Hash(note.Body) ? database.SaveNoteIfUnchanged(note.Id, title, text, note.Body, now) : null;
+            // lost under the file's. Then it was changed on both sides after all, as it is when renamed meanwhile.
+            var saved = record.BodyHash == Hash(note.Body) ? database.SaveNoteIfUnchanged(note.Id, title, text, note.Body, now, note.Title) : null;
             if (saved?.Outcome == NoteSaveOutcome.Saved)
             {
                 database.MoveNoteToFolder(note.Id, folder);
@@ -547,10 +547,16 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             var body = note.Body;
             for (var attempt = 0; attempt < NoteSaving.Tries; attempt++)
             {
-                var result = database.SaveNoteIfUnchanged(note.Id, title, body, body, now);
+                var result = database.SaveNoteIfUnchanged(note.Id, title, body, body, now, note.Title);
                 if (result.Outcome != NoteSaveOutcome.Changed || result.Stored is not { } stored)
                 {
                     return body;
+                }
+
+                // Renamed in Waypoint meanwhile: that title keeps the note, and the file takes it on a later pass.
+                if (stored.Title != note.Title)
+                {
+                    return stored.Body;
                 }
 
                 body = stored.Body;

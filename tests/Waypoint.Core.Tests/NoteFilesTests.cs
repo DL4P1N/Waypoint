@@ -282,6 +282,9 @@ public sealed class NoteFilesTests : IDisposable
         /// <summary>The note and the text the editor saves, once, just after the next pass reads the notes.</summary>
         public (long Id, string Body)? Save { get; set; }
 
+        /// <summary>When set, the editor's save gives the note this title too.</summary>
+        public string? Rename { get; set; }
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             object? result;
@@ -298,7 +301,7 @@ public sealed class NoteFilesTests : IDisposable
             {
                 Save = null;
                 var note = Inner.GetNote(save.Id)!;
-                Assert.True(Inner.SaveNoteIfUnchanged(save.Id, note.Title, save.Body, note.Body, Now));
+                Assert.True(Inner.SaveNoteIfUnchanged(save.Id, Rename ?? note.Title, save.Body, note.Body, Now));
             }
 
             return result;
@@ -345,6 +348,25 @@ public sealed class NoteFilesTests : IDisposable
         Assert.Equal("Shopping", note.Title);
         Assert.Equal("milk from the editor", note.Body);
         Assert.Equal("milk from the editor", Text("Shopping.md"));
+        Assert.False(files.Sync(Now).NotesChanged);
+    }
+
+    [Fact]
+    public void A_rename_in_the_editor_during_a_pass_that_takes_a_renamed_file_keeps_the_editors_title()
+    {
+        var (files, editor) = WithEditor();
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        files.Sync(Now);
+
+        File.Move(File_("Groceries.md"), File_("Shopping.md"));
+        editor.Save = (id, "milk");
+        editor.Rename = "Errands";
+        files.Sync(Now);
+        files.Sync(Now);
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal(("Errands", "milk"), (note.Title, note.Body));
+        Assert.Equal("milk", Text("Errands.md"));
         Assert.False(files.Sync(Now).NotesChanged);
     }
 
