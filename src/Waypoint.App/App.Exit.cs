@@ -34,7 +34,10 @@ public partial class App
     /// <summary>How long that copy waits for this one to finish closing before it gives up.</summary>
     private static readonly TimeSpan AfterRestoreWait = TimeSpan.FromMinutes(2);
 
-    /// <summary>Set once a restore starts. Nothing new is taken from then on, and Waypoint starts again after.</summary>
+    /// <summary>
+    /// Set once a restore starts or Waypoint starts closing. Nothing new is taken from then on: the tray and a second
+    /// launch no longer open the list, and a restore can't start.
+    /// </summary>
     private bool _restoring;
 
     /// <summary>Whether this copy holds the single-instance lock, so it lets go of it properly on the way out.</summary>
@@ -214,13 +217,24 @@ public partial class App
         // the window or reads Discord again.
         Step(() => _posted?.RunLeft());
 
-        // Work started without being waited for, such as a notice going out, is given a few seconds to end, with
-        // nothing new started and no timer starting more meanwhile.
-        if (_worker is { } stopping)
+        // Work started without being waited for, such as a notice going out, is given a few seconds to end. Nothing
+        // new is started meanwhile: no timer runs, and the tray is hidden with its menu off, so no dialog opens from
+        // it while this waits.
+        _restoring = true;
+        Step(StopTimers);
+        Step(() =>
         {
-            Step(StopTimers);
-            Step(() => WaitWhileRunning(stopping.StopWorkAsync(DiscordGateway.EventDrainLimit)));
-        }
+            if (_tray is { } tray)
+            {
+                if (tray.ContextMenuStrip is { } menu)
+                {
+                    menu.Enabled = false;
+                }
+
+                tray.Visible = false;
+            }
+        });
+        Step(() => WaitWhileRunning(StopWorkerWorkAsync(DiscordGateway.EventDrainLimit)));
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
         Step(() => _worker?.ForgetLateNight());
