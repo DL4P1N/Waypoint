@@ -47,6 +47,26 @@ public sealed partial class WaypointDatabase
         return notices;
     }
 
+    /// <summary>
+    /// Puts back a notice claimed for sending that didn't go, with its own id and time, so it keeps its place and
+    /// can still be claimed by the PC or tried again.
+    /// </summary>
+    public void RestoreUndeliveredNotice(UndeliveredNotice notice)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR IGNORE INTO undelivered_notices (id, title, text, at) VALUES ($id, $title, $text, $at)";
+        command.Parameters.AddWithValue("$id", notice.Id);
+        command.Parameters.AddWithValue("$title", notice.Title);
+        command.Parameters.AddWithValue("$text", notice.Text);
+        command.Parameters.AddWithValue("$at", FormatReminder(notice.At));
+        if (command.ExecuteNonQuery() == 0)
+        {
+            // A notice kept meanwhile took its id, so it goes in as a new one rather than being lost.
+            AddUndeliveredNotice(notice.Title, notice.Text, notice.At);
+        }
+    }
+
     /// <summary>Forgets a notice once it's been delivered. Only the first to ask gets true, so it's never shown twice.</summary>
     public bool MarkNoticeDelivered(long id)
     {
