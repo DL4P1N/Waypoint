@@ -38,6 +38,12 @@ public interface INoteFileStore
 
     long CreateNote(string title, string body, DateTime now, long? folderId = null);
 
+    /// <summary>
+    /// A new note made under an id of the caller's, so making it again with the same id, such as after a failure
+    /// before the caller saved what it was for, gives back the note already made rather than a second one.
+    /// </summary>
+    long CreateNoteOnce(string clientId, string title, string body, DateTime now, long? folderId) => CreateNote(title, body, now, folderId);
+
     bool SaveNote(long id, string title, string body, DateTime now);
 
     /// <summary>
@@ -212,6 +218,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public NoteDetail? GetNote(long id) => database.GetNote(id);
 
     public long CreateNote(string title, string body, DateTime now, long? folderId = null) => database.CreateNote(title, body, now, folderId);
+
+    public long CreateNoteOnce(string clientId, string title, string body, DateTime now, long? folderId) => database.CreateNoteOnce(clientId, title, body, now, folderId);
 
     public bool SaveNote(long id, string title, string body, DateTime now) => database.SaveNote(id, title, body, now);
 

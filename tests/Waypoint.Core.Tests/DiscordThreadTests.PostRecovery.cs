@@ -77,6 +77,31 @@ public sealed partial class DiscordThreadTests
         Assert.Empty(_database.GetDiscordSends("part:"));
     }
 
+    [Fact]
+    public async Task A_post_the_owner_starts_makes_one_note_even_when_saving_the_post_is_cut_off_and_tried_again()
+    {
+        var worker = await Started(lists: null);
+        var post = _discord.UserPost(NotesForum, "Made up idea", "Paint the made up shelf");
+
+        // The note is made, then saving which note the post shows is cut off.
+        FailPartway("BEFORE UPDATE ON discord_posts");
+        await Record.ExceptionAsync(() => Event(worker, "THREAD_CREATE", ThreadEvent(post)));
+        StopFailingPartway();
+        Assert.Equal(WaypointDatabase.PostPending, _database.FindDiscordThread(post.Id)!.State);
+
+        worker.StopDiscord();
+
+        // Started again, the post is caught up on and finished with the note already made.
+        var again = MakeWorker(lists: null);
+        again.StartDiscord();
+        await again.SyncDiscordThreadsAsync();
+        await again.ThreadsSettledAsync();
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal("Paint the made up shelf", note.Body);
+        Assert.Equal(note.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), _database.FindDiscordThread(post.Id)!.Key);
+    }
+
     /// <summary>
     /// Discord makes the note's post, then Waypoint stops before it hears which post it is, while the forum's posts
     /// can't be read, so the try straight after can't look for it. They stay unreadable until a test says otherwise.
