@@ -245,6 +245,7 @@ public sealed partial class WaypointDatabase
         BackfillHistory();
         SeparateBudgetPeriods();
         BackfillImportMatches();
+        CreateChangeStamps();
     }
 
     /// <summary>

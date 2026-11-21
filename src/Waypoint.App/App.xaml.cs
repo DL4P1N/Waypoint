@@ -307,7 +307,8 @@ public partial class App : System.Windows.Application
         // Discord can also be set up later on the Settings page, so its poll timer runs either way and does
         // nothing until it's connected. In server mode the server runs it, so it isn't started here.
         _discordTimer = new DispatcherTimer { Interval = WaypointWorker.DiscordPollInterval };
-        _discordTimer.Tick += (_, _) => _ = _worker.PollDiscordAsync();
+        // Off the window thread, since the pinned views and the forum posts it brings up to date read the database.
+        _discordTimer.Tick += (_, _) => _ = System.Threading.Tasks.Task.Run(() => _worker.PollDiscordAsync());
         if (_server is null && _sends && Trial.StartsConnections)
         {
             // Only one copy uses the bot. If the server, or another PC, is already using it, this PC sends nothing

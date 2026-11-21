@@ -94,6 +94,23 @@ public sealed partial class WaypointDatabase
         return (long)command.ExecuteScalar()!;
     }
 
+    /// <summary>How many sources each note has, for every note with any, counted in one read.</summary>
+    public IReadOnlyDictionary<long, int> CountNoteSources()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT note_id, COUNT(*) FROM note_sources GROUP BY note_id";
+
+        var counts = new Dictionary<long, int>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            counts[reader.GetInt64(0)] = reader.GetInt32(1);
+        }
+
+        return counts;
+    }
+
     /// <summary>A note's sources in the order they were added.</summary>
     public IReadOnlyList<NoteSource> GetNoteSources(long noteId)
     {

@@ -102,6 +102,7 @@ public sealed partial class WaypointDatabase
         }
 
         // The notes folder still holds the notes from before. Its next sync writes the restored ones over it.
+        ForgetChangeStamps();
         MarkNotesRestored();
 
         // The restored pages went through the log. Folding them into the file and emptying the log leaves nothing

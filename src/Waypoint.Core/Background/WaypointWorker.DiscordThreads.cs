@@ -223,23 +223,64 @@ public sealed partial class WaypointWorker
     {
         var tags = await ForumTagsAsync(discord, forum);
 
+        // When nothing the posts show has changed since a round found every post just as it should be, and no notice
+        // is waiting to be cleared away, this round would change nothing, so it isn't made.
+        var stamp = NotePostsStamp(forum, tags);
+        if (stamp is not null && stamp == _notePostsSettled && !_database.HasDiscordNotices(NoticeSends))
+        {
+            return;
+        }
+
         // Oldest first, so the newest note is made last and sits at the top of the forum.
         var notes = _database.GetNotes().Reverse().ToList();
         var rows = Live(WaypointDatabase.ThreadNote);
+        var sources = _database.CountNoteSources();
+        var settled = stamp is not null;
         foreach (var note in notes)
         {
             var key = note.Id.ToString(CultureInfo.InvariantCulture);
             IReadOnlyList<string>? tag = tags is null ? null : note.FolderId is { } folder && tags.TryGetValue(folder, out var found) ? [found] : [];
-            var wanted = new WantedPost(WaypointDatabase.ThreadNote, key, DiscordBridge.ThreadName(NoteTitle(note)), tag, NoteParts(note));
-            await SyncPostAsync(discord, forum, wanted, rows.GetValueOrDefault(key));
+            var wanted = new WantedPost(WaypointDatabase.ThreadNote, key, DiscordBridge.ThreadName(NoteTitle(note)), tag, NoteParts(note, sources.GetValueOrDefault(note.Id)));
+            var row = rows.GetValueOrDefault(key);
+            settled &= Shows(row, forum, wanted);
+            await SyncPostAsync(discord, forum, wanted, row);
         }
 
         var live = notes.Select(note => note.Id.ToString(CultureInfo.InvariantCulture)).ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows.Values.Where(row => !live.Contains(row.Key)))
         {
+            settled = false;
             await RetirePostAsync(discord, row, "This note was deleted on the PC");
         }
+
+        _notePostsSettled = settled ? stamp : null;
     }
+
+    /// <summary>
+    /// What the note posts are made from: the notes and everything about them, the posts kept for them, the forum,
+    /// and its tags. Null when that can't be told, such as while the tags can't be read, so every round is made.
+    /// </summary>
+    private string? NotePostsStamp(string forum, Dictionary<long, string>? tags) =>
+        tags is not null && _database.NotesChangeStamp() is { } notes
+            ? $"{notes}|{forum}|{string.Join(",", tags.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key.ToString(CultureInfo.InvariantCulture)}={pair.Value}"))}"
+            : null;
+
+    /// <summary>How every notice's send is noted, whatever the post. See <see cref="NoticeSendPrefix"/>.</summary>
+    private const string NoticeSends = "notice:";
+
+    /// <summary>Set by a round that found every note post just as it should be, to what they were made from.</summary>
+    private string? _notePostsSettled;
+
+    /// <summary>Whether the last round found every note post as it should be, so the next is skipped if nothing changed. For tests.</summary>
+    internal bool NotePostsSettled => _notePostsSettled is not null;
+
+    /// <summary>Whether a post already shows just what it should, so <see cref="SyncPostAsync"/> has nothing to do for it.</summary>
+    private static bool Shows(DiscordThreadRow? row, string forum, WantedPost wanted) =>
+        row is not null
+        && row.Forum == forum
+        && (wanted.Tags is not { } tags || row.MetaHash == Meta(wanted.Name, tags))
+        && row.Parts.Count == wanted.Parts.Count
+        && row.Parts.Zip(wanted.Parts).All(pair => pair.First.Hash == Hash(pair.Second));
 
     private async Task SyncListPostsAsync(DiscordBridge discord, string forum)
     {
@@ -387,10 +428,9 @@ public sealed partial class WaypointWorker
     /// A note's messages. Each holds one stretch of the note's Markdown, laid out for Discord, with an Edit button that
     /// opens that stretch in a form. Sources and transcripts stay on the PC and are only counted at the end.
     /// </summary>
-    private IReadOnlyList<DiscordCard> NoteParts(NoteDetail note)
+    private IReadOnlyList<DiscordCard> NoteParts(NoteDetail note, int sources)
     {
         var chunks = SplitMarkdown(note.Body, PartMarkdown);
-        var sources = _database.GetNoteSources(note.Id).Count;
         var title = Shorten(DiscordText.Escape(NoteTitle(note)), 200);
         var cards = new List<DiscordCard>();
         for (var index = 0; index < chunks.Count; index++)
