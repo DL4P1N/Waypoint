@@ -149,7 +149,9 @@ public sealed class GatewaySession(string token)
 /// so captures don't wait for a poll. It resumes when dropped, backing off between tries, and stops if the token is rejected.
 /// Once it stops, the events already read are finished before <see cref="RunAsync"/> returns.
 /// </summary>
-public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent, Action<Exception>? failed = null)
+/// <param name="arrived">Told about each event as it's read, before it waits its turn, so a press can be answered
+/// in time even while a slow one ahead of it is still being handled.</param>
+public sealed class DiscordGateway(string token, Func<string, JsonElement, Task> onEvent, Action<Exception>? failed = null, Action<string, JsonElement>? arrived = null)
 {
     /// <summary>How long stopping waits for events already read, such as a capture being saved.</summary>
     public static readonly TimeSpan EventDrainLimit = TimeSpan.FromSeconds(5);
@@ -273,9 +275,7 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
                     LastError = HasMessages ? null : LastError;
                 }
 
-                // Handled off the read loop, so a slow handler never holds up heartbeats, but one at a time in the
-                // order Discord sent them, so a message closed and then reopened is saved that way round.
-                _events.Post(() => onEvent(type, data));
+                Deliver(type, data);
             }
 
             return welcomed;
@@ -284,6 +284,23 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
         {
             await connection.CancelAsync();
         }
+    }
+
+    /// <summary>Hands one event on: told at once that it arrived, then handled in turn.</summary>
+    internal void Deliver(string type, JsonElement data)
+    {
+        try
+        {
+            arrived?.Invoke(type, data);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            (failed ?? (_ => { }))(exception);
+        }
+
+        // Handled off the read loop, so a slow handler never holds up heartbeats, but one at a time in the
+        // order Discord sent them, so a message closed and then reopened is saved that way round.
+        _events.Post(() => onEvent(type, data));
     }
 
     private async Task BeatAsync(ClientWebSocket socket, SemaphoreSlim send, TimeSpan interval, CancellationToken cancellationToken)

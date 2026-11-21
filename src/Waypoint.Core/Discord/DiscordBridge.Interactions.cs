@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Waypoint.Core.Capture;
@@ -7,36 +8,54 @@ namespace Waypoint.Core.Discord;
 /// <summary>Button presses, slash commands, menu picks and pop-up forms, and how each is answered within Discord's three seconds.</summary>
 public sealed partial class DiscordBridge
 {
+    // Interactions read off the connection and waiting their turn, each with its three seconds already counting.
+    private readonly ConcurrentDictionary<string, PendingAnswer> _arrived = new();
+
     /// <summary>
     /// Answers a button press or a slash command. Discord allows three seconds, so a quick answer goes straight back.
     /// One that takes longer is promised first, then filled in when it's ready, so Discord never says the app
     /// didn't respond. A pressed card turns gray with its buttons gone, unless the press hands back a new card.
     /// Anyone but the owner is turned away.
     /// </summary>
-    public async Task HandleInteractionAsync(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command = null)
+    public Task HandleInteractionAsync(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command = null) =>
+        AnswerInteraction(interaction, apply, command, Arrive(interaction)).Finished;
+
+    /// <summary>
+    /// Told about each event as soon as it's read, before it waits its turn behind the ones ahead. An interaction's
+    /// promise is timed from here, so a slow press ahead of it can't use up its three seconds.
+    /// </summary>
+    public void EventArrived(string type, JsonElement data)
+    {
+        if (type == "INTERACTION_CREATE" && Text(data, "id") is { } id)
+        {
+            _arrived[id] = Arrive(data);
+        }
+    }
+
+    /// <summary>
+    /// Starts answering in turn. The first task ends once the press has saved what it changes, or says it is only
+    /// waiting now, so the next event can go. The second ends once Discord has its answer.
+    /// </summary>
+    private (Task InOrder, Task Finished) AnswerInteraction(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command, PendingAnswer pending)
+    {
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnlyWaiting() => waiting.TrySetResult();
+
+        // Suggestions can't be promised, so they're always answered at once.
+        var work = TypeOf(interaction) == OptionTyped ? Respond(interaction, apply, command, OnlyWaiting) : Task.Run(() => Respond(interaction, apply, command, OnlyWaiting));
+        var finished = FinishAsync(interaction, work, pending);
+        return (Task.WhenAny(finished, waiting.Task), finished);
+    }
+
+    private async Task FinishAsync(JsonElement interaction, Task<Answer?> work, PendingAnswer pending)
     {
         try
         {
-            var type = interaction.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.Number ? kind.GetInt32() : ButtonPressed;
-
-            // Make it smaller waits on Claude, so the card says so at once and becomes the step when it's ready.
-            if (type == ButtonPressed && IsOwnersPress(interaction, SmallerButton))
+            var answer = await work;
+            if (pending.Take())
             {
-                await CallbackAsync(interaction, Body(new Answer(UpdateMessage, MessageBody(DiscordText.Notice(Activation.SmallerWorking, "")))));
-                if (await Respond(interaction, apply, command) is { Data: { } step })
-                {
-                    await EditOriginalAsync(interaction, step);
-                }
-
-                return;
-            }
-
-            // Suggestions can't be promised, so they're always answered at once.
-            var work = type == OptionTyped ? Respond(interaction, apply, command) : Task.Run(() => Respond(interaction, apply, command));
-            var press = type == ButtonPressed ? HowPressWillBeAnswered(interaction) : PressReply.Update;
-            if (type == OptionTyped || press == PressReply.Form || await Task.WhenAny(work, Task.Delay(DeferAfter)) == work)
-            {
-                if (await work is { } answer)
+                // In time, so the answer itself goes back and no promise is made.
+                if (answer is not null)
                 {
                     await CallbackAsync(interaction, Body(answer));
                 }
@@ -44,10 +63,8 @@ public sealed partial class DiscordBridge
                 return;
             }
 
-            // Slow, so Discord is told the answer is coming. A command's answer then shows only to the owner.
-            var replies = type is CommandUsed or FormSent || press == PressReply.Private;
-            await CallbackAsync(interaction, Body(new Answer(replies ? DeferredReply : DeferredUpdate, replies ? new { flags = OnlySeenByPresser } : null)));
-            if (await work is { Data: { } late })
+            // Already promised, or shown as working, so the answer fills that in.
+            if (await pending.Promised && answer is { Data: { } late })
             {
                 await EditOriginalAsync(interaction, late);
             }
@@ -57,6 +74,83 @@ public sealed partial class DiscordBridge
             LastError = exception.Message;
         }
     }
+
+    /// <summary>
+    /// Starts an interaction's three seconds. Make it smaller says it's working on the card at once. A form or a
+    /// suggestion can't be promised, so it waits for its answer. Anything else is promised if it isn't answered in time.
+    /// </summary>
+    private PendingAnswer Arrive(JsonElement interaction)
+    {
+        var pending = new PendingAnswer();
+        try
+        {
+            var type = TypeOf(interaction);
+
+            // Make it smaller waits on Claude, so the card says so at once and becomes the step when it's ready.
+            if (type == ButtonPressed && IsOwnersPress(interaction, SmallerButton))
+            {
+                pending.Take();
+                pending.Promised = PromiseAsync(interaction, Body(new Answer(UpdateMessage, MessageBody(DiscordText.Notice(Activation.SmallerWorking, "")))), TimeSpan.Zero);
+                return pending;
+            }
+
+            var press = type == ButtonPressed ? HowPressWillBeAnswered(interaction) : PressReply.Update;
+            if (type == OptionTyped || press == PressReply.Form)
+            {
+                return pending;
+            }
+
+            // A command's answer then shows only to the owner.
+            var replies = type is CommandUsed or FormSent || press == PressReply.Private;
+            var promise = Body(new Answer(replies ? DeferredReply : DeferredUpdate, replies ? new { flags = OnlySeenByPresser } : null));
+            pending.Promised = PromiseAsync(interaction, promise, DeferAfter, pending);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            LastError = exception.Message;
+        }
+
+        return pending;
+    }
+
+    /// <summary>Sends the promise after the wait, unless the answer got there first. True once it's sent.</summary>
+    private async Task<bool> PromiseAsync(JsonElement interaction, object body, TimeSpan after, PendingAnswer? race = null)
+    {
+        try
+        {
+            if (after > TimeSpan.Zero)
+            {
+                await Task.Delay(after);
+            }
+
+            if (race is not null && !race.Take())
+            {
+                return false;
+            }
+
+            await CallbackAsync(interaction, body);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            LastError = exception.Message;
+            return false;
+        }
+    }
+
+    /// <summary>One interaction's single callback: whichever of its answer and its promise takes it first sends it.</summary>
+    private sealed class PendingAnswer
+    {
+        private int _taken;
+
+        /// <summary>True once a promise or a working card was sent, false if none was or it failed.</summary>
+        public Task<bool> Promised { get; set; } = Task.FromResult(false);
+
+        public bool Take() => Interlocked.Exchange(ref _taken, 1) == 0;
+    }
+
+    private static int TypeOf(JsonElement interaction) =>
+        interaction.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.Number ? kind.GetInt32() : ButtonPressed;
 
     private PressReply HowPressWillBeAnswered(JsonElement interaction)
     {
@@ -186,9 +280,9 @@ public sealed partial class DiscordBridge
         answer.EnsureSuccessStatusCode();
     }
 
-    private async Task<Answer?> Respond(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command)
+    private async Task<Answer?> Respond(JsonElement interaction, Func<string, AlertActionKind, string?> apply, Func<SlashCommand, CommandReply>? command, Action? onlyWaiting = null)
     {
-        var type = interaction.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.Number ? kind.GetInt32() : ButtonPressed;
+        var type = TypeOf(interaction);
         if (!interaction.TryGetProperty("data", out var data))
         {
             return null;
@@ -335,7 +429,7 @@ public sealed partial class DiscordBridge
             ButtonResult? result;
             try
             {
-                result = await acted(new ButtonPress(button, known, messageId, channel));
+                result = await acted(new ButtonPress(button, known, messageId, channel) { OnlyWaiting = onlyWaiting });
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {

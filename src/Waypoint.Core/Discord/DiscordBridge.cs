@@ -329,7 +329,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
                     await HandleReactionAsync(data);
                     break;
                 case "INTERACTION_CREATE":
-                    await HandleInteractionAsync(data, Pressed ?? ((_, _) => null), Command);
+                    // Its promise started counting when it was read. Only the change it makes waits its turn here.
+                    var pending = Text(data, "id") is { } interactionId && _arrived.TryRemove(interactionId, out var early) ? early : Arrive(data);
+                    await AnswerInteraction(data, Pressed ?? ((_, _) => null), Command, pending).InOrder;
                     break;
                 case "THREAD_CREATE":
                     await HandleThreadCreateAsync(data);
