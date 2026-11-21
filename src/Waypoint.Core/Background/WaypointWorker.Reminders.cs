@@ -79,8 +79,29 @@ public sealed partial class WaypointWorker
 
     private void ShowReminder(DueReminder reminder) => _host.ShowReminder(reminder, () => Release(reminder));
 
-    /// <summary>Reminders go to Discord alone. The host's card is only for when Discord still can't be reached after retries.</summary>
+    /// <summary>
+    /// Reminders go to Discord alone. The host's card is only for when Discord still can't be reached after retries.
+    /// A problem partway is logged and the reminder let go, so it comes up again on the next round instead of
+    /// staying quiet until Waypoint starts again. Its note, if one was made, keeps it from going out twice.
+    /// </summary>
     private async Task SendReminderAsync(DiscordBridge discord, DueReminder reminder)
+    {
+        try
+        {
+            await SendReminderOnceAsync(discord, reminder);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (!Stopping(exception))
+            {
+                PlainProblem.Report(exception);
+            }
+
+            Release(reminder);
+        }
+    }
+
+    private async Task SendReminderOnceAsync(DiscordBridge discord, DueReminder reminder)
     {
         // Only things that can be finished get the prompt. A nudge about an assignment or an exam alert doesn't finish it.
         // A dose is answered with Took it, so its card has buttons even though it repeats.

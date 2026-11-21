@@ -98,6 +98,9 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>Work cut short by <see cref="StopWorkAsync"/>, which isn't a problem worth logging.</summary>
+    private bool Stopping(Exception exception) => exception is OperationCanceledException && _workStop.IsCancellationRequested;
+
     /// <summary>The pause between Discord tries: the tests' when they set one, or else one that stopping cuts short.</summary>
     private Task Pause(TimeSpan span) => RetryWait?.Invoke(span) ?? Task.Delay(span, _workStop.Token);
 }
