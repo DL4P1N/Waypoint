@@ -41,6 +41,6 @@ public sealed partial class DiscordThreadTests
         StopFailingPartway();
         Assert.Equal("Pack made up bags\n\nMade up later words", _database.GetNote(id)!.Body);
         Assert.Contains(post.Messages, message => message.Id == stuck.Id);
-        Assert.Contains(post.Messages, message => message.Bot && message.Says("couldn't be added after several tries"));
+        Assert.Contains(post.Messages, message => message.Bot && message.Says("send the text again"));
     }
 }

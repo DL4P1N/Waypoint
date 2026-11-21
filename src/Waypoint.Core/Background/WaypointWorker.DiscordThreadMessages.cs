@@ -54,7 +54,7 @@ public sealed partial class WaypointWorker
                         && _threadMessageTries.AddOrUpdate(tryKey, 1, (_, tries) => tries + 1) > MaxThreadMessageTries)
                     {
                         // Tried enough, so it's left in the post with a word why, and the messages after it are read.
-                        await NoticeAsync(discord, row.Thread, DiscordText.Notice("Not added", "A message here couldn't be added after several tries, so it was left as it is. Send it again to try once more.", CardTone.Attention));
+                        await NoticeAsync(discord, row.Thread, DiscordText.Notice("Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention));
                     }
                     else
                     {
