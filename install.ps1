@@ -368,9 +368,13 @@ if ($ownStaging) {
     if ($SkipTests) {
         Write-Host 'Skipped the tests, since -SkipTests was given.'
     } else {
+        Write-Host 'Running the tests first. This can take a while (half an hour on a busy PC) and shows little until each set is done.'
         foreach ($project in 'tests\Waypoint.Core.Tests', 'tests\Waypoint.Server.Tests') {
-            Write-Host "Running $project..."
-            dotnet test (Join-Path $PSScriptRoot $project) --nologo --verbosity quiet
+            Write-Host "Running $project... (started $((Get-Date).ToString('HH:mm')))"
+            # A test stuck for 10 minutes fails the run rather than leaving the install waiting forever. What it finds
+            # goes in the temp folder, so nothing new appears in the repo.
+            dotnet test (Join-Path $PSScriptRoot $project) --nologo --verbosity quiet --blame-hang-timeout 10m `
+                --results-directory (Join-Path ([IO.Path]::GetTempPath()) 'waypoint-install-test-results')
             if ($LASTEXITCODE -ne 0) { throw "$project failed. Nothing was changed. Fix it, or run with -SkipTests to install anyway." }
         }
     }
