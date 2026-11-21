@@ -26,8 +26,13 @@ internal sealed class ProtectedTokenStore(string path) : ITokenStore
         }
     }
 
-    public void Save(string token) =>
-        File.WriteAllBytes(path, UserProtection.Instance.Protect(Encoding.UTF8.GetBytes(token)));
+    /// <summary>Written beside the file first and moved over it, so a crash mid-write never leaves a cut-off token.</summary>
+    public void Save(string token)
+    {
+        var temp = path + ".tmp";
+        File.WriteAllBytes(temp, UserProtection.Instance.Protect(Encoding.UTF8.GetBytes(token)));
+        File.Move(temp, path, overwrite: true);
+    }
 }
 
 /// <summary>

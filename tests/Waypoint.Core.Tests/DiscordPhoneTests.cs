@@ -27,9 +27,25 @@ public sealed partial class DiscordPhoneTests : IDisposable
         _database = new WaypointDatabase(Path.Combine(_folder, "waypoint.db"));
     }
 
-    /// <summary>A view refresh or a start can still be finishing in the background, so the folder is retried for a moment.</summary>
+    /// <summary>Every worker started here, so Dispose can stop its background work before the folder goes.</summary>
+    private readonly List<WaypointWorker> _workers = [];
+
+    /// <summary>
+    /// Stops each worker and waits for its Discord work, so nothing recreates the folder after it's deleted. A view
+    /// refresh can still be finishing, so the folder is then retried for a moment.
+    /// </summary>
     public void Dispose()
     {
+        foreach (var worker in _workers)
+        {
+            // On the thread pool, so this wait can't deadlock against the test's own synchronization context.
+            Task.Run(async () =>
+            {
+                await worker.StopDiscordAsync(TimeSpan.FromSeconds(5));
+                await Task.WhenAny(worker.ThreadsSettledAsync(), Task.Delay(TimeSpan.FromSeconds(5)));
+            }).GetAwaiter().GetResult();
+        }
+
         for (var attempt = 0; ; attempt++)
         {
             SqliteConnection.ClearAllPools();
@@ -309,6 +325,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
         {
             RetryWait = _ => Task.CompletedTask,
         };
+        _workers.Add(worker);
         worker.StartDiscord();
 
         // These check the answer that comes straight away. On a busy machine running every test at once, the 2 second

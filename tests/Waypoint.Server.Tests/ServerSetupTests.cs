@@ -52,6 +52,41 @@ public sealed class ServerSetupTests : IDisposable
         }
     }
 
+    [Fact]
+    public void The_pairing_file_is_removed_and_logged_once_a_PC_has_paired()
+    {
+        var log = new KeptLog<WaypointServer>();
+        var options = Options.Create(new ServerOptions { DataDirectory = _folder, RunBackground = false });
+        var server = new WaypointServer(options, new ServerHost(NullLogger<ServerHost>.Instance), new ReplyLog(), new WorkerParts(path => new FileTokenStore(path), ConnectGateway: false), log);
+        var file = Path.Combine(_folder, ServerToken.PairingFileName);
+        Assert.True(File.Exists(file));
+
+        server.Paired();
+
+        Assert.False(File.Exists(file));
+        Assert.Contains(log.Lines, line => line.Contains("removed") && line.Contains(file));
+        server.Paired();
+    }
+
+    /// <summary>The heartbeat's address can hold a secret, so HttpClient's per-request lines, which show it, aren't logged.</summary>
+    [Fact]
+    public void The_http_client_does_not_log_each_request_address()
+    {
+        using var factory = new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Waypoint:DataDirectory", _folder);
+            builder.UseSetting("Waypoint:RunBackground", "false");
+        });
+        var loggers = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<ILoggerFactory>(factory.Services);
+
+        foreach (var category in new[] { "System.Net.Http.HttpClient.Default.LogicalHandler", "System.Net.Http.HttpClient.Default.ClientHandler" })
+        {
+            var logger = loggers.CreateLogger(category);
+            Assert.False(logger.IsEnabled(LogLevel.Information));
+            Assert.True(logger.IsEnabled(LogLevel.Warning));
+        }
+    }
+
     private sealed class DiscordDown : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

@@ -22,7 +22,8 @@ public sealed class IdleSenderTests : IDisposable
 
     [Theory]
     [InlineData("192.168.1.20:5000")]
-    [InlineData("server.local")]
+    [InlineData("ftp://192.168.1.20")]
+    [InlineData("http://192.168.1.20:5000")]
     [InlineData("ftp://192.168.1.20")]
     [InlineData("")]
     [InlineData(null)]
@@ -32,7 +33,7 @@ public sealed class IdleSenderTests : IDisposable
     [Fact]
     public async Task A_good_address_sends_and_makes_no_PC_id_just_for_this()
     {
-        var sender = IdleSender.ForAddress("http://192.168.1.20:5000", _folder, Reporter());
+        var sender = IdleSender.ForAddress("http://100.101.102.103:5000", _folder, Reporter());
 
         Assert.NotNull(sender);
         await sender.TickAsync(DateTime.Now);

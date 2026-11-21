@@ -88,6 +88,8 @@ public static class Api
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     return;
                 }
+
+                server.Paired();
             }
 
             await next(context);

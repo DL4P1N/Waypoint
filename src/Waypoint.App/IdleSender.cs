@@ -32,6 +32,7 @@ public sealed class IdleSender
     public static IdleSender? ForAddress(string? address, string dataDirectory, IdleReporter reporter)
     {
         if (string.IsNullOrWhiteSpace(address)
+            || ServerAddress.Problem(address) is not null
             || !Uri.TryCreate(address.Trim().TrimEnd('/') + "/", UriKind.Absolute, out var baseAddress)
             || (baseAddress.Scheme != Uri.UriSchemeHttp && baseAddress.Scheme != Uri.UriSchemeHttps))
         {
@@ -39,7 +40,7 @@ public sealed class IdleSender
         }
 
         var tokens = new ProtectedTokenStore(Path.Combine(dataDirectory, ServerConnection.TokenFile));
-        var client = new ServerClient(new HttpClient { BaseAddress = baseAddress }, null, ServerConnection.ExistingPcId(dataDirectory));
+        var client = new ServerClient(ServerAddress.Client(baseAddress), null, ServerConnection.ExistingPcId(dataDirectory));
         return new IdleSender(client, reporter, () => tokens.Load());
     }
 

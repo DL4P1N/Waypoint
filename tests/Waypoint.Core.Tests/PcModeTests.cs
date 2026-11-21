@@ -31,6 +31,7 @@ public sealed class PcModeTests : IDisposable
         Assert.Equal(PcRun.Server, PcMode.Choose(new ServerSettings("http://100.101.102.103:5280", DataMode.Server)));
         Assert.Equal(PcRun.NeedsAddress, PcMode.Choose(new ServerSettings(null, DataMode.Server)));
         Assert.Equal(PcRun.NeedsAddress, PcMode.Choose(new ServerSettings("  ", DataMode.Server)));
+        Assert.Equal(PcRun.NeedsAddress, PcMode.Choose(new ServerSettings("http://203.0.113.9:5280", DataMode.Server)));
 
         Assert.False(PcMode.Sends(PcRun.NeedsAddress));
         Assert.Contains("address", PcMode.NeedsAddressNotice);
