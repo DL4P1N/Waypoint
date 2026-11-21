@@ -52,6 +52,22 @@ public sealed class ServerSetupTests : IDisposable
         }
     }
 
+    [Fact]
+    public void The_pairing_file_is_removed_and_logged_once_a_PC_has_paired()
+    {
+        var log = new KeptLog<WaypointServer>();
+        var options = Options.Create(new ServerOptions { DataDirectory = _folder, RunBackground = false });
+        var server = new WaypointServer(options, new ServerHost(NullLogger<ServerHost>.Instance), new ReplyLog(), new WorkerParts(path => new FileTokenStore(path), ConnectGateway: false), log);
+        var file = Path.Combine(_folder, ServerToken.PairingFileName);
+        Assert.True(File.Exists(file));
+
+        server.Paired();
+
+        Assert.False(File.Exists(file));
+        Assert.Contains(log.Lines, line => line.Contains("removed") && line.Contains(file));
+        server.Paired();
+    }
+
     private sealed class DiscordDown : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

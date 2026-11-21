@@ -11,8 +11,12 @@ namespace Waypoint.Server;
 /// <summary>The one database and the background work, made once and shared by the API and the loops.</summary>
 public sealed class WaypointServer
 {
+    private readonly ILogger<WaypointServer> _logger;
+    private int _pairingChecked;
+
     public WaypointServer(IOptions<ServerOptions> options, ServerHost host, ReplyLog replies, WorkerParts parts, ILogger<WaypointServer> logger, ReportedIdle? idle = null)
     {
+        _logger = logger;
         var settings = options.Value;
 
         // What the PC is told is said plainly, so the detail behind it is kept in the journal.
@@ -39,7 +43,7 @@ public sealed class WaypointServer
             // journal, which more people and backups can see.
             var pairing = Path.Combine(DataDirectory, ServerToken.PairingFileName);
             FileTokenStore.WriteOwnerOnly(pairing, created + Environment.NewLine);
-            logger.LogWarning("Made a new pairing token for the PC app. It's in {Path}. Delete that file once the PC is paired.", pairing);
+            logger.LogWarning("Made a new pairing token for the PC app. It's in {Path}, and is removed once a PC has paired.", pairing);
         }
 
         TimeZoneWarning = TimeZones.Warning(TimeZoneInfo.Local, settings.TimeZone, OperatingSystem.IsWindows() ? null : TimeZones.SystemZone());
@@ -76,6 +80,33 @@ public sealed class WaypointServer
     public ServerHost Host { get; }
 
     public ServerToken Token { get; }
+
+    /// <summary>
+    /// Called when a PC has presented the right token. The token is in the PC now, so its pairing file, which only
+    /// the first PC needed, is deleted, and the journal says so. Does nothing after the first call.
+    /// </summary>
+    public void Paired()
+    {
+        if (Interlocked.Exchange(ref _pairingChecked, 1) != 0)
+        {
+            return;
+        }
+
+        var pairing = Path.Combine(DataDirectory, ServerToken.PairingFileName);
+        try
+        {
+            if (File.Exists(pairing))
+            {
+                File.Delete(pairing);
+                _logger.LogWarning("A PC has paired, so the pairing token file {Path} was removed.", pairing);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(exception, "A PC has paired, but the pairing token file {Path} couldn't be removed. Delete it by hand.", pairing);
+            Interlocked.Exchange(ref _pairingChecked, 0);
+        }
+    }
 
     public string? TimeZoneWarning { get; }
 

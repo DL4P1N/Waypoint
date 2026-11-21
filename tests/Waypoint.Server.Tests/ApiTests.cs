@@ -142,6 +142,21 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task The_pairing_file_stays_through_wrong_tokens_and_goes_after_the_first_right_one()
+    {
+        var file = Path.Combine(_folder, ServerToken.PairingFileName);
+        File.WriteAllText(file, _token);
+        var wrong = _factory.CreateClient();
+        wrong.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "not-the-token");
+
+        await wrong.GetAsync("/api/status");
+        Assert.True(File.Exists(file));
+
+        Assert.Equal(HttpStatusCode.OK, (await Paired().GetAsync("/api/status")).StatusCode);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
     public async Task The_token_is_checked_before_the_body_is_read()
     {
         var client = _factory.CreateClient();
