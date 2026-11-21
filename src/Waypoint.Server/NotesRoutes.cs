@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -306,10 +307,12 @@ public static class NotesRoutes
 
             Directory.CreateDirectory(notes.Value.Attachments);
             var target = Path.Combine(notes.Value.Attachments, $"source-{found.Id}{Extension(found)}");
-            var part = target + ".part";
+
+            // Each upload writes its own file, so two at once for the same source never touch each other's.
+            var part = $"{target}.{Guid.NewGuid():N}.part";
             try
             {
-                await using (var file = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+                await using (var file = new FileStream(part, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
                 {
                     var buffer = new byte[1 << 16];
                     long total = 0;
@@ -326,9 +329,19 @@ public static class NotesRoutes
                     }
                 }
 
-                // Replaces an earlier copy only once the new one is all here.
-                File.Move(part, target, overwrite: true);
-                notes.Value.Database.SetNoteSourceFile(found.Id, target);
+                // Replaces an earlier copy only once the new one is all here, one upload or delete at a time.
+                var gate = SourceGate(found.Id);
+                await gate.WaitAsync(context.RequestAborted);
+                try
+                {
+                    File.Move(part, target, overwrite: true);
+                    notes.Value.Database.SetNoteSourceFile(found.Id, target);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+
                 return Results.NoContent();
             }
             catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
@@ -349,23 +362,39 @@ public static class NotesRoutes
                 ? Results.File(path, "application/octet-stream", $"{Path.GetFileNameWithoutExtension(found.Name)}{Extension(found)}")
                 : Results.NotFound());
 
-        group.MapDelete("/{id:long}/sources/{source:long}/file", (long id, long source) =>
+        group.MapDelete("/{id:long}/sources/{source:long}/file", async (long id, long source, HttpContext context) =>
         {
             if (Source(notes.Value, id, source) is not { } found)
             {
                 return Results.NotFound();
             }
 
-            // Only the server's own copy is ever deleted, and the transcript and notes stay.
-            if (found.FilePath is { } path && IsAttachment(notes.Value, path) && File.Exists(path))
+            var gate = SourceGate(found.Id);
+            await gate.WaitAsync(context.RequestAborted);
+            try
             {
-                File.Delete(path);
+                // Only the server's own copy is ever deleted, and the transcript and notes stay.
+                var path = Source(notes.Value, id, source)?.FilePath;
+                if (path is not null && IsAttachment(notes.Value, path) && File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+
+                notes.Value.Database.SetNoteSourceFile(found.Id, null);
+            }
+            finally
+            {
+                gate.Release();
             }
 
-            notes.Value.Database.SetNoteSourceFile(found.Id, null);
             return Results.NoContent();
         });
     }
+
+    /// <summary>One gate per source, so replacing or deleting its file happens one request at a time.</summary>
+    private static readonly ConcurrentDictionary<long, SemaphoreSlim> SourceGates = new();
+
+    private static SemaphoreSlim SourceGate(long source) => SourceGates.GetOrAdd(source, _ => new SemaphoreSlim(1, 1));
 
     private static NoteSource? Source(ServerNotes notes, long noteId, long sourceId) =>
         notes.Data.GetNoteSources(noteId).FirstOrDefault(source => source.Id == sourceId);
