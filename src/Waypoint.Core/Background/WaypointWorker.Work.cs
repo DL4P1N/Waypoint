@@ -83,7 +83,7 @@ public sealed partial class WaypointWorker
         // Everything stopping waits for, on the PC and the server alike. Posts in the notes and lists forums are kept
         // track of on their own, so they're added here. Other work kept apart from this count goes in this list too.
         _workStop.Cancel();
-        Task[] waits = [idle, ThreadsSettledAsync()];
+        Task[] waits = [idle, ThreadsSettledAsync(), AlertRoundInFlight()];
         return WaitForWorkAsync(Task.WhenAll(waits), limit, cancellationToken);
     }
 
