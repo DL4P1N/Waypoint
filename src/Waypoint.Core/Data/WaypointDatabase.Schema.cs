@@ -10,6 +10,7 @@ public sealed partial class WaypointDatabase
         // Asked for on every open, so it doesn't rest on how the bundled SQLite was built or on what a pooled
         // connection was last set to. None of the keys cascade: a row still pointed at can't be deleted.
         _connectionString = new SqliteConnectionStringBuilder { DataSource = path, ForeignKeys = true }.ToString();
+        UseWriteAheadLog();
         RenameOldRepaymentsTable();
         Execute("""
             CREATE TABLE IF NOT EXISTS captures (

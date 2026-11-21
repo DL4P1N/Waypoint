@@ -57,13 +57,17 @@ target="$BACKUP_DIR/waypoint-$stamp.tar.gz.age"
 # The snapshot sits in the data folder, which only the service user can open, and is removed however this ends.
 snapshot="$DATA_DIR/backup-snapshot.db"
 cleanup() {
-    rm -f -- "$snapshot" "$target.partial"
+    rm -f -- "$snapshot" "$snapshot-wal" "$snapshot-shm" "$target.partial"
 }
 trap cleanup EXIT
-rm -f -- "$snapshot"
+rm -f -- "$snapshot" "$snapshot-wal" "$snapshot-shm"
 
-# The online backup API copies a consistent snapshot even while the server is writing.
+# The online backup API copies a consistent snapshot even while the server is writing, including what's still in
+# waypoint.db-wal. The snapshot is then given a plain journal, so it's one file with no log beside it.
 sqlite3 "$DATA_DIR/waypoint.db" ".backup '$snapshot'"
+if [ "$(sqlite3 "$snapshot" "PRAGMA journal_mode=DELETE;")" != "delete" ]; then
+    fail "the copy of waypoint.db couldn't be made into a single file, so it wasn't kept."
+fi
 if ! sqlite3 "$snapshot" "PRAGMA integrity_check;" | grep -qx ok; then
     fail "the copy of waypoint.db didn't pass sqlite3's integrity check, so it wasn't kept."
 fi
