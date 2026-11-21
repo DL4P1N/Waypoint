@@ -71,6 +71,12 @@ public sealed partial class DiscordBridge
     /// <summary>Why the last change to a forum post was turned down, until one goes through.</summary>
     public string? ThreadProblem { get; private set; }
 
+    /// <summary>Says why a post is being held back, such as one that may already be made, so it shows with the others.</summary>
+    public void PostHeldBack(string why) => ThreadProblem = why;
+
+    /// <summary>A post that may already have been made waits until the forum's posts can be read to look for it.</summary>
+    public const string PostUnchecked = "Discord's list of forum posts can't be read right now, so a note or list post that may already have been made waits until it can be checked, rather than being made twice.";
+
     public bool IsForum(string? channel) =>
         channel is not null && (channel == settings.NotesForumChannelId || channel == settings.ListsForumChannelId);
 

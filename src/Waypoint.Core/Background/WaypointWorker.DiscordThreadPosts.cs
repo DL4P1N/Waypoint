@@ -35,7 +35,9 @@ public sealed partial class WaypointWorker
             var (lookup, found) = await FindMadePostAsync(discord, forum, madeAs);
             if (lookup == SentLookup.Unknown)
             {
-                // The forum's posts couldn't be read, so an earlier try may have made it. It's looked for again later.
+                // The forum's posts couldn't be read, so an earlier try may have made it. It's looked for again later,
+                // and the Discord status says why it's waiting, since it waits for as long as that lasts.
+                discord.PostHeldBack(DiscordBridge.PostUnchecked);
                 BackOff(key);
                 return;
             }

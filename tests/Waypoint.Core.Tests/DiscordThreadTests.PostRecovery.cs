@@ -1,4 +1,5 @@
 using Waypoint.Core.Data;
+using Waypoint.Core.Discord;
 
 namespace Waypoint.Core.Tests;
 
@@ -22,6 +23,7 @@ public sealed partial class DiscordThreadTests
         await second.SyncDiscordThreadsAsync();
         Assert.Single(_discord.PostsIn(NotesForum));
         Assert.Null(_database.GetDiscordThread(WaypointDatabase.ThreadNote, id.ToString()));
+        Assert.Equal(DiscordBridge.PostUnchecked, second.Discord!.ThreadProblem);
 
         // Once they can be read, the post already made is the one kept.
         _discord.FailingReads.Remove(ActivePosts);
