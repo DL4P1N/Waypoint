@@ -29,8 +29,13 @@ public sealed class LocalHistoryData(WaypointDatabase database) : IHistoryData
 
     public void SetPreference(string key, string value) => database.SetPreference(key, value);
 
-    public IReadOnlyList<HistoryRow> SearchHistory(string? words, int limit, HistoryFilter filter) =>
-        database.SearchHistory(words, limit, filter).Select(entry => new HistoryRow(entry, database.CanReopen(entry))).ToList();
+    /// <summary>Whether each row can be put back is read for the whole page at once.</summary>
+    public IReadOnlyList<HistoryRow> SearchHistory(string? words, int limit, HistoryFilter filter)
+    {
+        var entries = database.SearchHistory(words, limit, filter);
+        var reopenable = database.ReopenableEntries(entries);
+        return entries.Select(entry => new HistoryRow(entry, reopenable.Contains(entry.Id))).ToList();
+    }
 
     public DeletedItem? DeleteHistoryItem(HistoryEntry entry, DateTime now) => database.DeleteHistoryItem(entry, now);
 

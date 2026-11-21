@@ -237,6 +237,11 @@ public sealed partial class WaypointDatabase
         AddColumnIfMissing("reminders", "follow_up", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing("repayments", "card_message_id", "TEXT");
         AddColumnIfMissing("calendar_reminders", "follow_up", "INTEGER NOT NULL DEFAULT 0");
+        // An item's latest close, and whether a row was undone, are looked up for every History row shown.
+        Execute("""
+            CREATE INDEX IF NOT EXISTS item_history_item ON item_history (source, item_id, id);
+            CREATE INDEX IF NOT EXISTS item_history_undoes ON item_history (undoes_id);
+            """);
         BackfillHistory();
         SeparateBudgetPeriods();
         BackfillImportMatches();

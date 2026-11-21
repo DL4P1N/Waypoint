@@ -103,6 +103,42 @@ public sealed partial class WaypointDatabase
         return CanReopen(connection, entry);
     }
 
+    /// <summary>
+    /// The ids of those rows that can be put back, worked out for all of them in one read, by the same rules as
+    /// <see cref="CanReopen(HistoryEntry)"/>: an item's latest close that's still in force, while the item is there
+    /// and still closed or moved on to its next date, or a list entry's latest check-off while it's still checked.
+    /// </summary>
+    public IReadOnlySet<long> ReopenableEntries(IEnumerable<HistoryEntry> entries)
+    {
+        var ids = entries.Select(entry => entry.Id).Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            return new HashSet<long>();
+        }
+
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT h.id FROM item_history h
+            WHERE h.id IN ({string.Join(", ", ids.Select(id => id.ToString(CultureInfo.InvariantCulture)))})
+              AND CASE h.source
+                    WHEN 'List' THEN EXISTS (SELECT 1 FROM list_entries e WHERE e.id = h.item_id AND e.removed_at IS NULL AND e.done <> 0)
+                    WHEN 'Calendar' THEN EXISTS (SELECT 1 FROM calendar_events e WHERE e.id = h.item_id AND (e.done <> 0 OR h.next_due_date IS NOT NULL))
+                    ELSE EXISTS (SELECT 1 FROM items e WHERE e.id = h.item_id AND (e.done <> 0 OR h.next_due_date IS NOT NULL))
+                  END
+              AND h.id = (SELECT MAX(id) FROM item_history WHERE source = h.source AND item_id = h.item_id AND {HistoryIsCurrent})
+            """;
+
+        var reopenable = new HashSet<long>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            reopenable.Add(reader.GetInt64(0));
+        }
+
+        return reopenable;
+    }
+
     /// <summary>Undoes a History row. What it brings back and the row saying so are one write.</summary>
     public bool ReopenEntry(HistoryEntry entry)
     {
