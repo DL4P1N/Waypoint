@@ -6,7 +6,8 @@ public sealed partial class WaypointDatabase
 {
     /// <summary>
     /// Purchases from any month whose merchant or category has every word typed, newest first, for Find anywhere.
-    /// It matches the way the Budget page's own search does, just not only in one month.
+    /// It matches the way the Budget page's own search does, just not only in one month. They're read newest first
+    /// and reading stops once <paramref name="limit"/> match, so only what's shown is read.
     /// </summary>
     public IReadOnlyList<SpendingRow> SearchPurchases(string? words, int limit)
     {
@@ -16,13 +17,11 @@ public sealed partial class WaypointDatabase
             return [];
         }
 
-        return GetSpending(DateOnly.MinValue, DateOnly.MaxValue)
+        return ReadSpending(DateOnly.MinValue, DateOnly.MaxValue, newestFirst: true)
             .Where(row => parts.All(part =>
                 row.Title.Contains(part, StringComparison.OrdinalIgnoreCase)
                 || row.Category.Contains(part, StringComparison.OrdinalIgnoreCase)
                 || MerchantName.Clean(row.Title).Contains(part, StringComparison.OrdinalIgnoreCase)))
-            .OrderByDescending(row => row.Date)
-            .ThenByDescending(row => row.Id)
             .Take(limit)
             .ToList();
     }

@@ -266,9 +266,13 @@ public sealed partial class WaypointDatabase
 
     /// <summary>Notes in a folder, newest first, or Unfiled notes when <paramref name="folderId"/> is null.</summary>
     public IReadOnlyList<NoteDetail> GetNotesInFolder(long? folderId, bool includeSubfolders = false) =>
-        folderId is { } id
-            ? ReadNotes(includeSubfolders ? $"AND i.folder_id IN {FolderAndInside}" : "AND i.folder_id = $id", id)
-            : ReadNotes($"AND {LiveFolder} IS NULL");
+        ReadNotes(InFolder(folderId, includeSubfolders), folderId ?? 0);
+
+    /// <summary>The condition for notes in a folder, with the folder as $id, or for Unfiled notes.</summary>
+    private static string InFolder(long? folderId, bool includeSubfolders) =>
+        folderId is null ? $"AND {LiveFolder} IS NULL"
+        : includeSubfolders ? $"AND i.folder_id IN {FolderAndInside}"
+        : "AND i.folder_id = $id";
 
     /// <summary>The folder made for a class, if there is one.</summary>
     public long? FindClassFolder(string course)
@@ -323,26 +327,37 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>Searches every note's title, text, and note line. Best matches first, then newest.</summary>
-    public IReadOnlyList<NoteDetail> SearchNotes(string? words) => MatchNotes(ReadNotes(""), words);
+    public IReadOnlyList<NoteDetail> SearchNotes(string? words) => MatchNotes("", 0, words);
 
     /// <summary>Searches one folder, or Unfiled when <paramref name="folderId"/> is null.</summary>
     public IReadOnlyList<NoteDetail> SearchNotesInFolder(string? words, long? folderId, bool includeSubfolders = true) =>
-        MatchNotes(GetNotesInFolder(folderId, includeSubfolders), words);
+        MatchNotes(InFolder(folderId, includeSubfolders), folderId ?? 0, words);
 
     /// <summary>
     /// Uses the same matching as Ask's search. A query with no word long enough to match on falls back to
-    /// plain text matching. Transcripts join the search by adding their text to the doc's Raw.
+    /// plain text matching. Transcripts join the search by adding their text to the doc's Raw. Only the notes
+    /// holding a word, or the whole text, somewhere are read, and only their sources.
     /// </summary>
-    private IReadOnlyList<NoteDetail> MatchNotes(IReadOnlyList<NoteDetail> notes, string? words)
+    private IReadOnlyList<NoteDetail> MatchNotes(string condition, long id, string? words)
     {
         var clean = words?.Trim() ?? "";
         if (clean.Length == 0)
+        {
+            return ReadNotes(condition, id);
+        }
+
+        // Text running over a line break could be found across two of the parts matched below, so then all are read.
+        var looked = SearchIndex.Words(clean) is { Count: > 0 } found ? found
+            : clean.Contains('\n') || clean.Contains('\r') ? [] : [clean];
+        var patterns = Prefilter(looked);
+        var notes = patterns.Count == 0 ? ReadNotes(condition, id) : ReadNotes($"{condition} AND ({NoteHoldsAny(patterns.Count)})", id, patterns);
+        if (notes.Count == 0)
         {
             return notes;
         }
 
         // A note's sources are searched along with its text, so words only in the slides or transcript still find it.
-        var sources = ReadSourceText();
+        var sources = ReadSourceText(notes.Select(note => note.Id));
         if (SearchIndex.Words(clean).Count == 0)
         {
             return notes.Where(note => $"{note.Title}\n{note.Body}\n{note.About}\n{sources.GetValueOrDefault(note.Id)}".Contains(clean, StringComparison.OrdinalIgnoreCase)).ToList();

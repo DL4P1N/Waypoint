@@ -100,7 +100,12 @@ public sealed partial class WaypointDatabase
         }
 
         // The notes folder still holds the notes from before. Its next sync writes the restored ones over it.
+        ForgetChangeStamps();
         MarkNotesRestored();
+
+        // The restored pages went through the log. Folding them into the file and emptying the log leaves nothing
+        // from before the restore in it, so the file on its own is the restored copy.
+        Execute("PRAGMA wal_checkpoint(TRUNCATE)");
 
         // Old copies go only once the restore is in, and never the one it came from, even when that's the oldest.
         PruneBackups(now, keep: source);
@@ -266,6 +271,12 @@ public sealed partial class WaypointDatabase
         using (var target = OpenFile(partial, SqliteOpenMode.ReadWriteCreate))
         {
             source.BackupDatabase(target);
+
+            // The copy keeps a plain journal, so it's one file with no log beside it, and opening it to check it or
+            // restore from it never leaves one behind in the backups folder.
+            using var plain = target.CreateCommand();
+            plain.CommandText = "PRAGMA journal_mode = DELETE";
+            plain.ExecuteScalar();
         }
 
         File.Move(partial, path);

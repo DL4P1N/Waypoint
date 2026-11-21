@@ -30,6 +30,12 @@ public interface INoteFileStore
     /// <summary>Says this notes folder has been rewritten from the restore with that stamp.</summary>
     void NotesRestoreHandled(string stamp);
 
+    /// <summary>
+    /// Changes whenever anything the sync reads here changes, and is otherwise the same each time, so a sync can tell
+    /// nothing changed without reading every note. Null when that can't be told, and then every sync reads it all.
+    /// </summary>
+    string? NotesChangeStamp() => null;
+
     IReadOnlyList<NoteFolder> GetNoteFolders();
 
     FolderEdit CreateNoteFolder(string name, long? parentId, DateTime now);
@@ -207,6 +213,8 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
     public void ClearNoteFileRecords() => database.ClearNoteFileRecords();
 
     public string? NoteFilesRoot() => database.NoteFilesRoot();
+
+    public string? NotesChangeStamp() => database.NotesChangeStamp();
 
     public void SetNoteFilesRoot(string root) => database.SetNoteFilesRoot(root);
 

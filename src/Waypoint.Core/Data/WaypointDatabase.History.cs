@@ -39,7 +39,40 @@ public sealed partial class WaypointDatabase
         var clean = words?.Trim() ?? "";
         return clean.Length == 0
             ? GetHistory(limit)
-            : GetHistory().Where(entry => $"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase)).Take(limit).ToList();
+            : ReadHistoryHolding($"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} {HistoryHolds(clean)} ORDER BY happened_at DESC, id DESC", clean, limit);
+    }
+
+    /// <summary>
+    /// Narrows to rows whose title and class, as the page matches them, may hold $words, each still matched exactly
+    /// after. Nothing narrows with no words, or words too long for SQLite to take as a pattern, and every row is read.
+    /// </summary>
+    private static string HistoryHolds(string clean) =>
+        Prefilter([clean]) is [_] ? "AND (title || ' ' || COALESCE(course, '')) LIKE $words ESCAPE '\\'" : "";
+
+    /// <summary>
+    /// The rows <paramref name="sql"/> finds, in its order, that hold <paramref name="clean"/> in their title and class,
+    /// up to <paramref name="limit"/> of them. Reading stops there, so only what's shown is read.
+    /// </summary>
+    private List<HistoryEntry> ReadHistoryHolding(string sql, string clean, int limit, Action<SqliteCommand>? parameters = null)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$words", ContainsPattern(clean));
+        parameters?.Invoke(command);
+
+        var entries = new List<HistoryEntry>();
+        using var reader = command.ExecuteReader();
+        while (entries.Count < limit && reader.Read())
+        {
+            var entry = ReadHistory(reader);
+            if ($"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase))
+            {
+                entries.Add(entry);
+            }
+        }
+
+        return entries;
     }
 
     /// <summary>
@@ -54,30 +87,17 @@ public sealed partial class WaypointDatabase
         }
 
         var clean = words?.Trim() ?? "";
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = filter == HistoryFilter.Reopened
-            ? $"SELECT {HistoryColumns} FROM item_history WHERE hidden = 0 AND action = 'Reopened' ORDER BY happened_at DESC, id DESC"
-            : $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND action = $action ORDER BY happened_at DESC, id DESC";
-        command.Parameters.AddWithValue("$action", (filter switch
+        var holds = clean.Length == 0 ? "" : HistoryHolds(clean);
+        var sql = filter == HistoryFilter.Reopened
+            ? $"SELECT {HistoryColumns} FROM item_history WHERE hidden = 0 AND action = 'Reopened' {holds} ORDER BY happened_at DESC, id DESC"
+            : $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND action = $action {holds} ORDER BY happened_at DESC, id DESC";
+        var action = (filter switch
         {
             HistoryFilter.Completed => HistoryAction.Done,
             HistoryFilter.Canceled => HistoryAction.Canceled,
             _ => HistoryAction.Past,
-        }).ToString());
-
-        var entries = new List<HistoryEntry>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read() && entries.Count < limit)
-        {
-            var entry = ReadHistory(reader);
-            if (clean.Length == 0 || $"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase))
-            {
-                entries.Add(entry);
-            }
-        }
-
-        return entries;
+        }).ToString();
+        return ReadHistoryHolding(sql, clean, limit, command => command.Parameters.AddWithValue("$action", action));
     }
 
     /// <summary>Only an item's latest close can be undone, and only while the item still exists.</summary>
@@ -85,6 +105,42 @@ public sealed partial class WaypointDatabase
     {
         using var connection = Open();
         return CanReopen(connection, entry);
+    }
+
+    /// <summary>
+    /// The ids of those rows that can be put back, worked out for all of them in one read, by the same rules as
+    /// <see cref="CanReopen(HistoryEntry)"/>: an item's latest close that's still in force, while the item is there
+    /// and still closed or moved on to its next date, or a list entry's latest check-off while it's still checked.
+    /// </summary>
+    public IReadOnlySet<long> ReopenableEntries(IEnumerable<HistoryEntry> entries)
+    {
+        var ids = entries.Select(entry => entry.Id).Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            return new HashSet<long>();
+        }
+
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT h.id FROM item_history h
+            WHERE h.id IN ({string.Join(", ", ids.Select(id => id.ToString(CultureInfo.InvariantCulture)))})
+              AND CASE h.source
+                    WHEN 'List' THEN EXISTS (SELECT 1 FROM list_entries e WHERE e.id = h.item_id AND e.removed_at IS NULL AND e.done <> 0)
+                    WHEN 'Calendar' THEN EXISTS (SELECT 1 FROM calendar_events e WHERE e.id = h.item_id AND (e.done <> 0 OR h.next_due_date IS NOT NULL))
+                    ELSE EXISTS (SELECT 1 FROM items e WHERE e.id = h.item_id AND (e.done <> 0 OR h.next_due_date IS NOT NULL))
+                  END
+              AND h.id = (SELECT MAX(id) FROM item_history WHERE source = h.source AND item_id = h.item_id AND {HistoryIsCurrent})
+            """;
+
+        var reopenable = new HashSet<long>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            reopenable.Add(reader.GetInt64(0));
+        }
+
+        return reopenable;
     }
 
     /// <summary>Undoes a History row. What it brings back and the row saying so are one write.</summary>

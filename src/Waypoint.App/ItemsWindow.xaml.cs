@@ -131,6 +131,12 @@ public partial class ItemsWindow : Window
             {
                 PutAwayHeld();
             }
+            else if (_refreshWhenShown is { } every)
+            {
+                // Refreshes skipped while the window was hidden are made up for in one as it's shown again.
+                _refreshWhenShown = null;
+                RefreshPage(every);
+            }
         };
         lists ??= new LocalListsData(database);
         notes ??= new LocalNotesData(database);
@@ -397,11 +403,24 @@ public partial class ItemsWindow : Window
         AskWidth.Width = new GridLength(AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown));
 
     /// <summary>
+    /// Set while the window is hidden and a refresh was skipped: true when every one skipped was a refresh every so
+    /// often, false when one was asked for outright.
+    /// </summary>
+    private bool? _refreshWhenShown;
+
+    /// <summary>
     /// Only the page on screen refreshes. The others catch up when they're opened. A refresh every so often leaves a
     /// page alone while a change from it is still on its way, so it can't show what was there before the change.
+    /// Nothing refreshes while the window is hidden, as nothing's on screen, and the page refreshes once it's shown.
     /// </summary>
     private void RefreshPage(bool every = false)
     {
+        if (!IsVisible)
+        {
+            _refreshWhenShown = every && (_refreshWhenShown ?? true);
+            return;
+        }
+
         switch (_page)
         {
             case Page.ToDo:

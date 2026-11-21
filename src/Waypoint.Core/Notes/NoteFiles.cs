@@ -62,12 +62,67 @@ public sealed class NoteFiles(INoteFileStore database, string root)
     /// <summary>When each note's file was first seen missing, kept from one pass to the next.</summary>
     private readonly Dictionary<long, DateTime> _missingSince = [];
 
-    /// <summary>One pass at a time, since two at once could both take the same new file as a new note.</summary>
+    /// <summary>What the notes and the folder's files were when a pass started that left nothing to try again.</summary>
+    private (string Notes, string Files)? _settled;
+
+    /// <summary>
+    /// One pass at a time, since two at once could both take the same new file as a new note. A pass isn't made when
+    /// nothing changed since one that left nothing to try again and no file waiting out its grace: the notes' change
+    /// stamp is the same, and so is every file's name, size, and time. Then nothing is read or hashed.
+    /// </summary>
     public NoteSyncResult Sync(DateTime now)
     {
         lock (_gate)
         {
-            return new Pass(database, root, now, _missingSince).Run();
+            var notes = database.NotesChangeStamp();
+            var files = notes is null ? null : FilesStamp(root);
+            if (notes is not null && files is not null && _settled == (notes, files))
+            {
+                return new NoteSyncResult(0, 0, 0, false);
+            }
+
+            // Taken before the pass, so a change made while it runs is found by the next one.
+            _settled = null;
+            var pass = new Pass(database, root, now, _missingSince);
+            var result = pass.Run();
+            if (notes is not null && files is not null && !pass.Deferred && _missingSince.Count == 0)
+            {
+                _settled = (notes, files);
+            }
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Every note file a pass would look at, with its size and time, in one hash. Null when the folder isn't there or
+    /// can't be listed, so a pass is made and deals with it.
+    /// </summary>
+    private static string? FilesStamp(string root)
+    {
+        try
+        {
+            if (!Directory.Exists(root))
+            {
+                return null;
+            }
+
+            var lines = new List<string>();
+            foreach (var info in new DirectoryInfo(root).EnumerateFiles("*" + Extension, SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(root, info.FullName);
+                if (!relative.Split(Path.DirectorySeparatorChar).Any(part => part.StartsWith('.')))
+                {
+                    lines.Add($"{relative}|{info.Length}|{info.LastWriteTimeUtc.Ticks}");
+                }
+            }
+
+            lines.Sort(StringComparer.Ordinal);
+            return Hash(string.Join("\n", lines));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 
@@ -104,6 +159,9 @@ public sealed class NoteFiles(INoteFileStore database, string root)
         private int _removed;
         private int _writtenBack;
         private bool _changed;
+
+        /// <summary>Something was left for the next pass to try again, such as a file another app had open.</summary>
+        public bool Deferred { get; private set; }
 
         public NoteSyncResult Run()
         {
@@ -664,7 +722,7 @@ public sealed class NoteFiles(INoteFileStore database, string root)
         private bool IsFreeFor(string path, long? noteId) =>
             _owners.TryGetValue(path, out var owner) ? owner == noteId : !_files.ContainsKey(path) && !File.Exists(Full(path));
 
-        private static bool Guarded(Action sync)
+        private bool Guarded(Action sync)
         {
             try
             {
@@ -674,6 +732,7 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 // Nothing was recorded for it, so the next sync tries again.
+                Deferred = true;
                 return false;
             }
         }
@@ -742,6 +801,7 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                Deferred = true;
                 return null;
             }
         }

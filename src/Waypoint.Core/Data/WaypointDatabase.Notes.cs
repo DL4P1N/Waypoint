@@ -153,7 +153,8 @@ public sealed partial class WaypointDatabase
         return command.ExecuteNonQuery() > 0;
     }
 
-    private List<NoteDetail> ReadNotes(string condition, long id = 0)
+    /// <param name="patterns">The values of $p0, $p1, and so on in <paramref name="condition"/>, if it has any.</param>
+    private List<NoteDetail> ReadNotes(string condition, long id = 0, IReadOnlyList<string>? patterns = null)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
@@ -163,6 +164,7 @@ public sealed partial class WaypointDatabase
             ORDER BY i.id DESC
             """;
         command.Parameters.AddWithValue("$id", id);
+        AddPatterns(command, patterns ?? []);
 
         var notes = new List<NoteDetail>();
         using var reader = command.ExecuteReader();

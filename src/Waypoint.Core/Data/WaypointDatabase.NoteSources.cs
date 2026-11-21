@@ -94,6 +94,23 @@ public sealed partial class WaypointDatabase
         return (long)command.ExecuteScalar()!;
     }
 
+    /// <summary>How many sources each note has, for every note with any, counted in one read.</summary>
+    public IReadOnlyDictionary<long, int> CountNoteSources()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT note_id, COUNT(*) FROM note_sources GROUP BY note_id";
+
+        var counts = new Dictionary<long, int>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            counts[reader.GetInt64(0)] = reader.GetInt32(1);
+        }
+
+        return counts;
+    }
+
     /// <summary>A note's sources in the order they were added.</summary>
     public IReadOnlyList<NoteSource> GetNoteSources(long noteId)
     {
@@ -280,11 +297,22 @@ public sealed partial class WaypointDatabase
         return command.ExecuteNonQuery() > 0;
     }
 
-    /// <summary>Every note's source text, joined, so search can reach it while only the notes show.</summary>
-    private static Dictionary<long, string> ReadSourceText(SqliteConnection connection)
+    /// <summary>
+    /// Every note's source text, joined, so search can reach it while only the notes show. Given <paramref name="only"/>,
+    /// just those notes' sources are read.
+    /// </summary>
+    private static Dictionary<long, string> ReadSourceText(SqliteConnection connection, IEnumerable<long>? only = null)
     {
+        var ids = only?.Distinct().ToList();
+        if (ids is { Count: 0 })
+        {
+            return [];
+        }
+
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT note_id, name, text FROM note_sources ORDER BY id";
+        command.CommandText = ids is null
+            ? "SELECT note_id, name, text FROM note_sources ORDER BY id"
+            : $"SELECT note_id, name, text FROM note_sources WHERE note_id IN ({string.Join(", ", ids.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)))}) ORDER BY id";
 
         var texts = new Dictionary<long, StringBuilder>();
         using var reader = command.ExecuteReader();
@@ -302,10 +330,10 @@ public sealed partial class WaypointDatabase
         return texts.ToDictionary(pair => pair.Key, pair => pair.Value.ToString());
     }
 
-    private Dictionary<long, string> ReadSourceText()
+    private Dictionary<long, string> ReadSourceText(IEnumerable<long> only)
     {
         using var connection = Open();
-        return ReadSourceText(connection);
+        return ReadSourceText(connection, only);
     }
 
     public static string BodyHash(string body) =>

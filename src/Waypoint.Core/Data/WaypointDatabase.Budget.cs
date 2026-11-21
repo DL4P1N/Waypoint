@@ -550,7 +550,10 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<SpendingRow> GetSpending(DateOnly from, DateOnly through)
+    public IReadOnlyList<SpendingRow> GetSpending(DateOnly from, DateOnly through) => ReadSpending(from, through, newestFirst: false).ToList();
+
+    /// <summary>The purchases in a date range, oldest first or newest first, read one at a time as they're asked for.</summary>
+    private IEnumerable<SpendingRow> ReadSpending(DateOnly from, DateOnly through, bool newestFirst)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
@@ -559,7 +562,7 @@ public sealed partial class WaypointDatabase
             FROM items i JOIN captures c ON c.id = i.capture_id
             WHERE i.kind = 'Expense' AND i.canceled = 0 AND i.amount_cents IS NOT NULL AND {SpendDay} BETWEEN $from AND $through
               AND {CountedSql("i")}
-            ORDER BY 1, i.id
+            ORDER BY {(newestFirst ? "1 DESC, i.id DESC" : "1, i.id")}
             """;
         command.Parameters.AddWithValue("$default", BudgetMath.DefaultCategory);
         command.Parameters.AddWithValue("$none", BudgetMath.Uncategorized);
@@ -567,7 +570,6 @@ public sealed partial class WaypointDatabase
         command.Parameters.AddWithValue("$from", from.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$through", through.ToString("O", CultureInfo.InvariantCulture));
 
-        var rows = new List<SpendingRow>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -575,7 +577,7 @@ public sealed partial class WaypointDatabase
             var source = SpendingRow.SourceOf(reader.GetString(6));
             var written = DateTimeOffset.TryParse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.None, out var stamp) ? stamp.LocalDateTime : (DateTime?)null;
 
-            rows.Add(new SpendingRow(
+            yield return new SpendingRow(
                 date,
                 reader.GetString(1),
                 reader.GetInt64(2),
@@ -584,10 +586,8 @@ public sealed partial class WaypointDatabase
                 reader.GetInt64(5),
                 source,
                 source == SpendingRow.TypedSource && written is { } at && DateOnly.FromDateTime(at) == date ? TimeOnly.FromDateTime(at) : null,
-                reader.GetInt64(8)));
+                reader.GetInt64(8));
         }
-
-        return rows;
     }
 
     public IReadOnlyList<WaitItem> GetWaitList()

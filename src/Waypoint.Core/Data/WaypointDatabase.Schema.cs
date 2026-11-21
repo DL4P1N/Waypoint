@@ -10,6 +10,7 @@ public sealed partial class WaypointDatabase
         // Asked for on every open, so it doesn't rest on how the bundled SQLite was built or on what a pooled
         // connection was last set to. None of the keys cascade: a row still pointed at can't be deleted.
         _connectionString = new SqliteConnectionStringBuilder { DataSource = path, ForeignKeys = true }.ToString();
+        UseWriteAheadLog();
         RenameOldRepaymentsTable();
         Execute("""
             CREATE TABLE IF NOT EXISTS captures (
@@ -238,9 +239,15 @@ public sealed partial class WaypointDatabase
         AddColumnIfMissing("reminders", "follow_up", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing("repayments", "card_message_id", "TEXT");
         AddColumnIfMissing("calendar_reminders", "follow_up", "INTEGER NOT NULL DEFAULT 0");
+        // An item's latest close, and whether a row was undone, are looked up for every History row shown.
+        Execute("""
+            CREATE INDEX IF NOT EXISTS item_history_item ON item_history (source, item_id, id);
+            CREATE INDEX IF NOT EXISTS item_history_undoes ON item_history (undoes_id);
+            """);
         BackfillHistory();
         SeparateBudgetPeriods();
         BackfillImportMatches();
+        CreateChangeStamps();
     }
 
     /// <summary>

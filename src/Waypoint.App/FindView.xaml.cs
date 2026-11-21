@@ -83,12 +83,12 @@ public partial class FindView : UserControl
     }
 
     /// <summary>
-    /// Once typing pauses. In server mode each page is asked over the network, so the search is made off the window's
-    /// thread and typing never waits on the server. Results for text that's been typed over since are dropped.
+    /// Once typing pauses. The search is made off the window's thread, since every page is read for it, or asked over
+    /// the network in server mode, so typing never waits on it. Results for text that's been typed over since are dropped.
     /// </summary>
     private void SearchSoon()
     {
-        if (_sources is not { ToDo: ServerToDoData } sources)
+        if (_sources is not { } sources)
         {
             Search();
             return;
@@ -143,12 +143,12 @@ public partial class FindView : UserControl
     }
 
     /// <summary>
-    /// Searches now, unless in server mode the results shown are already for what's in the box, then carries on. In
-    /// server mode a search still to make carries on once its results are shown, and not at all if more was typed.
+    /// Searches now, unless the results shown are already for what's in the box, then carries on. A search still to
+    /// make is made off the window's thread and carries on once its results are shown, and not at all if more was typed.
     /// </summary>
     private void SearchThen(Action then)
     {
-        if (_sources is { ToDo: ServerToDoData } sources)
+        if (_sources is { } sources)
         {
             if (_shownFor != SearchBox.Text.Trim())
             {
@@ -165,7 +165,7 @@ public partial class FindView : UserControl
         then();
     }
 
-    /// <summary>What Enter or Down is waiting on in server mode, so tests can tell when it's done.</summary>
+    /// <summary>What Enter or Down is waiting on when a search was still to make, so tests can tell when it's done.</summary>
     internal System.Threading.Tasks.Task Waiting { get; private set; } = System.Threading.Tasks.Task.CompletedTask;
 
     /// <summary>Carries on once the search is shown, but not if Find was left or the box changed meanwhile.</summary>

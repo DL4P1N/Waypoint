@@ -48,7 +48,8 @@ public sealed partial class WaypointWorker
             .ToList();
         var tools = DiscordPages.Pager(target, page, pages.Count).Append(new CardAction("Search", HistorySearch + filter, ButtonRole.Other)).ToList();
 
-        var reopenable = shown.Where(_database.CanReopen).ToList();
+        var canReopen = _database.ReopenableEntries(shown);
+        var reopenable = shown.Where(entry => canReopen.Contains(entry.Id)).ToList();
         return new DiscordCard(Shorten(title, 256), shown.Count == 0 ? said ?? empty : description, [], CardTone.Reminder)
         {
             MoreRows = DiscordViews.Rows(filters, tools),

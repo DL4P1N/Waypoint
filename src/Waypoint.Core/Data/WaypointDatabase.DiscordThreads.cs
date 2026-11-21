@@ -87,6 +87,19 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Whether any post still has a notice to clear away, or one noted as being sent under <paramref name="sendPrefix"/>.</summary>
+    public bool HasDiscordNotices(string sendPrefix)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (SELECT 1 FROM discord_post_notices)
+                OR EXISTS (SELECT 1 FROM discord_sends WHERE substr(send_key, 1, length($prefix)) = $prefix)
+            """;
+        command.Parameters.AddWithValue("$prefix", sendPrefix);
+        return (long)command.ExecuteScalar()! != 0;
+    }
+
     /// <summary>The notices still in a post, oldest first.</summary>
     public IReadOnlyList<(string Message, DateTime SentAt)> GetDiscordNotices(string threadId)
     {

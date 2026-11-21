@@ -266,6 +266,41 @@ public sealed partial class WaypointWorker
         Guarded(CheckBackup);
     }
 
+    private readonly Lock _alertRoundGate = new();
+    private Task _alertRound = Task.CompletedTask;
+
+    /// <summary>
+    /// Starts a round of <see cref="CheckAlerts"/> on a background thread, for a host that would otherwise run it on
+    /// its window thread, where the database work and the daily backup would hold up the window. What the round shows
+    /// goes through <see cref="IWorkerHost"/>, which puts it back on the window thread. A round still running when the
+    /// next is due is left to finish and no second one starts, since anything still due is found on the next round.
+    /// Returns the round now running.
+    /// </summary>
+    public Task StartAlertRound()
+    {
+        lock (_alertRoundGate)
+        {
+            if (_alertRound.IsCompleted)
+            {
+                _alertRound = Task.Run(() => Guarded(CheckAlerts));
+            }
+
+            return _alertRound;
+        }
+    }
+
+    /// <summary>
+    /// The round started by <see cref="StartAlertRound"/> that's still running, or a finished task when none is, so a
+    /// restore or closing down can wait for it after stopping the timer that starts them.
+    /// </summary>
+    public Task AlertRoundInFlight()
+    {
+        lock (_alertRoundGate)
+        {
+            return _alertRound;
+        }
+    }
+
     /// <summary>Does nothing while no feed is set up, so the hourly timer can run either way.</summary>
     public Task SyncCalendarAsync(CancellationToken cancellationToken = default) => Tracked(async () =>
     {
