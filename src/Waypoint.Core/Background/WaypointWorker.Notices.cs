@@ -11,7 +11,7 @@ public sealed partial class WaypointWorker
     /// <param name="feedback">Adds a small This didn't help kept under this feature (see <see cref="Feedback"/>), with no item.</param>
     /// <param name="bedtimeLabel">The words on <paramref name="bedtimeButton"/>, for a wind-down step's Done.</param>
     public Task NotifyAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null) =>
-        SendNoticeAsync(title, text, tone, toBudgetChannel, canWait, bedtimeButton, actions, toCaptureChannel, saveSpot, feedback, bedtimeLabel);
+        Tracked(() => SendNoticeAsync(title, text, tone, toBudgetChannel, canWait, bedtimeButton, actions, toCaptureChannel, saveSpot, feedback, bedtimeLabel));
 
     /// <summary>The same, handing back the Discord message's ID when it went to Discord, so the card can be found again.</summary>
     /// <param name="sendKey">
@@ -30,7 +30,7 @@ public sealed partial class WaypointWorker
         var step = TimeSpan.FromSeconds(1);
         for (var waited = TimeSpan.Zero; WaitingForDiscord && waited < DiscordConnectGrace; waited += step)
         {
-            await (RetryWait ?? (span => Task.Delay(span)))(step);
+            await Pause(step);
         }
 
         if (Discord is not { } discord)
@@ -77,7 +77,7 @@ public sealed partial class WaypointWorker
                 id = delivery.MessageId;
                 return delivery.Sent;
             },
-            RetryWait);
+            Pause);
         DiscordHealth.Sent(sent, _clock());
         if (sent && send is not null && id is not null)
         {

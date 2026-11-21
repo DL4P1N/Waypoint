@@ -58,8 +58,8 @@ public static class BackupRoutes
                 }
 
                 // Then everything else that writes: the background loops with Discord and the work they handed on,
-                // capture sorting, and notes being written. None of it starts again here, so the server always starts
-                // again after.
+                // capture sorting, the work started without being waited for, and notes being written. None of it
+                // starts again here, so the server always starts again after.
                 stopping = true;
                 var worker = server.Worker;
                 IEnumerable<Func<TimeSpan, Task<bool>>> stops =
@@ -71,6 +71,7 @@ public static class BackupRoutes
                         await worker.StopDiscordAsync(limit);
                         return true;
                     },
+                    limit => worker.StopWorkAsync(limit),
                     async limit => await server.Host.StopAsync(limit) == 0,
                     .. maintenance.Writers,
                 ];

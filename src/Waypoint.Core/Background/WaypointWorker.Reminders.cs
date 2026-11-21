@@ -59,7 +59,7 @@ public sealed partial class WaypointWorker
 
         if (Discord is { } discord)
         {
-            _ = SendReminderAsync(discord, reminder);
+            _ = Tracked(() => SendReminderAsync(discord, reminder));
         }
         else
         {
@@ -135,7 +135,7 @@ public sealed partial class WaypointWorker
                 var delivery = await discord.DeliverOnceAsync(channel, card, send.Nonce);
                 messageId = delivery.MessageId;
                 return delivery.Sent;
-            }, RetryWait);
+            }, Pause);
             DiscordHealth.Sent(sent, _clock());
         }
 

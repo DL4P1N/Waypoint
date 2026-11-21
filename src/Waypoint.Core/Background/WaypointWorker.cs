@@ -267,8 +267,14 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>Does nothing while no feed is set up, so the hourly timer can run either way.</summary>
-    public Task SyncCalendarAsync(CancellationToken cancellationToken = default) =>
-        Calendar?.SyncAsync(cancellationToken) ?? Task.CompletedTask;
+    public Task SyncCalendarAsync(CancellationToken cancellationToken = default) => Tracked(async () =>
+    {
+        if (Calendar is { } calendar)
+        {
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _workStop.Token);
+            await calendar.SyncAsync(stop.Token);
+        }
+    });
 
     /// <summary>What a connection's status says before the error's own text, which the phone leaves out.</summary>
     private const string LastTryFailed = " The last try didn't work:";

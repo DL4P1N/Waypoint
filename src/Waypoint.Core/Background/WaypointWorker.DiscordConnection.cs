@@ -71,7 +71,9 @@ public sealed partial class WaypointWorker
     /// alerts and reads nothing from Discord. If Discord can't be asked the first time, this copy connects anyway,
     /// so a missing permission never silences everything, and says why in Settings.
     /// </summary>
-    public async Task CheckDiscordClaimAsync(CancellationToken cancellationToken = default)
+    public Task CheckDiscordClaimAsync(CancellationToken cancellationToken = default) => Tracked(() => CheckClaimOnceAsync(cancellationToken));
+
+    private async Task CheckClaimOnceAsync(CancellationToken cancellationToken)
     {
         if (HoldsConnections)
         {

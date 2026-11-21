@@ -51,7 +51,9 @@ public sealed partial class WaypointWorker
     /// </summary>
     private static string HeldSendKey(long id) => $"held:{id}";
 
-    private async Task SendHeldNoticeAsync(HeldNotice notice)
+    private Task SendHeldNoticeAsync(HeldNotice notice) => Tracked(() => SendHeldOnceAsync(notice));
+
+    private async Task SendHeldOnceAsync(HeldNotice notice)
     {
         var key = HeldSendKey(notice.Id);
         try

@@ -10,7 +10,9 @@ namespace Waypoint.Core.Background;
 public sealed partial class WaypointWorker
 {
     /// <summary>Does nothing until alert email is set up, so the timer can run either way.</summary>
-    public async Task PollEmailAsync()
+    public Task PollEmailAsync() => Tracked(PollEmailOnceAsync);
+
+    private async Task PollEmailOnceAsync()
     {
         if (Outlook is not { } outlook)
         {
@@ -22,7 +24,9 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>The same read as the timer's, saying what came in, for when it's asked for in Ask.</summary>
-    public async Task<string> CheckEmailNowAsync()
+    public Task<string> CheckEmailNowAsync() => Tracked(CheckEmailOnceAsync, "Waypoint is stopping, so email wasn't checked this time.");
+
+    private async Task<string> CheckEmailOnceAsync()
     {
         if (Outlook is not { } outlook)
         {
@@ -69,7 +73,7 @@ public sealed partial class WaypointWorker
         _ = NotifyAsync(headline, $"Card: {purchase.Account}{left}", CardTone.Money, toBudgetChannel: true, canWait: true);
     }
 
-    private void OnPaymentApp(PaymentAppOutcome outcome) => _ = PostPaymentAppAsync(outcome);
+    private void OnPaymentApp(PaymentAppOutcome outcome) => _ = Tracked(() => PostPaymentAppAsync(outcome));
 
     /// <summary>
     /// Says a payment was matched, or asks which purchase it was for where typing is read. The card's ID is kept

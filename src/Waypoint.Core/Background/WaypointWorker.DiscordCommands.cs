@@ -111,7 +111,7 @@ public sealed partial class WaypointWorker
                 // The card it was about turns gray too, so its buttons can't act on it a second time.
                 if (snoozed is not null && latest is not null && Discord is { } bridge)
                 {
-                    _ = bridge.MarkHandledAsync(latest, snoozed);
+                    _ = Tracked(() => bridge.MarkHandledAsync(latest, snoozed), false);
                 }
 
                 reply = new CommandReply(DiscordText.Notice(snoozed ?? "No reminder is waiting to be snoozed.", "", CardTone.Finished), true);
@@ -168,7 +168,10 @@ public sealed partial class WaypointWorker
             card = card with { Fields = [.. card.Fields, DiscordText.HeardField(heard)] };
         }
 
-        _ = Discord?.ReplyAsync(target?.MessageId, card);
+        if (Discord is { } discord)
+        {
+            _ = Tracked(() => discord.ReplyAsync(target?.MessageId, card), null);
+        }
     }
 
     /// <summary>

@@ -60,11 +60,7 @@ public partial class App
             }
 
             _later.Clear();
-            foreach (var timer in new[] { _alertTimer, _calendarTimer, _discordTimer, _claimTimer, _emailTimer, _statusTimer, _serverTimer, _idleTimer })
-            {
-                timer?.Stop();
-            }
-
+            StopTimers();
             return System.Threading.Tasks.Task.FromResult(true);
         },
 
@@ -80,11 +76,34 @@ public partial class App
             return true;
         },
         limit => _captures.StopAsync(limit),
+
+        // Then the work those started without waiting for it, such as a notice going out or the feed being read.
+        limit => _worker?.StopWorkAsync(limit) ?? System.Threading.Tasks.Task.FromResult(true),
         limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
         limit => _transcription is { } transcription
             ? System.Threading.Tasks.Task.Run(() => transcription.Stop(limit))
             : System.Threading.Tasks.Task.FromResult(true),
     ];
+
+    private void StopTimers()
+    {
+        foreach (var timer in new[] { _alertTimer, _calendarTimer, _discordTimer, _claimTimer, _emailTimer, _statusTimer, _serverTimer, _idleTimer })
+        {
+            timer?.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Waits here for <paramref name="work"/> while the window thread keeps running, since work started from it
+    /// carries on there and would otherwise never get the chance to end.
+    /// </summary>
+    private void WaitWhileRunning(System.Threading.Tasks.Task work)
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        var dispatcher = Dispatcher;
+        work.ContinueWith(_ => dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Send, () => frame.Continue = false), System.Threading.Tasks.TaskScheduler.Default);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
 
     /// <summary>
     /// Starts the next copy, then closes the usual way. Used after a restore, whether or not it went in, since what was
@@ -187,6 +206,14 @@ public partial class App
         // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
         // the window or reads Discord again.
         Step(() => _posted?.RunLeft());
+
+        // Work started without being waited for, such as a notice going out, is given a few seconds to end, with
+        // nothing new started and no timer starting more meanwhile.
+        if (_worker is { } stopping)
+        {
+            Step(StopTimers);
+            Step(() => WaitWhileRunning(stopping.StopWorkAsync(DiscordGateway.EventDrainLimit)));
+        }
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
         Step(() => _worker?.ForgetLateNight());
