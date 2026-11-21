@@ -175,6 +175,15 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
 
     public string? LastError { get; private set; }
 
+    /// <summary>What LastError says when Discord never said hello on a new connection.</summary>
+    public const string NoHello = "Discord didn't answer when connecting, so the connection is being tried again.";
+
+    /// <summary>How long a new connection waits for Discord's hello before it's dropped and tried again. Tests shorten it.</summary>
+    internal TimeSpan HelloWait { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Where to connect instead of Discord, for tests.</summary>
+    internal string? Address { get; init; }
+
     /// <summary>Stays connected until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -196,10 +205,18 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
         {
             using var socket = new ClientWebSocket();
             var welcomed = false;
+
+            // Connecting and Discord's hello have a time limit, so a connection that never answers is tried again.
+            using var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            hello.CancelAfter(HelloWait);
             try
             {
-                await socket.ConnectAsync(new Uri(_session.Url), cancellationToken);
-                welcomed = await ListenAsync(socket, cancellationToken);
+                await socket.ConnectAsync(new Uri(Address ?? _session.Url), hello.Token);
+                welcomed = await ListenAsync(socket, hello.Token, cancellationToken);
+            }
+            catch (OperationCanceledException) when (hello.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                LastError = NoHello;
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
@@ -230,17 +247,19 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
     }
 
     /// <summary>True if the connection got as far as Discord's welcome.</summary>
-    private async Task<bool> ListenAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    /// <param name="hello">Cancelled when the hello is late. Reading waits on it until the hello comes.</param>
+    private async Task<bool> ListenAsync(ClientWebSocket socket, CancellationToken hello, CancellationToken cancellationToken)
     {
         using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var send = new SemaphoreSlim(1, 1);
         var welcomed = false;
+        var greeted = false;
 
         try
         {
             while (socket.State == WebSocketState.Open)
             {
-                using var document = await ReceiveAsync(socket, connection.Token);
+                using var document = await ReceiveAsync(socket, greeted ? connection.Token : hello);
                 if (document is null)
                 {
                     return welcomed;
@@ -254,6 +273,7 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
 
                 if (step.HeartbeatEvery is { } interval)
                 {
+                    greeted = true;
                     _ = BeatAsync(socket, send, interval, connection.Token);
                 }
 
