@@ -66,6 +66,45 @@ public sealed class WriteAheadLogTests : IDisposable
     }
 
     [Fact]
+    public void The_log_shrinks_back_after_growing_past_its_cap()
+    {
+        var database = new WaypointDatabase(_path);
+        using (var connection = database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA journal_size_limit";
+            Assert.Equal(16L * 1024 * 1024, command.ExecuteScalar());
+        }
+
+        // A read held open the whole time keeps the log from starting over, so it grows past the cap.
+        using (var reader = new SqliteConnection($"Data Source={_path};Pooling=False"))
+        {
+            reader.Open();
+            using var read = reader.BeginTransaction(deferred: true);
+            using (var command = reader.CreateCommand())
+            {
+                command.Transaction = read;
+                command.CommandText = "SELECT COUNT(*) FROM items";
+                command.ExecuteScalar();
+            }
+
+            for (var index = 0; index < 50; index++)
+            {
+                database.CreateNote($"Made up long note {index}", new string((char)('a' + (index % 26)), 400_000), Now);
+            }
+
+            Assert.True(new FileInfo(_path + "-wal").Length > WaypointDatabase.LogKeptBytes);
+        }
+
+        // Once the read ends, the next fold in lets the log start over, and the write after that cuts it back.
+        Assert.Equal(0L, Scalar(_path, "PRAGMA wal_checkpoint(PASSIVE)"));
+        database.CreateNote("Made up short note", "Made up body", Now);
+
+        Assert.True(new FileInfo(_path + "-wal").Length <= WaypointDatabase.LogKeptBytes);
+        Assert.Equal(51, database.GetNotes().Count);
+    }
+
+    [Fact]
     public void A_backup_is_one_file_with_a_plain_journal()
     {
         var database = new WaypointDatabase(_path);
