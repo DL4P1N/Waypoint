@@ -177,6 +177,10 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     public async Task<string?> ReplyAsync(string? toMessageId, DiscordCard card, string? nonce = null) =>
         (await TrySendAsync(settings.CaptureChannelId, card, toMessageId, nonce)).MessageId;
 
+    /// <summary>One try at answering a capture under its message, carrying a nonce so trying again soon after never makes a second.</summary>
+    public Task<DiscordDelivery> DeliverReplyAsync(string? toMessageId, DiscordCard card, string nonce) =>
+        TrySendAsync(settings.CaptureChannelId, card, toMessageId, nonce);
+
     /// <summary>Answers a message sent in the notes channel, under it.</summary>
     public async Task<string?> ReplyInNotesAsync(string? toMessageId, DiscordCard card, string? nonce = null) =>
         (await TrySendAsync(PinnedViews.ChannelFor(database, settings, DiscordViews.Notes) ?? settings.CaptureChannelId, card, toMessageId, nonce)).MessageId;

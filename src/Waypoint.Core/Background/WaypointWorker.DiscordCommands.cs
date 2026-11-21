@@ -168,7 +168,14 @@ public sealed partial class WaypointWorker
             card = card with { Fields = [.. card.Fields, DiscordText.HeardField(heard)] };
         }
 
-        _ = Discord?.ReplyAsync(target?.MessageId, card);
+        if (Discord is not { } discord)
+        {
+            return;
+        }
+
+        // Tried again if it doesn't go, with the same nonce each time, so a try that went through unheard isn't posted twice.
+        var nonce = outcome.CaptureId is { } capture ? $"r{capture}{Hash(reply)[..10]}" : Guid.NewGuid().ToString("N")[..24];
+        _ = AlertRetry.RunAsync(async () => (await discord.DeliverReplyAsync(target?.MessageId, card, nonce)).Sent, RetryWait);
     }
 
     /// <summary>
