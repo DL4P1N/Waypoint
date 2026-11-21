@@ -579,7 +579,15 @@ The server wins over a PC for Discord, so stop it first, and bring its data back
    sudo rm /var/lib/waypoint/waypoint-back.db
    ```
 
-2. On the PC: **Exit** Waypoint. In `%LOCALAPPDATA%\Waypoint`, rename `waypoint.db` to `waypoint.db.before-server` and delete any `waypoint.db-wal` and `waypoint.db-shm`. Then `scp you@waypoint-server:~/waypoint.db "$env:LOCALAPPDATA\Waypoint\"` and remove `~/waypoint.db` on the server.
+2. On the PC: **Exit** Waypoint, and check it's gone from Task Manager. Then put the old database aside whole. A clean Exit folds `waypoint.db-wal` into `waypoint.db`, but if Waypoint was ended some other way, changes can still be in it, so its `-wal` and `-shm` files are renamed along with it, never deleted. SQLite finds them by name and folds them in whenever `waypoint.db.before-server` is opened:
+
+   ```powershell
+   $data = "$env:LOCALAPPDATA\Waypoint"
+   foreach ($end in '', '-wal', '-shm') { if (Test-Path "$data\waypoint.db$end") { Rename-Item "$data\waypoint.db$end" "waypoint.db.before-server$end" } }
+   scp you@waypoint-server:~/waypoint.db "$data\"
+   ```
+
+   Then remove `~/waypoint.db` on the server.
 3. Set `"mode": "Local"` in the PC's `settings.json` and start Waypoint.
 
 The PC's Discord starts within about 7 minutes, once the server's pinned note goes stale. If you skip step 1's copy and keep the PC's old database, the first Local start moves Discord's reading place to now, so captures the server already handled aren't taken again. Changes made on the server are then only in the server's database and its backups.
