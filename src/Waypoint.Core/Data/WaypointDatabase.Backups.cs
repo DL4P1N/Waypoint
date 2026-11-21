@@ -93,8 +93,6 @@ public sealed partial class WaypointDatabase
         }
 
         var safetyCopy = SaveCopy(now, BeforeRestoreSuffix);
-        PruneBackups(now);
-
         using (var backup = OpenFile(source, SqliteOpenMode.ReadOnly))
         using (var live = Open())
         {
@@ -103,6 +101,9 @@ public sealed partial class WaypointDatabase
 
         // The notes folder still holds the notes from before. Its next sync writes the restored ones over it.
         MarkNotesRestored();
+
+        // Old copies go only once the restore is in, and never the one it came from, even when that's the oldest.
+        PruneBackups(now, keep: source);
 
         return new RestoreResult(true, safetyCopy);
     }
@@ -278,12 +279,13 @@ public sealed partial class WaypointDatabase
     /// Daily copies and before-restore copies are counted apart, so restoring a few times never pushes out a daily
     /// one. Only the newest few before-restore copies stay.
     /// </summary>
-    private void PruneBackups(DateTime now)
+    private void PruneBackups(DateTime now, string? keep = null)
     {
         var cutoff = now.Date.AddDays(-BackupsKept);
         var backups = GetBackups();
         var old = backups.Where(backup => !backup.BeforeRestore).Skip(BackupsKept).Where(backup => backup.At.Date <= cutoff)
             .Concat(backups.Where(backup => backup.BeforeRestore).Skip(BeforeRestoreKept))
+            .Where(backup => keep is null || !string.Equals(Path.GetFullPath(backup.Path), keep, StringComparison.OrdinalIgnoreCase))
             .ToList();
         foreach (var copy in old)
         {
