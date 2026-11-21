@@ -51,6 +51,32 @@ public sealed partial class DiscordThreadTests
         Assert.Empty(_database.GetDiscordSends("post:"));
     }
 
+    [Fact]
+    public async Task A_later_part_of_a_note_sent_just_before_a_crash_is_kept_and_not_sent_again()
+    {
+        var body = string.Join("\n\n", Enumerable.Range(1, 90).Select(line => $"Made up line {line} about a made up topic that runs on for a while."));
+        var id = _database.CreateNote("Made up long reading", body, _now);
+
+        // The second part is sent, then Waypoint stops before the post's parts are saved.
+        FailPartway("BEFORE UPDATE OF parts ON discord_posts");
+        var first = MakeWorker(lists: null);
+        first.StartDiscord();
+        await Record.ExceptionAsync(() => first.SyncDiscordThreadsAsync());
+        first.StopDiscord();
+        StopFailingPartway();
+        var post = PostFor(id);
+        Assert.Equal(2, post.Messages.Count(message => message.Bot));
+
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.SyncDiscordThreadsAsync();
+        await second.SyncDiscordThreadsAsync();
+
+        Assert.Equal(2, post.Messages.Count(message => message.Bot));
+        Assert.Equal(post.Messages.Where(message => message.Bot).Select(message => message.Id), _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message));
+        Assert.Empty(_database.GetDiscordSends("part:"));
+    }
+
     /// <summary>
     /// Discord makes the note's post, then Waypoint stops before it hears which post it is, while the forum's posts
     /// can't be read, so the try straight after can't look for it. They stay unreadable until a test says otherwise.

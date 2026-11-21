@@ -354,21 +354,53 @@ public sealed partial class WaypointWorker
 
             // A new part goes at the end, so notices are cleared first to keep the note's parts together.
             await ClearNoticesAsync(discord, row.Thread, all: true);
-            var (sent, outcome) = await discord.SendInThreadAsync(row.Thread, card);
-            if (outcome == ThreadChange.Missing)
+
+            // Noted before it's sent, with Discord's nonce, so a try that went through unheard is found, not sent twice.
+            var sendKey = $"part:{row.Thread}:{index}";
+            var send = _database.BeginDiscordSend(sendKey, row.Thread, _clock());
+            var sent = send.MessageId;
+            if (sent is null && !send.Fresh)
             {
-                _database.MarkDiscordThreadGone(row.Thread);
-                await MakePostAsync(discord, forum, wanted);
-                return;
+                var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card);
+                if (search.CantTell)
+                {
+                    return;
+                }
+
+                sent = search.MessageId;
             }
 
             if (sent is null)
             {
-                return;
+                (sent, var outcome) = await discord.SendInThreadAsync(row.Thread, card, send.Nonce);
+                if (outcome is ThreadChange.Missing or ThreadChange.NotAllowed)
+                {
+                    _database.FinishDiscordSend(sendKey);
+                }
+
+                if (outcome == ThreadChange.Missing)
+                {
+                    _database.MarkDiscordThreadGone(row.Thread);
+                    await MakePostAsync(discord, forum, wanted);
+                    return;
+                }
+
+                if (sent is null)
+                {
+                    return;
+                }
+
+                _database.SetDiscordSendMessage(sendKey, sent);
             }
 
-            parts.Add(new DiscordThreadPart(sent, hash));
-            _database.SetDiscordThreadParts(row.Thread, parts);
+            // After an earlier try, Discord may hand back the message that try made, with older words, so it's drawn again next time.
+            parts.Add(new DiscordThreadPart(sent, send.Fresh ? hash : ""));
+            _database.InOneWrite(() =>
+            {
+                _database.SetDiscordThreadParts(row.Thread, parts);
+                _database.FinishDiscordSend(sendKey);
+                return 0;
+            });
         }
 
         foreach (var extra in parts.Skip(wanted.Parts.Count).ToList())
