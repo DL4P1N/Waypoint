@@ -32,7 +32,7 @@ A personal daily assistant for Windows. It sits in the system tray, keeps everyt
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
 
-This builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in. Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
+This runs the Core and Server tests and stops, changing nothing, if any fail (`-SkipTests` installs without them). It then builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in. Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
 
 An update can't leave a half-copied install behind:
 

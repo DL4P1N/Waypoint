@@ -5,7 +5,8 @@
 # the one Waypoint.exe that the Start Menu shortcut and the sign-in entry start. If the new version doesn't stay
 # running, the previous one is put back by itself. The current version and the one running before it are kept.
 #
-#   .\install.ps1              build, install, and start
+#   .\install.ps1              test, build, install, and start
+#   .\install.ps1 -SkipTests   build, install, and start without running the tests first
 #   .\install.ps1 -Rollback    go back to the previous version
 #
 # -InstallRoot installs somewhere else, for trying the installer itself. It leaves the shortcut and sign-in entry
@@ -18,6 +19,9 @@ param(
     [switch]$Rollback,
     # Installs this already-built folder instead of building. Used to try the installer quickly.
     [string]$PublishedFolder,
+    # Builds without running tests\Waypoint.Core.Tests and tests\Waypoint.Server.Tests first. They're skipped anyway
+    # with -PublishedFolder, since nothing is built.
+    [switch]$SkipTests,
     # How long a new version has to stay running before it counts as started.
     [int]$StartCheckSeconds = 8,
     # How long a running copy that has started closing may take to save before the install gives up and leaves it be.
@@ -319,6 +323,15 @@ Install ".NET Desktop Runtime 10" for x64 from https://dotnet.microsoft.com/down
 $staging = $PublishedFolder
 $ownStaging = -not $staging
 if ($ownStaging) {
+    if ($SkipTests) {
+        Write-Host 'Skipped the tests, since -SkipTests was given.'
+    } else {
+        foreach ($project in 'tests\Waypoint.Core.Tests', 'tests\Waypoint.Server.Tests') {
+            Write-Host "Running $project..."
+            dotnet test (Join-Path $PSScriptRoot $project) --nologo --verbosity quiet
+            if ($LASTEXITCODE -ne 0) { throw "$project failed. Nothing was changed. Fix it, or run with -SkipTests to install anyway." }
+        }
+    }
     $staging = Join-Path ([IO.Path]::GetTempPath()) "waypoint-publish-$([Guid]::NewGuid().ToString('N'))"
     dotnet publish (Join-Path $PSScriptRoot 'src\Waypoint.App') `
         -p:PublishProfile=Install `
@@ -337,7 +350,12 @@ if (-not (Test-Path -LiteralPath $built) -or (Get-Item -LiteralPath $built).Leng
 $name = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 try {
     $commit = & git -C $PSScriptRoot rev-parse --short HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and $commit) { $name += "-$commit" }
+    if ($LASTEXITCODE -eq 0 -and $commit) {
+        $name += "-$commit"
+        # Built from changes that aren't committed yet, so the commit alone doesn't say what's in it.
+        $changes = & git -C $PSScriptRoot status --porcelain 2>$null
+        if ($LASTEXITCODE -eq 0 -and $changes) { $name += '-dirty' }
+    }
 } catch {
     # Without git the time alone names it.
 }
