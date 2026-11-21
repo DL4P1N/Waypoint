@@ -43,9 +43,12 @@ public interface INoteFileStore
     /// <summary>
     /// Saves the note only if its text is still <paramref name="expectedBody"/>, checked and saved in one step where
     /// the note is kept, so a change landing in between, such as a reply added from Discord, is never overwritten.
-    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>.
+    /// When it changed, the result has the note as it is now. See <see cref="NoteSaving.SaveKeepingOther"/>. With
+    /// <paramref name="expectedTitle"/>, the title it had then, a note renamed meanwhile keeps its new title when
+    /// this save leaves the title as it was, and counts as changed when this save renames it too. The result then
+    /// has the note as saved, with the title it kept.
     /// </summary>
-    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now);
+    NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, string? expectedTitle = null);
 
     void DeleteNote(long id, DateTime now);
 
@@ -215,8 +218,9 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
 
     public bool SaveNote(long id, string title, string body, DateTime now) => database.SaveNote(id, title, body, now);
 
-    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now) =>
-        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now) ? NoteSaveResult.Saved
+    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, string? expectedTitle = null) =>
+        database.SaveNoteIfUnchanged(id, title, body, expectedBody, now, out var saved, expectedTitle: expectedTitle)
+            ? saved is not null && saved.Title != WaypointDatabase.NoteTitle(title, body) ? new NoteSaveResult(NoteSaveOutcome.Saved, saved) : NoteSaveResult.Saved
         : database.GetNote(id) is { } stored ? NoteSaveResult.Changed(stored)
         : NoteSaveResult.Gone;
 

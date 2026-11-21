@@ -134,7 +134,8 @@ public sealed partial class WaypointDatabase
         transaction.Commit();
     }
 
-    private static string NoteTitle(string title, string body)
+    /// <summary>The title a note is saved with: the one given, tidied, or else its first line.</summary>
+    internal static string NoteTitle(string title, string body)
     {
         var clean = title.Trim();
         return clean.Length > 0 ? clean : FirstLine(body) is { Length: > 0 } line ? line : UntitledNote;
@@ -167,15 +168,18 @@ public sealed partial class WaypointDatabase
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            notes.Add(new NoteDetail(
-                reader.GetInt64(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture).LocalDateTime,
-                reader.IsDBNull(5) ? null : reader.GetInt64(5)));
+            notes.Add(ReadNote(reader));
         }
 
         return notes;
     }
+
+    /// <summary>A note from a row of <see cref="NoteColumns"/>.</summary>
+    private static NoteDetail ReadNote(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetString(1),
+        reader.GetString(2),
+        reader.IsDBNull(3) ? null : reader.GetString(3),
+        DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture).LocalDateTime,
+        reader.IsDBNull(5) ? null : reader.GetInt64(5));
 }

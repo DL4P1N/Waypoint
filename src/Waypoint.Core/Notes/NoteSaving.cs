@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Waypoint.Core.Capture;
+using Waypoint.Core.Data;
 
 namespace Waypoint.Core.Notes;
 
@@ -38,7 +39,7 @@ public static class NoteSaving
     /// save turned down after the copy was made, such as by a busy server, is tried again from the text the editor
     /// loaded, and finds the same version, which is then not kept twice.
     /// </summary>
-    private static readonly ConditionalWeakTable<INotesData, ConcurrentDictionary<long, string>> Kept = new();
+    private static readonly ConditionalWeakTable<INotesData, ConcurrentDictionary<long, (string Title, string Body)>> Kept = new();
 
     /// <summary>
     /// Saves the editor's text over the note, as long as the note still has <paramref name="expectedBody"/>, the text
@@ -47,9 +48,12 @@ public static class NoteSaving
     /// and the save goes ahead over it. The check and the save are one step where the note is kept, so nothing can
     /// land between them. With no <paramref name="expectedBody"/> there's nothing to compare with, and it simply
     /// saves. False if the note is gone, or still changed each time it was checked, so the caller keeps the text as a
-    /// new note and the note keeps the version saved elsewhere.
+    /// new note and the note keeps the version saved elsewhere. With <paramref name="expectedTitle"/>, the title the
+    /// editor loaded or last saved, the title counts too, field by field: a title or text changed only elsewhere is
+    /// kept and the editor's change to the other one saved with it, and a copy is only made when the same one
+    /// changed in both places.
     /// </summary>
-    public static bool SaveKeepingOther(INotesData notes, long id, string title, string body, string? expectedBody, DateTime now)
+    public static bool SaveKeepingOther(INotesData notes, long id, string title, string body, string? expectedBody, DateTime now, string? expectedTitle = null)
     {
         if (expectedBody is null)
         {
@@ -59,7 +63,7 @@ public static class NoteSaving
         var kept = Kept.GetOrCreateValue(notes);
         for (var attempt = 0; attempt < Tries; attempt++)
         {
-            var result = notes.SaveNoteIfUnchanged(id, title, body, expectedBody, now);
+            var result = notes.SaveNoteIfUnchanged(id, title, body, expectedBody, now, expectedTitle);
             switch (result.Outcome)
             {
                 case NoteSaveOutcome.Saved:
@@ -75,16 +79,36 @@ public static class NoteSaving
                 return false;
             }
 
-            // Already the same text, what was expected after all, or kept by a save turned down after making the
-            // copy: nothing would be lost, so no copy is needed.
-            if (stored.Body != body && stored.Body != expectedBody
-                && !(kept.TryGetValue(id, out var already) && already == stored.Body))
+            // Each of the title and the text is only in the way when it changed both here and elsewhere, to something
+            // else. A title that only follows a first line that changed elsewhere didn't change on its own.
+            var bodyElsewhere = stored.Body != expectedBody;
+            var bodyHere = body != expectedBody;
+            var titleElsewhere = expectedTitle is not null && stored.Title != WaypointDatabase.NoteTitle(expectedTitle, expectedBody)
+                && stored.Title != WaypointDatabase.NoteTitle(expectedTitle, stored.Body);
+            var titleHere = expectedTitle is not null && title != expectedTitle;
+            var bothChanged = (bodyElsewhere && bodyHere && stored.Body != body)
+                || (titleElsewhere && titleHere && stored.Title != WaypointDatabase.NoteTitle(title, body));
+
+            // Kept by a save turned down after making the copy: nothing would be lost, so no copy is needed.
+            if (bothChanged && !(kept.TryGetValue(id, out var already) && already == (stored.Title, stored.Body)))
             {
                 notes.CreateNote(stored.Title + NoteDraft.ElsewhereSuffix, stored.Body, now, stored.FolderId);
-                kept[id] = stored.Body;
+                kept[id] = (stored.Title, stored.Body);
+            }
+
+            // What changed only elsewhere stays as it is now.
+            if (bodyElsewhere && !bodyHere)
+            {
+                body = stored.Body;
+            }
+
+            if (titleElsewhere && !titleHere)
+            {
+                title = stored.Title;
             }
 
             expectedBody = stored.Body;
+            expectedTitle = expectedTitle is null ? null : stored.Title;
         }
 
         // Still changing each time it's checked. Saving over it now could lose a change landing after the last check,

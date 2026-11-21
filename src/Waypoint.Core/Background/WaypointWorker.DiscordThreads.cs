@@ -513,7 +513,7 @@ public sealed partial class WaypointWorker
                 return false;
             }
 
-            if (_database.SaveNoteIfUnchanged(noteId, note.Title, AppendParagraph(note.Body, text), note.Body, _clock(), readTo))
+            if (_database.SaveNoteIfUnchanged(noteId, note.Title, AppendParagraph(note.Body, text), note.Body, _clock(), readTo, note.Title))
             {
                 return true;
             }

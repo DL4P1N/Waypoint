@@ -271,7 +271,7 @@ public sealed class ServerNotesData : INotesData
     /// sent, saves as before: what's waiting keeps the text it started from, and both versions are kept when it's
     /// sent if the note changed meanwhile.
     /// </summary>
-    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now)
+    public NoteSaveResult SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, string? expectedTitle = null)
     {
         var asked = id;
         id = Real(id);
@@ -295,14 +295,26 @@ public sealed class ServerNotesData : INotesData
                 {
                     return NoteSaveResult.Changed(stored);
                 }
+
+                // Renamed there meanwhile: it keeps the new title, unless this save renames it too.
+                if (expectedTitle is not null && stored.Title != WaypointDatabase.NoteTitle(expectedTitle, expectedBody))
+                {
+                    if (title != expectedTitle)
+                    {
+                        return NoteSaveResult.Changed(stored);
+                    }
+
+                    title = expectedTitle = stored.Title;
+                }
             }
 
-            var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{id}", new SaveNoteRequest(title, body, expectedBody));
+            var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{id}", new SaveNoteRequest(title, body, expectedBody, expectedTitle));
             Volatile.Write(ref _checksSavesSince, reply.Checked ? _server.StateChanges : -1);
             if (reply.Value)
             {
-                RememberSaved(id, title, body);
-                return NoteSaveResult.Saved;
+                // A save that kept a newer title says so, and that's what the note has now.
+                RememberSaved(id, reply.Stored?.Title ?? title, body);
+                return reply.Stored is { } kept ? new NoteSaveResult(NoteSaveOutcome.Saved, kept) : NoteSaveResult.Saved;
             }
 
             if (reply.Stored is { } changed)
@@ -317,7 +329,7 @@ public sealed class ServerNotesData : INotesData
         {
             // Kept with the text the editor started from, so a change made on the server meanwhile is noticed when
             // it's sent, and both versions are kept.
-            _offline.Keep(id, title, body, expectedBody, null, now);
+            _offline.Keep(id, title, body, expectedBody, null, now, expectedTitle);
             return NoteSaveResult.Saved;
         }
     }
@@ -612,7 +624,7 @@ public sealed class ServerNotesData : INotesData
                 }
 
                 if (there is not null && (there.Body != waiting.Body || there.Title != waiting.Title)
-                    && SendOver(made, waiting, there.Body) is { } changedSince)
+                    && SendOver(made, waiting, there) is { } changedSince)
                 {
                     return KeepBoth(waiting, made, changedSince.Stored, clientId);
                 }
@@ -622,10 +634,35 @@ public sealed class ServerNotesData : INotesData
             }
 
             var current = _server.Send<Found<NoteDetail>>(Get, $"api/notes/{waiting.Id}").Value;
+            if (current is not null && waiting.BasedOn is { } bodyThen && waiting.BasedOnTitle is { } titleThen)
+            {
+                // What changed only on the server stays as it is there: the text, when only the title was typed
+                // here, and the title, when only the text was. Only a title changed in both places keeps both.
+                // Without the title the edit started from, a rename there can't be told apart, so it's sent as
+                // before and both versions are kept if the text changed there.
+                if (waiting.Body == bodyThen)
+                {
+                    waiting = waiting with { Body = current.Body };
+                }
+
+                if (current.Title != WaypointDatabase.NoteTitle(titleThen, bodyThen)
+                    && current.Title != WaypointDatabase.NoteTitle(titleThen, current.Body))
+                {
+                    if (waiting.Title == titleThen)
+                    {
+                        waiting = waiting with { Title = current.Title };
+                    }
+                    else if (current.Title != WaypointDatabase.NoteTitle(waiting.Title, waiting.Body))
+                    {
+                        return KeepBoth(waiting, waiting.Id, current, clientId);
+                    }
+                }
+            }
+
             if (current is not null && (current.Body == waiting.Body || current.Body == waiting.BasedOn))
             {
                 if ((current.Body != waiting.Body || current.Title != waiting.Title)
-                    && SendOver(waiting.Id, waiting, current.Body) is { } changedSince)
+                    && SendOver(waiting.Id, waiting, current) is { } changedSince)
                 {
                     // Changed on the server, or gone from it, between the read and the save: both versions are kept.
                     return KeepBoth(waiting, waiting.Id, changedSince.Stored, clientId);
@@ -651,13 +688,13 @@ public sealed class ServerNotesData : INotesData
     }
 
     /// <summary>
-    /// Saves what was typed over the note, as long as it still has <paramref name="read"/>, the text just read. Null
-    /// when it was saved. Otherwise the answer says what the note is now, or has nothing when it's gone. A server from
-    /// before saves without checking, as it always has.
+    /// Saves what was typed over the note, as long as it still has the text and title in <paramref name="read"/>, the
+    /// note just read. Null when it was saved. Otherwise the answer says what the note is now, or has nothing when
+    /// it's gone. A server from before saves without checking, as it always has.
     /// </summary>
-    private NoteSaveReply? SendOver(long noteId, OfflineNote waiting, string read)
+    private NoteSaveReply? SendOver(long noteId, OfflineNote waiting, NoteDetail read)
     {
-        var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{noteId}", new SaveNoteRequest(waiting.Title, waiting.Body, read));
+        var reply = _server.Send<NoteSaveReply>(Put, $"api/notes/{noteId}", new SaveNoteRequest(waiting.Title, waiting.Body, read.Body, read.Title));
         return reply.Value ? null : reply;
     }
 

@@ -136,7 +136,7 @@ public sealed partial class WaypointWorker
         if (part < chunks.Count && Hash(chunks[part]) == hash)
         {
             chunks[part] = Replacement(chunks[part], typed);
-            if (_database.SaveNoteIfUnchanged(noteId, note.Title, string.Concat(chunks), note.Body, _clock()))
+            if (_database.SaveNoteIfUnchanged(noteId, note.Title, string.Concat(chunks), note.Body, _clock(), expectedTitle: note.Title))
             {
                 _host.Changed();
                 ViewsChanged();

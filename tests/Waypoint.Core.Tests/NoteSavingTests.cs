@@ -261,4 +261,107 @@ public sealed class NoteSavingTests : IDisposable
 
         Assert.Equal("radish, kale", Assert.Single(_database.GetNotes()).Body);
     }
+
+    [Fact]
+    public void A_note_renamed_elsewhere_while_its_editor_is_open_keeps_its_new_title_when_the_text_is_saved()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        var draft = new NoteDraft();
+        draft.Load(_database.GetNote(id));
+
+        // Renamed from its .md file or from Discord, while only the text is typed here.
+        _database.SaveNote(id, "Garden seeds", "radish", Now);
+        draft.Edit(draft.Title, "radish, kale");
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, draft.Title, draft.Body, draft.ExpectedStoredBody, Now, draft.ExpectedStoredTitle));
+        draft.MarkSaved(id);
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal(("Garden seeds", "radish, kale"), (note.Title, note.Body));
+
+        // The next save, from the same editor, still doesn't put the old title back.
+        draft.Edit(draft.Title, "radish, kale, leeks");
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, draft.Title, draft.Body, draft.ExpectedStoredBody, Now, draft.ExpectedStoredTitle));
+        note = Assert.Single(_database.GetNotes());
+        Assert.Equal(("Garden seeds", "radish, kale, leeks"), (note.Title, note.Body));
+    }
+
+    [Fact]
+    public void A_title_renamed_here_and_text_changed_elsewhere_keeps_both_changes_in_the_one_note()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Seed list", "radish\n\nbeets too", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Spring seeds", "radish", "radish", Now, "Seed list"));
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal(("Spring seeds", "radish\n\nbeets too"), (note.Title, note.Body));
+    }
+
+    [Fact]
+    public void A_title_taken_from_the_first_line_is_not_taken_for_a_rename()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("", "radish\nkale", Now);
+        Assert.Equal("radish", _database.GetNote(id)!.Title);
+
+        // The editor has no title of its own typed, so the title still follows the first line.
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "", "carrot\nkale", "radish\nkale", Now, ""));
+
+        var note = Assert.Single(_database.GetNotes());
+        Assert.Equal(("carrot", "carrot\nkale"), (note.Title, note.Body));
+    }
+
+    [Fact]
+    public void A_title_and_text_changed_in_both_places_keeps_both_versions()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Garden seeds", "radish\n\nbeets too", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Spring seeds", "radish, kale", "radish", Now, "Seed list"));
+
+        var note = _database.GetNote(id)!;
+        Assert.Equal(("Spring seeds", "radish, kale"), (note.Title, note.Body));
+        var kept = Assert.Single(_database.GetNotes(), other => other.Id != id);
+        Assert.Equal(("Garden seeds" + NoteDraft.ElsewhereSuffix, "radish\n\nbeets too"), (kept.Title, kept.Body));
+    }
+
+    [Fact]
+    public void A_title_renamed_in_both_places_keeps_both_versions()
+    {
+        INotesData notes = new LocalNotesData(_database);
+        var id = notes.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Garden seeds", "radish", Now);
+
+        Assert.True(NoteSaving.SaveKeepingOther(notes, id, "Spring seeds", "radish, kale", "radish", Now, "Seed list"));
+
+        var note = _database.GetNote(id)!;
+        Assert.Equal(("Spring seeds", "radish, kale"), (note.Title, note.Body));
+        var kept = Assert.Single(_database.GetNotes(), other => other.Id != id);
+        Assert.Equal(("Garden seeds" + NoteDraft.ElsewhereSuffix, "radish"), (kept.Title, kept.Body));
+    }
+
+    [Fact]
+    public void Text_added_from_Discord_or_a_file_keeps_a_title_renamed_meanwhile()
+    {
+        var id = _database.CreateNote("Seed list", "radish", Now);
+        _database.SaveNote(id, "Garden seeds", "radish", Now);
+
+        // The save says the title it kept.
+        INotesData notes = new LocalNotesData(_database);
+        var saved = notes.SaveNoteIfUnchanged(id, "Seed list", "radish", "radish", Now, "Seed list");
+        Assert.Equal((NoteSaveOutcome.Saved, "Garden seeds"), (saved.Outcome, saved.Stored!.Title));
+        Assert.Null(notes.SaveNoteIfUnchanged(id, "Garden seeds", "radish", "radish", Now, "Garden seeds").Stored);
+
+        // Read before the rename, saved after it, the way a reply from Discord is added.
+        Assert.True(_database.SaveNoteIfUnchanged(id, "Seed list", "radish\n\nbeets too", "radish", Now, expectedTitle: "Seed list"));
+        Assert.Equal(("Garden seeds", "radish\n\nbeets too"), (_database.GetNote(id)!.Title, _database.GetNote(id)!.Body));
+
+        // One that renames it too finds it renamed, and saves nothing.
+        Assert.False(_database.SaveNoteIfUnchanged(id, "Spring seeds", "radish", "radish\n\nbeets too", Now, expectedTitle: "Seed list"));
+        Assert.Equal("Garden seeds", _database.GetNote(id)!.Title);
+    }
 }

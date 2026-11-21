@@ -121,6 +121,7 @@ public partial class NotesView
         }
 
         var expected = last is not null ? last.Body : _draft.ExpectedStoredBody;
+        var storedTitle = _draft.ExpectedStoredTitle;
         var notes = _notes;
         var folder = _draftFolder;
         var now = DateTime.Now;
@@ -144,7 +145,7 @@ public partial class NotesView
 
             // Typed in a new note while it was being made, with no title of its own, it keeps the class title it was given.
             var saveTitle = plan?.Title is { } given && string.IsNullOrWhiteSpace(title) ? given : title;
-            if (NoteSaving.SaveKeepingOther(notes, target, saveTitle, body, expected, now))
+            if (NoteSaving.SaveKeepingOther(notes, target, saveTitle, body, expected, now, last is not null ? last.SentTitle : storedTitle))
             {
                 return target;
             }
@@ -295,7 +296,7 @@ public partial class NotesView
         // any other version is kept as its own note first, as the file sync does. A note removed while it was being
         // typed in comes back as a new one, so the text isn't lost.
         long id;
-        if (_draft.Id is { } existing && NoteSaving.SaveKeepingOther(_notes, existing, _draft.Title, _draft.Body, _draft.ExpectedStoredBody, now))
+        if (_draft.Id is { } existing && NoteSaving.SaveKeepingOther(_notes, existing, _draft.Title, _draft.Body, _draft.ExpectedStoredBody, now, _draft.ExpectedStoredTitle))
         {
             id = existing;
         }

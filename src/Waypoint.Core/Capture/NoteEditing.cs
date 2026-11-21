@@ -72,11 +72,18 @@ public sealed class NoteDraft
     /// <summary>
     /// The text the stored note should still have, the one the editor loaded or last saved. A save goes ahead only if
     /// it does. If it changed meanwhile, such as from its .md file while the editor had focus or a reply added from
-    /// Discord, saving over it would lose that change, so it's kept as its own note first. Only the text counts,
-    /// since a saved title is tidied (trimmed, or taken from the first line) and would always look changed. Null
-    /// after <see cref="MoveTo"/>, when there's nothing loaded to compare with until the next save.
+    /// Discord, saving over it would lose that change, so it's kept as its own note first. The title is checked
+    /// with <see cref="ExpectedStoredTitle"/>, tidied the way a saved title is (trimmed, or taken from the first
+    /// line). Null after <see cref="MoveTo"/>, when there's nothing loaded to compare with until the next save.
     /// </summary>
     public string? ExpectedStoredBody => _baselineKnown && Id is not null ? _savedBody : null;
+
+    /// <summary>
+    /// The title the editor loaded or last saved, null when <see cref="ExpectedStoredBody"/> is. A save checks it
+    /// the way the stored note tidies it, so a note renamed elsewhere keeps its new title when only the text was
+    /// typed here, and isn't put back to this one.
+    /// </summary>
+    public string? ExpectedStoredTitle => ExpectedStoredBody is null ? null : _savedTitle;
 
     /// <summary>True if the stored note moved on and nobody is working in the editor. Null means it's gone.</summary>
     public bool ShouldReload(NoteDetail? stored, bool editing) =>
