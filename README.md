@@ -40,7 +40,7 @@ An update can't leave a half-copied install behind:
 - The running app is asked to close the usual way, so drafts are saved and a recording is finished, and is only stopped by force if it hasn't closed within 20 seconds.
 - The new `Waypoint.exe` is copied beside the old one, checked, and switched in by rename, keeping the old one as `Waypoint.previous.exe`. The shortcut and sign-in entry always start the same `Waypoint.exe`. Files the new version doesn't have are removed, and `current.txt` names the version in use. Until the switch is done the old files are only moved aside, so if anything goes wrong partway they're put back and the version that was running is started again.
 - If the new version isn't still running after 8 seconds, it's removed and the previous version is put back and started, and the installer says so.
-- The last two versions are kept. To go back to the other one at any time:
+- The current version and the one that was running before it are kept, so a version you went back to isn't removed by the next install. To go back to the other one at any time:
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Rollback

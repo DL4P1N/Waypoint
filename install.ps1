@@ -3,7 +3,7 @@
 #
 # Each build is kept whole in versions\<time>-<commit>, checked against what was built, and only then swapped in as
 # the one Waypoint.exe that the Start Menu shortcut and the sign-in entry start. If the new version doesn't stay
-# running, the previous one is put back by itself. The last two versions are kept.
+# running, the previous one is put back by itself. The current version and the one running before it are kept.
 #
 #   .\install.ps1              build, install, and start
 #   .\install.ps1 -Rollback    go back to the previous version
@@ -233,9 +233,11 @@ function Test-Start {
     -not $process.HasExited
 }
 
-function Remove-OldVersions {
+# Keeps the current version and the one that was running just before it, which is what -Rollback goes back to, even
+# when a newer one was gone back from.
+function Remove-OldVersions([string]$runningBefore) {
     $current = Get-Current
-    Get-Versions | Where-Object { $_ -ne $current } | Select-Object -Skip 1 | ForEach-Object {
+    Get-Versions | Where-Object { $_ -ne $current -and $_ -ne $runningBefore } | ForEach-Object {
         Remove-Item -LiteralPath (Join-Path $versionsDir $_) -Recurse -Force
         Write-Host "Removed old version $_"
     }
@@ -353,7 +355,7 @@ try {
 Set-Launchers
 
 if (Test-Start) {
-    Remove-OldVersions
+    Remove-OldVersions $previous
     Write-Host "Installed and started version $name from $exe"
     exit 0
 }
