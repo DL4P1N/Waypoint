@@ -39,7 +39,36 @@ public sealed partial class WaypointDatabase
         var clean = words?.Trim() ?? "";
         return clean.Length == 0
             ? GetHistory(limit)
-            : GetHistory().Where(entry => $"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase)).Take(limit).ToList();
+            : ReadHistoryHolding($"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND {HistoryHolds} ORDER BY happened_at DESC, id DESC", clean, limit);
+    }
+
+    /// <summary>A row whose title and class, as the page matches them, may hold $words. Each is still matched exactly after.</summary>
+    private const string HistoryHolds = "(title || ' ' || COALESCE(course, '')) LIKE $words ESCAPE '\\'";
+
+    /// <summary>
+    /// The rows <paramref name="sql"/> finds, in its order, that hold <paramref name="clean"/> in their title and class,
+    /// up to <paramref name="limit"/> of them. Reading stops there, so only what's shown is read.
+    /// </summary>
+    private List<HistoryEntry> ReadHistoryHolding(string sql, string clean, int limit, Action<SqliteCommand>? parameters = null)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$words", ContainsPattern(clean));
+        parameters?.Invoke(command);
+
+        var entries = new List<HistoryEntry>();
+        using var reader = command.ExecuteReader();
+        while (entries.Count < limit && reader.Read())
+        {
+            var entry = ReadHistory(reader);
+            if ($"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase))
+            {
+                entries.Add(entry);
+            }
+        }
+
+        return entries;
     }
 
     /// <summary>
@@ -54,30 +83,17 @@ public sealed partial class WaypointDatabase
         }
 
         var clean = words?.Trim() ?? "";
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = filter == HistoryFilter.Reopened
-            ? $"SELECT {HistoryColumns} FROM item_history WHERE hidden = 0 AND action = 'Reopened' ORDER BY happened_at DESC, id DESC"
-            : $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND action = $action ORDER BY happened_at DESC, id DESC";
-        command.Parameters.AddWithValue("$action", (filter switch
+        var holds = clean.Length == 0 ? "" : $"AND {HistoryHolds}";
+        var sql = filter == HistoryFilter.Reopened
+            ? $"SELECT {HistoryColumns} FROM item_history WHERE hidden = 0 AND action = 'Reopened' {holds} ORDER BY happened_at DESC, id DESC"
+            : $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND action = $action {holds} ORDER BY happened_at DESC, id DESC";
+        var action = (filter switch
         {
             HistoryFilter.Completed => HistoryAction.Done,
             HistoryFilter.Canceled => HistoryAction.Canceled,
             _ => HistoryAction.Past,
-        }).ToString());
-
-        var entries = new List<HistoryEntry>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read() && entries.Count < limit)
-        {
-            var entry = ReadHistory(reader);
-            if (clean.Length == 0 || $"{entry.Title} {entry.Course}".Contains(clean, StringComparison.OrdinalIgnoreCase))
-            {
-                entries.Add(entry);
-            }
-        }
-
-        return entries;
+        }).ToString();
+        return ReadHistoryHolding(sql, clean, limit, command => command.Parameters.AddWithValue("$action", action));
     }
 
     /// <summary>Only an item's latest close can be undone, and only while the item still exists.</summary>
