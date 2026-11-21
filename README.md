@@ -32,21 +32,21 @@ A personal daily assistant for Windows. It sits in the system tray, keeps everyt
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
 
-This builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in. Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
+This runs the Core and Server tests and stops, changing nothing, if any fail (`-SkipTests` installs without them). It then builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in the first time (later installs leave that as you set it in Settings). Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
 
 An update can't leave a half-copied install behind:
 
 - Each build is copied whole into `versions\<time>-<commit>` and checked byte for byte against what was built before anything is stopped. A copy installed before versions were kept becomes the first version, so it can be gone back to.
 - The running app is asked to close the usual way, so drafts are saved and a recording is finished, and is only stopped by force if it hasn't closed within 20 seconds.
-- The new `Waypoint.exe` is copied beside the old one, checked, and switched in by rename, keeping the old one as `Waypoint.previous.exe`. The shortcut and sign-in entry always start the same `Waypoint.exe`. Files the new version doesn't have are removed, and `current.txt` names the version in use.
+- The new `Waypoint.exe` is copied beside the old one, checked, and switched in by rename, keeping the old one as `Waypoint.previous.exe`. The shortcut and sign-in entry always start the same `Waypoint.exe`. Files the new version doesn't have are removed, and `current.txt` names the version in use. Until the switch is done the old files are only moved aside, so if anything goes wrong partway they're put back and the version that was running is started again.
 - If the new version isn't still running after 8 seconds, it's removed and the previous version is put back and started, and the installer says so.
-- The last two versions are kept. To go back to the other one at any time:
+- The current version and the one that was running before it are kept, so a version you went back to isn't removed by the next install. To go back to the other one at any time:
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Rollback
   ```
 
-To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
+To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`: a new or empty one, or one it installed into before, since it won't use a folder with other things in it. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-RunKey <registry key>` keeps that trial's sign-in entry in a key of its own, for trying that part. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
 
 Left-click the tray icon, or choose **Open Waypoint**, to open the window. A fresh copy shows a **Getting set up** card on To do with four steps: add a first task, add work hours, say how you're paid, and connect Discord. Each line opens the right place and goes away once it's done. **Hide this** puts the card away for good.
 
