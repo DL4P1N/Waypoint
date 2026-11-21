@@ -64,14 +64,14 @@ public sealed partial class WaypointWorker
         calendar.Changed += () =>
         {
             _host.Changed();
-            _ = nudges.PlanAsync(_clock());
+            _ = Tracked(() => nudges.PlanAsync(_clock(), _workStop.Token));
         };
 
         Calendar = calendar;
         Nudges = nudges;
         if (SyncsCalendar)
         {
-            _ = calendar.SyncAsync();
+            _ = Tracked(() => calendar.SyncAsync(_workStop.Token));
         }
     }
 }

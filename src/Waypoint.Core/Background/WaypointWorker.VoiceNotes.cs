@@ -30,7 +30,9 @@ public sealed partial class WaypointWorker
     private sealed record HeldVoiceNote(string? MessageId, DateTimeOffset SentAt, string Name, bool Told, string? AttachmentId = null);
 
     /// <summary>Tries every kept voice note again, oldest first. The PC calls this once speech to text is set up.</summary>
-    public async Task ReadHeldVoiceNotesAsync()
+    public Task ReadHeldVoiceNotesAsync() => Tracked(ReadHeldVoiceNotesOnceAsync);
+
+    private async Task ReadHeldVoiceNotesOnceAsync()
     {
         if (!Directory.Exists(VoiceFolder))
         {

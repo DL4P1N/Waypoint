@@ -7,7 +7,9 @@ namespace Waypoint.Core.Background;
 /// <summary>Reading the owner's messages and files in the capture channel, by the live connection or by polling.</summary>
 public sealed partial class WaypointWorker
 {
-    public async Task PollDiscordAsync(bool force = false)
+    public Task PollDiscordAsync(bool force = false) => Tracked(() => PollDiscordOnceAsync(force));
+
+    private async Task PollDiscordOnceAsync(bool force)
     {
         if (Discord is not { } discord)
         {
@@ -61,7 +63,7 @@ public sealed partial class WaypointWorker
 
         foreach (var attachment in message.Attachments)
         {
-            _ = ReadDiscordFileOnceAsync(message, attachment);
+            _ = Tracked(() => ReadDiscordFileOnceAsync(message, attachment));
         }
 
         _ = ProcessDiscordAsync();
@@ -225,7 +227,9 @@ public sealed partial class WaypointWorker
     /// Sorts, then says so once for anything from Discord that couldn't be sorted yet, so a capture is never
     /// silently stuck. Its real answer still comes once sorting works again.
     /// </summary>
-    private async Task ProcessDiscordAsync()
+    private Task ProcessDiscordAsync() => Tracked(ProcessDiscordOnceAsync);
+
+    private async Task ProcessDiscordOnceAsync()
     {
         await Captures.ProcessPendingAsync();
         var pending = _database.GetPendingCaptures().Select(capture => capture.Id).ToHashSet();

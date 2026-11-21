@@ -29,7 +29,9 @@ public sealed partial class WaypointWorker
     /// Discord, and only views whose contents changed are edited. A call made while one runs waits for it, then
     /// only runs itself if something changed meanwhile, so rounds never overlap and changes are never lost.
     /// </summary>
-    public async Task RefreshDiscordViewsAsync()
+    public Task RefreshDiscordViewsAsync() => Tracked(RefreshViewsOnceAsync);
+
+    private async Task RefreshViewsOnceAsync()
     {
         if (Discord is not { } discord || DiscordSettings is not { } settings || !ViewsDue())
         {

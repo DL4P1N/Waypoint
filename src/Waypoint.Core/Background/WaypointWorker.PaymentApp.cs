@@ -132,10 +132,10 @@ public sealed partial class WaypointWorker
             return;
         }
 
-        _ = discord.ReplyAsync(message.Id, DiscordText.Reply(reply.Text, settled ? CardTone.Finished : CardTone.Attention));
+        _ = Tracked(() => discord.ReplyAsync(message.Id, DiscordText.Reply(reply.Text, settled ? CardTone.Finished : CardTone.Attention)), null);
         if (settled)
         {
-            _ = discord.MarkCaptureCardHandledAsync(card, reply.Text);
+            _ = Tracked(() => discord.MarkCaptureCardHandledAsync(card, reply.Text), false);
         }
     }
 }

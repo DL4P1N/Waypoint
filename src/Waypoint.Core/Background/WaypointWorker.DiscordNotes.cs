@@ -220,7 +220,7 @@ public sealed partial class WaypointWorker
 
         if (message.Attachments.Count == 0)
         {
-            _ = discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Send files here", "A PDF, slides, a document, or a picture sent here becomes a note. To find a note, use the menu on the pinned view or /notes. To add a note by typing, use New note."));
+            _ = Tracked(() => discord.ReplyInNotesAsync(message.Id, DiscordText.Notice("Send files here", "A PDF, slides, a document, or a picture sent here becomes a note. To find a note, use the menu on the pinned view or /notes. To add a note by typing, use New note.")), null);
             _database.FinishDiscordMessage(message.Id, _clock());
             return;
         }
@@ -229,7 +229,7 @@ public sealed partial class WaypointWorker
         {
             if (!_database.IsDiscordPartDone(message.Id, attachment.Id))
             {
-                _ = MakeNotesFromDiscordAsync(discord, message, attachment);
+                _ = Tracked(() => MakeNotesFromDiscordAsync(discord, message, attachment));
             }
         }
     }

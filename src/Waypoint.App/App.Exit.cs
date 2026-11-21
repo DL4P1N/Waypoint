@@ -34,7 +34,10 @@ public partial class App
     /// <summary>How long that copy waits for this one to finish closing before it gives up.</summary>
     private static readonly TimeSpan AfterRestoreWait = TimeSpan.FromMinutes(2);
 
-    /// <summary>Set once a restore starts. Nothing new is taken from then on, and Waypoint starts again after.</summary>
+    /// <summary>
+    /// Set once a restore starts or Waypoint starts closing. Nothing new is taken from then on: the tray and a second
+    /// launch no longer open the list, and a restore can't start.
+    /// </summary>
     private bool _restoring;
 
     /// <summary>Whether this copy holds the single-instance lock, so it lets go of it properly on the way out.</summary>
@@ -60,11 +63,7 @@ public partial class App
             }
 
             _later.Clear();
-            foreach (var timer in new[] { _alertTimer, _calendarTimer, _discordTimer, _claimTimer, _emailTimer, _statusTimer, _serverTimer, _idleTimer })
-            {
-                timer?.Stop();
-            }
-
+            StopTimers();
             return System.Threading.Tasks.Task.FromResult(true);
         },
 
@@ -80,11 +79,41 @@ public partial class App
             return true;
         },
         limit => _captures.StopAsync(limit),
-        limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
+
+        // Transcription goes before the worker's work, so work waiting on a transcription can end.
         limit => _transcription is { } transcription
             ? System.Threading.Tasks.Task.Run(() => transcription.Stop(limit))
             : System.Threading.Tasks.Task.FromResult(true),
+        StopWorkerWorkAsync,
+        limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
     ];
+
+    /// <summary>
+    /// The work the worker started without waiting for it, such as a notice going out or the feed being read, stopped
+    /// the same way before a restore and when closing. True once it has ended within <paramref name="limit"/>.
+    /// </summary>
+    private System.Threading.Tasks.Task<bool> StopWorkerWorkAsync(TimeSpan limit) =>
+        _worker?.StopWorkAsync(limit) ?? System.Threading.Tasks.Task.FromResult(true);
+
+    private void StopTimers()
+    {
+        foreach (var timer in new[] { _alertTimer, _calendarTimer, _discordTimer, _claimTimer, _emailTimer, _statusTimer, _serverTimer, _idleTimer })
+        {
+            timer?.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Waits here for <paramref name="work"/> while the window thread keeps running, since work started from it
+    /// carries on there and would otherwise never get the chance to end.
+    /// </summary>
+    private void WaitWhileRunning(System.Threading.Tasks.Task work)
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        var dispatcher = Dispatcher;
+        work.ContinueWith(_ => dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Send, () => frame.Continue = false), System.Threading.Tasks.TaskScheduler.Default);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
 
     /// <summary>
     /// Starts the next copy, then closes the usual way. Used after a restore, whether or not it went in, since what was
@@ -190,6 +219,25 @@ public partial class App
         // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
         // the window or reads Discord again.
         Step(() => _posted?.RunLeft());
+
+        // Work started without being waited for, such as a notice going out, is given a few seconds to end. Nothing
+        // new is started meanwhile: no timer runs, and the tray is hidden with its menu off, so no dialog opens from
+        // it while this waits.
+        _restoring = true;
+        Step(StopTimers);
+        Step(() =>
+        {
+            if (_tray is { } tray)
+            {
+                if (tray.ContextMenuStrip is { } menu)
+                {
+                    menu.Enabled = false;
+                }
+
+                tray.Visible = false;
+            }
+        });
+        Step(() => WaitWhileRunning(StopWorkerWorkAsync(DiscordGateway.EventDrainLimit)));
 
         // Outside a night's check-in window, nothing about the last check-in is left saved.
         Step(() => _worker?.ForgetLateNight());

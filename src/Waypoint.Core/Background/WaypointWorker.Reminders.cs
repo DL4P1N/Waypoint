@@ -47,7 +47,8 @@ public sealed partial class WaypointWorker
         {
             var dueNow = _database.GetDueReminders(now);
             DropStaleReminderSends(dueNow);
-            reminder = dueNow.FirstOrDefault(due => (!quiet || due.Item.Source != ItemSource.Calendar) && !_activeReminders.Contains(ActiveKey(due)));
+            reminder = dueNow.FirstOrDefault(due => (!quiet || due.Item.Source != ItemSource.Calendar) && !_activeReminders.Contains(ActiveKey(due))
+                && !(_failedReminders.TryGetValue(ActiveKey(due), out var until) && now < until));
             if (reminder is null)
             {
                 return;
@@ -59,7 +60,7 @@ public sealed partial class WaypointWorker
 
         if (Discord is { } discord)
         {
-            _ = SendReminderAsync(discord, reminder);
+            _ = Tracked(() => SendReminderAsync(discord, reminder));
         }
         else
         {
@@ -79,8 +80,45 @@ public sealed partial class WaypointWorker
 
     private void ShowReminder(DueReminder reminder) => _host.ShowReminder(reminder, () => Release(reminder));
 
-    /// <summary>Reminders go to Discord alone. The host's card is only for when Discord still can't be reached after retries.</summary>
+    /// <summary>How long a reminder whose send hit a problem waits before it's tried again.</summary>
+    private static readonly TimeSpan FailedReminderPause = TimeSpan.FromMinutes(1);
+
+    /// <summary>Reminders whose send hit a problem, and when each may be tried again. Locked with the active set.</summary>
+    private readonly Dictionary<(ItemSource, long), DateTime> _failedReminders = [];
+
+    /// <summary>
+    /// Reminders go to Discord alone. The host's card is only for when Discord still can't be reached after retries.
+    /// A problem partway is logged once and the reminder let go a minute later, so it comes up again instead of
+    /// staying quiet until Waypoint starts again. Its note, if one was made, keeps it from going out twice.
+    /// </summary>
     private async Task SendReminderAsync(DiscordBridge discord, DueReminder reminder)
+    {
+        var problem = ReminderSendKey(reminder);
+        try
+        {
+            await SendReminderOnceAsync(discord, reminder);
+            ProblemCleared(problem);
+            lock (_activeReminders)
+            {
+                _failedReminders.Remove(ActiveKey(reminder));
+            }
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (!Stopping(exception))
+            {
+                ReportOnce(problem, exception);
+            }
+
+            lock (_activeReminders)
+            {
+                _failedReminders[ActiveKey(reminder)] = _clock() + FailedReminderPause;
+                _activeReminders.Remove(ActiveKey(reminder));
+            }
+        }
+    }
+
+    private async Task SendReminderOnceAsync(DiscordBridge discord, DueReminder reminder)
     {
         // Only things that can be finished get the prompt. A nudge about an assignment or an exam alert doesn't finish it.
         // A dose is answered with Took it, so its card has buttons even though it repeats.
@@ -135,7 +173,7 @@ public sealed partial class WaypointWorker
                 var delivery = await discord.DeliverOnceAsync(channel, card, send.Nonce);
                 messageId = delivery.MessageId;
                 return delivery.Sent;
-            }, RetryWait);
+            }, Pause);
             DiscordHealth.Sent(sent, _clock());
         }
 

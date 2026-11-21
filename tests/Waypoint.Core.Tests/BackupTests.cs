@@ -125,6 +125,30 @@ public sealed class BackupTests : IDisposable
     }
 
     [Fact]
+    public void RestoringTheOldestBeforeRestoreCopyReadsItInsteadOfDeletingItFirst()
+    {
+        // Three restores leave three before-restore copies, the oldest holding only the first note.
+        var restoreFrom = _database.BackUpNow(Now.AddDays(-1));
+        for (var restore = 0; restore < WaypointDatabase.BeforeRestoreKept; restore++)
+        {
+            _database.CreateNote($"Made up lecture {restore + 1}", "Made up notes", Now);
+            Assert.True(_database.RestoreBackup(restoreFrom, Now.AddHours(restore + 1)).Restored);
+        }
+
+        var oldest = _database.GetBackups().Where(backup => backup.BeforeRestore).ToList()[^1];
+        var result = _database.RestoreBackup(oldest.Path, Now.AddHours(5));
+
+        Assert.True(result.Restored);
+        Assert.Equal("Made up lecture 1", Assert.Single(_database.GetNotes()).Title);
+        Assert.True(File.Exists(oldest.Path));
+
+        // The next pass clears it out, now that it isn't being restored from.
+        _database.BackUpNow(Now.AddHours(6));
+        Assert.False(File.Exists(oldest.Path));
+        Assert.Equal(WaypointDatabase.BeforeRestoreKept, _database.GetBackups().Count(backup => backup.BeforeRestore));
+    }
+
+    [Fact]
     public void ABeforeRestoreCopyDoesNotCountAsTheDailyBackup()
     {
         var backup = _database.BackUpNow(Now.AddDays(-1));

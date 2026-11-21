@@ -17,9 +17,6 @@ public sealed record DiscordSend(string Key, string Nonce, string? Channel, stri
 /// </summary>
 public sealed partial class WaypointDatabase
 {
-    /// <summary>A row this old with nothing posted is from something long gone, so it starts over.</summary>
-    private static readonly TimeSpan SendForgotten = TimeSpan.FromDays(7);
-
     private void CreateDiscordSendTables() => Execute("""
         CREATE TABLE IF NOT EXISTS discord_sends (
             send_key TEXT PRIMARY KEY,
@@ -47,15 +44,16 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>
-    /// Notes a post before it's made, or hands back the note from a try before. One for another channel, or left
-    /// long ago with nothing posted, starts over with a new nonce.
+    /// Notes a post before it's made, or hands back the note from a try before. Only one for another channel starts
+    /// over with a new nonce. However old a note is, its try may have gone out, so it stays until what it was for is
+    /// settled or let go, and its post is looked for rather than made again.
     /// </summary>
     public DiscordSend BeginDiscordSend(string key, string? channel, DateTime now)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
         if (ReadDiscordSend(connection, key) is { } before
-            && (before.MessageId is not null || (before.Channel == channel && now - before.StartedAt < SendForgotten)))
+            && (before.MessageId is not null || before.Channel == channel))
         {
             transaction.Commit();
             return before;
