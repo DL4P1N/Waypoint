@@ -32,7 +32,7 @@ A personal daily assistant for Windows. It sits in the system tray, keeps everyt
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
 
-This runs the Core and Server tests and stops, changing nothing, if any fail (`-SkipTests` installs without them). It then builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in. Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
+This runs the Core and Server tests and stops, changing nothing, if any fail (`-SkipTests` installs without them). It then builds a small `Waypoint.exe` (the `Install` publish profile, which uses the installed runtime) into `%LOCALAPPDATA%\Programs\Waypoint`, adds a Start Menu shortcut, starts the app, and sets it to run at sign-in the first time (later installs leave that as you set it in Settings). Run it again after changing the code. To try changes without installing, use `dotnet run --project src/Waypoint.App`.
 
 An update can't leave a half-copied install behind:
 
@@ -46,7 +46,7 @@ An update can't leave a half-copied install behind:
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Rollback
   ```
 
-To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`: a new or empty one, or one it installed into before, since it won't use a folder with other things in it. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
+To try the installer itself, give it a folder of its own with `-InstallRoot <folder>`: a new or empty one, or one it installed into before, since it won't use a folder with other things in it. It then leaves the shortcut and sign-in entry alone and starts that copy as a trial run (`WAYPOINT_TRIAL=1`) on its own data folder (`-DataDir`, or `data` inside that folder), so it never opens your data or meets the installed copy. `-RunKey <registry key>` keeps that trial's sign-in entry in a key of its own, for trying that part. `-PublishedFolder <folder>` installs an already-built folder instead of building, and `-StartCheckSeconds` changes how long a new version has to stay running.
 
 Left-click the tray icon, or choose **Open Waypoint**, to open the window. A fresh copy shows a **Getting set up** card on To do with four steps: add a first task, add work hours, say how you're paid, and connect Discord. Each line opens the right place and goes away once it's done. **Hide this** puts the card away for good.
 

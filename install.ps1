@@ -22,6 +22,9 @@ param(
     # Builds without running tests\Waypoint.Core.Tests and tests\Waypoint.Server.Tests first. They're skipped anyway
     # with -PublishedFolder, since nothing is built.
     [switch]$SkipTests,
+    # The registry key for the sign-in entry instead of HKCU\...\CurrentVersion\Run. Given with -InstallRoot, the
+    # entry is managed there too (the shortcut still isn't), so a test can use a key of its own.
+    [string]$RunKey,
     # How long a new version has to stay running before it counts as started.
     [int]$StartCheckSeconds = 8,
     # How long a running copy that has started closing may take to save before the install gives up and leaves it be.
@@ -49,6 +52,8 @@ if ($realInstall) {
 $childEnvironment = if ($realInstall) { @{ WAYPOINT_DATA_DIR = $null; WAYPOINT_TRIAL = $null } } else { @{ WAYPOINT_DATA_DIR = $DataDir; WAYPOINT_TRIAL = '1' } }
 
 $exe = Join-Path $InstallRoot 'Waypoint.exe'
+# Nothing installed here yet, so the sign-in entry is added rather than only kept up to date.
+$firstInstall = -not (Test-Path -LiteralPath $exe)
 $previousExe = Join-Path $InstallRoot 'Waypoint.previous.exe'
 $versionsDir = Join-Path $InstallRoot 'versions'
 $currentFile = Join-Path $InstallRoot 'current.txt'
@@ -263,19 +268,30 @@ function Remove-OldVersions([string]$runningBefore) {
 }
 
 function Set-Launchers {
-    if (-not $realInstall) {
+    if (-not $realInstall -and -not $RunKey) {
         Write-Host 'Left the Start Menu shortcut and sign-in entry alone, since this install has its own -InstallRoot.'
         return
     }
     # Waypoint is closed by now, so a problem here is only reported and it's still started.
     try {
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Waypoint.lnk'))
-        $shortcut.TargetPath = $exe
-        $shortcut.WorkingDirectory = $InstallRoot
-        $shortcut.Save()
+        if ($realInstall) {
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Waypoint.lnk'))
+            $shortcut.TargetPath = $exe
+            $shortcut.WorkingDirectory = $InstallRoot
+            $shortcut.Save()
+        }
 
-        Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Waypoint' -Value "`"$exe`""
+        # Added on a first install, and afterwards only kept up to date, so turning "Start with Windows" off in
+        # Settings (which removes it) lasts through updates. Written the way Settings writes it.
+        $key = if ($RunKey) { $RunKey } else { 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' }
+        $exists = (Test-Path -LiteralPath $key) -and $null -ne (Get-Item -LiteralPath $key).GetValue('Waypoint')
+        if ($firstInstall -or $exists) {
+            if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+            Set-ItemProperty -LiteralPath $key -Name 'Waypoint' -Value "`"$exe`" --at-login"
+        } else {
+            Write-Host 'Left Waypoint out of starting with Windows, since that was turned off.'
+        }
     } catch {
         Write-Warning "Couldn't set the Start Menu shortcut or sign-in entry: $_"
     }
