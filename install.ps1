@@ -34,10 +34,10 @@ if ($realInstall) {
     if (-not $DataDir) { $DataDir = Join-Path $InstallRoot 'data' }
     $DataDir = [IO.Path]::GetFullPath($DataDir)
     New-Item -ItemType Directory -Force $DataDir | Out-Null
-    # Inherited by the copy this starts: its own data folder, its own single-instance name, and no alerts or sending.
-    $env:WAYPOINT_DATA_DIR = $DataDir
-    $env:WAYPOINT_TRIAL = '1'
 }
+# Given only to the copy this starts (see Test-Start), never left in this session: a trial gets its own data folder,
+# its own single-instance name, and no alerts or sending, and a real install gets neither, even after a trial.
+$childEnvironment = if ($realInstall) { @{ WAYPOINT_DATA_DIR = $null; WAYPOINT_TRIAL = $null } } else { @{ WAYPOINT_DATA_DIR = $DataDir; WAYPOINT_TRIAL = '1' } }
 
 $exe = Join-Path $InstallRoot 'Waypoint.exe'
 $previousExe = Join-Path $InstallRoot 'Waypoint.previous.exe'
@@ -63,8 +63,8 @@ function Assert-SameFiles([string]$from, [string]$to) {
 
 # The name the app's single-instance lock uses, so a running copy can be asked to close the usual way.
 function Get-InstanceName {
-    if (-not $env:WAYPOINT_DATA_DIR) { return 'Local\Waypoint' }
-    $key = [IO.Path]::GetFullPath($env:WAYPOINT_DATA_DIR).ToUpperInvariant()
+    if (-not $childEnvironment.WAYPOINT_DATA_DIR) { return 'Local\Waypoint' }
+    $key = [IO.Path]::GetFullPath($childEnvironment.WAYPOINT_DATA_DIR).ToUpperInvariant()
     $hash = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($key))
     'Local\Waypoint-' + ([BitConverter]::ToString($hash) -replace '-', '').Substring(0, 16)
 }
@@ -227,7 +227,17 @@ function Switch-To([string]$name) {
 
 # Starts Waypoint.exe and checks it's still running after a while.
 function Test-Start {
-    $process = Start-Process -FilePath $exe -WorkingDirectory $InstallRoot -PassThru
+    # Start-Process passes this session's environment on, so it's set for the moment of starting and then put back.
+    $saved = @{}
+    foreach ($variable in $childEnvironment.Keys) {
+        $saved[$variable] = [Environment]::GetEnvironmentVariable($variable, 'Process')
+        [Environment]::SetEnvironmentVariable($variable, $childEnvironment[$variable], 'Process')
+    }
+    try {
+        $process = Start-Process -FilePath $exe -WorkingDirectory $InstallRoot -PassThru
+    } finally {
+        foreach ($variable in $saved.Keys) { [Environment]::SetEnvironmentVariable($variable, $saved[$variable], 'Process') }
+    }
     Start-Sleep -Seconds $StartCheckSeconds
     $process.Refresh()
     -not $process.HasExited
