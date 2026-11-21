@@ -162,27 +162,67 @@ function Switch-To([string]$name) {
         throw
     }
 
-    foreach ($relative in $files) {
-        $target = Join-Path $InstallRoot $relative
-        if ($relative -eq 'Waypoint.exe' -and (Test-Path -LiteralPath $target)) {
-            Remove-Item -LiteralPath $previousExe -Force -ErrorAction SilentlyContinue
-            [IO.File]::Replace("$target.new", $target, $previousExe)
+    # From here Waypoint is closed, so every old file is moved aside as .old rather than replaced or removed. If any
+    # step fails, those moves are undone, current.txt goes back, and the version that was running is started again.
+    $oldCurrent = Get-Current
+    $movedAside = New-Object System.Collections.Generic.List[string]
+    $added = New-Object System.Collections.Generic.List[string]
+    $rootLength = $InstallRoot.TrimEnd('\').Length + 1
+    try {
+        foreach ($relative in $files) {
+            $target = Join-Path $InstallRoot $relative
+            if (Test-Path -LiteralPath $target) {
+                Move-Item -LiteralPath $target -Destination "$target.old" -Force
+                $movedAside.Add($relative)
+            } else {
+                $added.Add($relative)
+            }
+            Move-Item -LiteralPath "$target.new" -Destination $target
+        }
+
+        $keep = @($files) + @('Waypoint.previous.exe', 'current.txt') + @($movedAside | ForEach-Object { "$_.old" })
+        $stray = @(Get-ChildItem -LiteralPath $InstallRoot -Recurse -File |
+            Where-Object { -not $_.FullName.StartsWith($versionsDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
+            Where-Object { $realInstall -or -not $_.FullName.StartsWith($DataDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
+            Where-Object { $keep -notcontains $_.FullName.Substring($rootLength) } |
+            ForEach-Object { $_.FullName.Substring($rootLength) })
+        foreach ($relative in $stray) {
+            $target = Join-Path $InstallRoot $relative
+            Move-Item -LiteralPath $target -Destination "$target.old" -Force
+            $movedAside.Add($relative)
+        }
+        Set-Current $name
+    } catch {
+        $failure = $_
+        $script:switchUndone = $true
+        Write-Host "Switching to version $name failed after Waypoint was closed: $failure"
+        Write-Host 'Putting back the files that were there...'
+        foreach ($relative in $added) { Remove-Item -LiteralPath (Join-Path $InstallRoot $relative) -Force -ErrorAction SilentlyContinue }
+        foreach ($relative in $movedAside) {
+            $target = Join-Path $InstallRoot $relative
+            if (Test-Path -LiteralPath "$target.old") {
+                if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination "$target.new" -Force -ErrorAction SilentlyContinue }
+                Move-Item -LiteralPath "$target.old" -Destination $target -Force -ErrorAction SilentlyContinue
+            }
+        }
+        foreach ($relative in $files) { Remove-Item -LiteralPath ((Join-Path $InstallRoot $relative) + '.new') -Force -ErrorAction SilentlyContinue }
+        if ($oldCurrent) { Set-Current $oldCurrent } else { Remove-Item -LiteralPath $currentFile -Force -ErrorAction SilentlyContinue }
+        if ((Test-Path -LiteralPath $exe) -and (Test-Start)) {
+            throw "Version $name couldn't be switched in ($failure), so the files that were there were put back and Waypoint was started again. Nothing was changed."
+        }
+        throw "Version $name couldn't be switched in ($failure), and the files that were there were put back, but Waypoint didn't start again. Run -Rollback, or start Waypoint.exe in $InstallRoot."
+    }
+
+    # Switched. The old Waypoint.exe stays as Waypoint.previous.exe, and the rest of the old files go.
+    foreach ($relative in $movedAside) {
+        $old = (Join-Path $InstallRoot $relative) + '.old'
+        if ($relative -eq 'Waypoint.exe') {
+            Move-Item -LiteralPath $old -Destination $previousExe -Force -ErrorAction SilentlyContinue
         } else {
-            Move-Item -LiteralPath "$target.new" -Destination $target -Force
+            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+            if ($files -notcontains $relative) { Write-Host "Removed $relative, which version $name doesn't have" }
         }
     }
-    Set-Current $name
-
-    $rootLength = $InstallRoot.TrimEnd('\').Length + 1
-    $keep = @($files) + @('Waypoint.previous.exe', 'current.txt')
-    Get-ChildItem -LiteralPath $InstallRoot -Recurse -File |
-        Where-Object { -not $_.FullName.StartsWith($versionsDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
-        Where-Object { $realInstall -or -not $_.FullName.StartsWith($DataDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
-        Where-Object { $keep -notcontains $_.FullName.Substring($rootLength) } |
-        ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Force
-            Write-Host "Removed $($_.FullName.Substring($rootLength)), which version $name doesn't have"
-        }
 }
 
 # Starts Waypoint.exe and checks it's still running after a while.
@@ -206,13 +246,18 @@ function Set-Launchers {
         Write-Host 'Left the Start Menu shortcut and sign-in entry alone, since this install has its own -InstallRoot.'
         return
     }
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Waypoint.lnk'))
-    $shortcut.TargetPath = $exe
-    $shortcut.WorkingDirectory = $InstallRoot
-    $shortcut.Save()
+    # Waypoint is closed by now, so a problem here is only reported and it's still started.
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Waypoint.lnk'))
+        $shortcut.TargetPath = $exe
+        $shortcut.WorkingDirectory = $InstallRoot
+        $shortcut.Save()
 
-    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Waypoint' -Value "`"$exe`""
+        Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Waypoint' -Value "`"$exe`""
+    } catch {
+        Write-Warning "Couldn't set the Start Menu shortcut or sign-in entry: $_"
+    }
 }
 
 # A Waypoint.exe installed before versions were kept becomes a version itself, so it can be gone back to.
@@ -296,11 +341,13 @@ if ($ownStaging) { Remove-Item -Recurse -Force $staging }
 
 $previous = Get-Current
 $script:closeRefused = $false
+$script:switchUndone = $false
 try {
     Switch-To $name
 } catch {
-    # The running copy wasn't switched, so the new version goes too, and -Rollback still goes back from the running one.
-    if ($script:closeRefused) { Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force -ErrorAction SilentlyContinue }
+    # The running copy wasn't switched, or was put back, so the new version goes too, and -Rollback still goes back
+    # from the running one.
+    if ($script:closeRefused -or $script:switchUndone) { Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force -ErrorAction SilentlyContinue }
     throw
 }
 Set-Launchers
