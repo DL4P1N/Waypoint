@@ -10,19 +10,22 @@ public sealed partial class WaypointWorker
     /// <summary>Notifications go to Discord alone. The host shows it instead if Discord isn't set up, or still can't be reached after retries.</summary>
     /// <param name="feedback">Adds a small This didn't help kept under this feature (see <see cref="Feedback"/>), with no item.</param>
     /// <param name="bedtimeLabel">The words on <paramref name="bedtimeButton"/>, for a wind-down step's Done.</param>
-    /// <remarks>Most callers don't wait for it, so a problem is logged here rather than lost.</remarks>
+    /// <remarks>Most callers don't wait for it, so a problem is logged here rather than lost, once until it goes out.</remarks>
     public Task NotifyAsync(string title, string text, CardTone tone = CardTone.Reminder, bool toBudgetChannel = false, bool canWait = false, AlertActionKind? bedtimeButton = null, IReadOnlyList<CardAction>? actions = null, bool toCaptureChannel = false, bool saveSpot = false, string? feedback = null, string? bedtimeLabel = null) =>
         Tracked(async () =>
         {
             try
             {
                 await SendNoticeAsync(title, text, tone, toBudgetChannel, canWait, bedtimeButton, actions, toCaptureChannel, saveSpot, feedback, bedtimeLabel);
+                ProblemCleared(NoticeProblem(title));
             }
             catch (Exception exception) when (exception is not OutOfMemoryException && !Stopping(exception))
             {
-                PlainProblem.Report(exception);
+                ReportOnce(NoticeProblem(title), exception);
             }
         });
+
+    private static string NoticeProblem(string title) => $"notice:{title}";
 
     /// <summary>The same, handing back the Discord message's ID when it went to Discord, so the card can be found again.</summary>
     /// <param name="sendKey">

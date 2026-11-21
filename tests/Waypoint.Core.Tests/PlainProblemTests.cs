@@ -3,8 +3,12 @@ using Waypoint.Core.Remote;
 
 namespace Waypoint.Core.Tests;
 
+[Collection(LogHook)]
 public sealed class PlainProblemTests
 {
+    /// <summary>The tests that set PlainProblem.Log, run one at a time so none takes another's log.</summary>
+    public const string LogHook = "PlainProblem log";
+
     [Fact]
     public void Paths_and_process_output_never_reach_the_sentence()
     {

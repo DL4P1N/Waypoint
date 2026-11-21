@@ -98,6 +98,35 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>The last problem logged for each kind of work, so the same one failing every round is logged once.</summary>
+    private readonly Dictionary<string, string> _loggedProblems = [];
+
+    /// <summary>Logs <paramref name="exception"/> for <paramref name="what"/>, unless it's the same as the last one logged for it.</summary>
+    private void ReportOnce(string what, Exception exception)
+    {
+        var said = $"{exception.GetType().FullName}: {exception.Message}";
+        lock (_loggedProblems)
+        {
+            if (_loggedProblems.TryGetValue(what, out var before) && before == said)
+            {
+                return;
+            }
+
+            _loggedProblems[what] = said;
+        }
+
+        PlainProblem.Report(exception);
+    }
+
+    /// <summary>The work went through, so its next problem is logged even if it's the same as before.</summary>
+    private void ProblemCleared(string what)
+    {
+        lock (_loggedProblems)
+        {
+            _loggedProblems.Remove(what);
+        }
+    }
+
     /// <summary>Work cut short by <see cref="StopWorkAsync"/>, which isn't a problem worth logging.</summary>
     private bool Stopping(Exception exception) => exception is OperationCanceledException && _workStop.IsCancellationRequested;
 
