@@ -38,13 +38,17 @@ if ($realInstall) {
     $InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\Waypoint'
 } else {
     $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
-    # Installing removes files the version doesn't have, so a folder with other things in it is never used.
-    if ((Test-Path -LiteralPath $InstallRoot) -and (Get-ChildItem -LiteralPath $InstallRoot -Force | Select-Object -First 1) -and
+    if (-not $DataDir) { $DataDir = Join-Path $InstallRoot 'data' }
+    $DataDir = [IO.Path]::GetFullPath($DataDir)
+    # Installing removes files the version doesn't have, so a folder with other things in it is never used. Its own
+    # versions folder, and its data folder when that's inside it, are left by a try that didn't finish, so they're fine.
+    $ownEntries = @('versions')
+    if ($DataDir -eq (Join-Path $InstallRoot 'data')) { $ownEntries += 'data' }
+    if ((Test-Path -LiteralPath $InstallRoot) -and
+        (Get-ChildItem -LiteralPath $InstallRoot -Force | Where-Object { $ownEntries -notcontains $_.Name } | Select-Object -First 1) -and
         -not ((Test-Path -LiteralPath (Join-Path $InstallRoot 'Waypoint.exe')) -or (Test-Path -LiteralPath (Join-Path $InstallRoot 'current.txt')))) {
         throw "$InstallRoot already has other things in it and isn't a Waypoint install, so nothing was changed. Give -InstallRoot an empty or new folder."
     }
-    if (-not $DataDir) { $DataDir = Join-Path $InstallRoot 'data' }
-    $DataDir = [IO.Path]::GetFullPath($DataDir)
     New-Item -ItemType Directory -Force $DataDir | Out-Null
 }
 # Given only to the copy this starts (see Test-Start), never left in this session: a trial gets its own data folder,
