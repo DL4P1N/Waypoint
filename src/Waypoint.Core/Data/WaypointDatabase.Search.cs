@@ -43,6 +43,21 @@ public sealed partial class WaypointDatabase
         return pattern.Append('%').ToString();
     }
 
+    /// <summary>More patterns than this, or one longer than <see cref="LongestPattern"/>, and SQLite turns the query down.</summary>
+    private const int MostPatterns = 50;
+
+    private const int LongestPattern = 1000;
+
+    /// <summary>
+    /// The LIKE patterns to narrow a search by, or none when there are too many or one is too long for SQLite to
+    /// take. Then everything is read and matched as before.
+    /// </summary>
+    private static List<string> Prefilter(IEnumerable<string> texts)
+    {
+        var patterns = texts.Select(ContainsPattern).ToList();
+        return patterns.Count > MostPatterns || patterns.Any(pattern => pattern.Length > LongestPattern) ? [] : patterns;
+    }
+
     /// <summary>
     /// True for a note (items i, with its capture c) holding any of the patterns $p0, $p1, and so on in its title,
     /// its text, its note line, or one of its sources.
@@ -105,7 +120,7 @@ public sealed partial class WaypointDatabase
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        var patterns = words.Select(ContainsPattern).ToList();
+        var patterns = Prefilter(words);
         command.CommandText = $"""
             SELECT i.title, i.about, COALESCE(i.body, c.text), c.created_at, i.body, i.id FROM items i JOIN captures c ON c.id = i.capture_id
             WHERE i.kind = 'Note' AND i.canceled = 0 {(patterns.Count == 0 ? "" : $"AND ({NoteHoldsAny(patterns.Count)})")}

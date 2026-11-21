@@ -349,7 +349,7 @@ public sealed partial class WaypointDatabase
         // Text running over a line break could be found across two of the parts matched below, so then all are read.
         var looked = SearchIndex.Words(clean) is { Count: > 0 } found ? found
             : clean.Contains('\n') || clean.Contains('\r') ? [] : [clean];
-        var patterns = looked.Select(ContainsPattern).ToList();
+        var patterns = Prefilter(looked);
         var notes = patterns.Count == 0 ? ReadNotes(condition, id) : ReadNotes($"{condition} AND ({NoteHoldsAny(patterns.Count)})", id, patterns);
         if (notes.Count == 0)
         {

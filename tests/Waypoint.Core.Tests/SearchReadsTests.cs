@@ -101,6 +101,30 @@ public sealed class SearchReadsTests : IDisposable
         }
     }
 
+    /// <summary>Too many words, or one too long, for SQLite to narrow by, and everything is read and matched as before.</summary>
+    [Theory]
+    [InlineData(1000, 6)]
+    [InlineData(1, 60000)]
+    [InlineData(51, 4)]
+    [InlineData(1, 1001)]
+    public void A_very_long_search_still_finds_what_matching_every_note_and_row_finds(int count, int length)
+    {
+        var cells = _database.CreateNote("Cells", "The made up nucleus", Now);
+        _database.CreateNote("Other", "Nothing here", Now.AddMinutes(1));
+        _database.AddNoteSource(cells, "pdf", "slides.pdf", "Slide text", Now);
+        _database.SetDone(Store(new SortedItem(ItemKind.Task, "Made up nucleus errand", null, null)), true);
+        var words = string.Join(" ", Enumerable.Range(0, count).Select(index => index == count - 1 ? "nucleus" : new string((char)('a' + (index % 26)), length) + index));
+
+        Assert.Equal(Ids(ByHand(_database.GetNotes(), words)), Ids(_database.SearchNotes(words)));
+        Assert.Equal(Ids(ByHand(_database.GetNotesInFolder(null), words)), Ids(_database.SearchNotesInFolder(words, null)));
+        Assert.Contains(_database.SearchEverything(new SearchQuery(words), Now), doc => doc.Text == "Cells");
+        foreach (var filter in new[] { HistoryFilter.All, HistoryFilter.Completed })
+        {
+            var byHand = _database.SearchHistory(null, 100, filter).Where(entry => $"{entry.Title} {entry.Course}".Contains(words, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(byHand.Select(entry => entry.Id), _database.SearchHistory(words, 100, filter).Select(entry => entry.Id));
+        }
+    }
+
     [Fact]
     public void Purchases_found_are_the_newest_matching_ones_in_order()
     {

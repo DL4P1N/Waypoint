@@ -39,11 +39,15 @@ public sealed partial class WaypointDatabase
         var clean = words?.Trim() ?? "";
         return clean.Length == 0
             ? GetHistory(limit)
-            : ReadHistoryHolding($"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND {HistoryHolds} ORDER BY happened_at DESC, id DESC", clean, limit);
+            : ReadHistoryHolding($"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} {HistoryHolds(clean)} ORDER BY happened_at DESC, id DESC", clean, limit);
     }
 
-    /// <summary>A row whose title and class, as the page matches them, may hold $words. Each is still matched exactly after.</summary>
-    private const string HistoryHolds = "(title || ' ' || COALESCE(course, '')) LIKE $words ESCAPE '\\'";
+    /// <summary>
+    /// Narrows to rows whose title and class, as the page matches them, may hold $words, each still matched exactly
+    /// after. Nothing narrows with no words, or words too long for SQLite to take as a pattern, and every row is read.
+    /// </summary>
+    private static string HistoryHolds(string clean) =>
+        Prefilter([clean]) is [_] ? "AND (title || ' ' || COALESCE(course, '')) LIKE $words ESCAPE '\\'" : "";
 
     /// <summary>
     /// The rows <paramref name="sql"/> finds, in its order, that hold <paramref name="clean"/> in their title and class,
@@ -83,7 +87,7 @@ public sealed partial class WaypointDatabase
         }
 
         var clean = words?.Trim() ?? "";
-        var holds = clean.Length == 0 ? "" : $"AND {HistoryHolds}";
+        var holds = clean.Length == 0 ? "" : HistoryHolds(clean);
         var sql = filter == HistoryFilter.Reopened
             ? $"SELECT {HistoryColumns} FROM item_history WHERE hidden = 0 AND action = 'Reopened' {holds} ORDER BY happened_at DESC, id DESC"
             : $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} AND action = $action {holds} ORDER BY happened_at DESC, id DESC";
