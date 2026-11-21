@@ -40,7 +40,7 @@ public sealed class IdleSender
         }
 
         var tokens = new ProtectedTokenStore(Path.Combine(dataDirectory, ServerConnection.TokenFile));
-        var client = new ServerClient(new HttpClient { BaseAddress = baseAddress }, null, ServerConnection.ExistingPcId(dataDirectory));
+        var client = new ServerClient(ServerAddress.Client(baseAddress), null, ServerConnection.ExistingPcId(dataDirectory));
         return new IdleSender(client, reporter, () => tokens.Load());
     }
 

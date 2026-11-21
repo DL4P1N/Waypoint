@@ -40,9 +40,9 @@ internal sealed class ServerConnection
 
         _token = new ProtectedTokenStore(Path.Combine(dataDirectory, TokenFile));
         var baseAddress = new Uri(address.TrimEnd('/') + "/");
-        Client = new ServerClient(new HttpClient { BaseAddress = baseAddress }, _token.Load(), PcId(dataDirectory))
+        Client = new ServerClient(ServerAddress.Client(baseAddress), _token.Load(), PcId(dataDirectory))
         {
-            FileHttp = new HttpClient { BaseAddress = baseAddress, Timeout = ServerClient.FileTimeout },
+            FileHttp = Files(baseAddress),
         };
         Client.SaveReadsIn(Path.Combine(dataDirectory, ReadsFile), UserProtection.Instance);
         Queue = new CaptureQueue(Path.Combine(dataDirectory, QueueFile));
@@ -55,6 +55,13 @@ internal sealed class ServerConnection
         Feedback = new ServerFeedbackData(Client);
         Backups = new ServerBackups(Client);
         Notes = new ServerNotesData(Client, new OfflineNotes(Path.Combine(dataDirectory, NotesFile)), marks);
+    }
+
+    private static HttpClient Files(Uri baseAddress)
+    {
+        var http = ServerAddress.Client(baseAddress);
+        http.Timeout = ServerClient.FileTimeout;
+        return http;
     }
 
     public ServerClient Client { get; }
