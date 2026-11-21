@@ -32,6 +32,7 @@ public sealed class IdleSender
     public static IdleSender? ForAddress(string? address, string dataDirectory, IdleReporter reporter)
     {
         if (string.IsNullOrWhiteSpace(address)
+            || ServerAddress.Problem(address) is not null
             || !Uri.TryCreate(address.Trim().TrimEnd('/') + "/", UriKind.Absolute, out var baseAddress)
             || (baseAddress.Scheme != Uri.UriSchemeHttp && baseAddress.Scheme != Uri.UriSchemeHttps))
         {

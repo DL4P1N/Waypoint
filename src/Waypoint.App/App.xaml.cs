@@ -398,7 +398,7 @@ public partial class App : System.Windows.Application
         RefreshStatus();
         if (!_sends)
         {
-            ShowToast("Add the server address", PcMode.NeedsAddressNotice);
+            ShowToast("Add the server address", ServerAddress.Problem(settings.Server?.Address) is { } refused && !string.IsNullOrWhiteSpace(settings.Server?.Address) ? refused : PcMode.NeedsAddressNotice);
         }
 
         var showListThread = new Thread(() =>

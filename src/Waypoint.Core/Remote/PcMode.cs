@@ -46,7 +46,7 @@ public static class PcMode
 
     public static PcRun Choose(ServerSettings? server) => server switch
     {
-        { Mode: DataMode.Server, Address: { } address } when !string.IsNullOrWhiteSpace(address) => PcRun.Server,
+        { Mode: DataMode.Server, Address: { } address } when !string.IsNullOrWhiteSpace(address) && ServerAddress.Problem(address) is null => PcRun.Server,
         { Mode: DataMode.Server } => PcRun.NeedsAddress,
         _ => PcRun.Local,
     };

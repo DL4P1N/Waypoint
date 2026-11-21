@@ -33,6 +33,11 @@ internal sealed class ServerConnection
     /// <param name="marks">The moments marked while recording a note's lecture, which stay in this PC's recordings.</param>
     public ServerConnection(string address, string dataDirectory, Func<long, IReadOnlyList<RecordingMark>>? marks = null)
     {
+        if (ServerAddress.Problem(address) is { } problem)
+        {
+            throw new InvalidOperationException(problem);
+        }
+
         _token = new ProtectedTokenStore(Path.Combine(dataDirectory, TokenFile));
         var baseAddress = new Uri(address.TrimEnd('/') + "/");
         Client = new ServerClient(new HttpClient { BaseAddress = baseAddress }, _token.Load(), PcId(dataDirectory))
