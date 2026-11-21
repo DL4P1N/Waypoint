@@ -77,13 +77,20 @@ public partial class App
         },
         limit => _captures.StopAsync(limit),
 
-        // Then the work those started without waiting for it, such as a notice going out or the feed being read.
-        limit => _worker?.StopWorkAsync(limit) ?? System.Threading.Tasks.Task.FromResult(true),
-        limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
+        // Transcription goes before the worker's work, so work waiting on a transcription can end.
         limit => _transcription is { } transcription
             ? System.Threading.Tasks.Task.Run(() => transcription.Stop(limit))
             : System.Threading.Tasks.Task.FromResult(true),
+        StopWorkerWorkAsync,
+        limit => _itemsWindow.NotesPage.StopWritingAsync(limit),
     ];
+
+    /// <summary>
+    /// The work the worker started without waiting for it, such as a notice going out or the feed being read, stopped
+    /// the same way before a restore and when closing. True once it has ended within <paramref name="limit"/>.
+    /// </summary>
+    private System.Threading.Tasks.Task<bool> StopWorkerWorkAsync(TimeSpan limit) =>
+        _worker?.StopWorkAsync(limit) ?? System.Threading.Tasks.Task.FromResult(true);
 
     private void StopTimers()
     {
