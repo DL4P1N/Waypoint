@@ -20,7 +20,8 @@ namespace Waypoint.App;
 /// <summary>The reminder card: its buttons, and Save my spot opened over it.</summary>
 public partial class App
 {
-    private void ShowReminderCard(DueReminder reminder, Action closed)
+    /// <param name="cameBack">Set on the card shown again after one was closed without an answer.</param>
+    private void ShowReminderCard(DueReminder reminder, Action closed, bool cameBack = false)
     {
         // Repeating items and reminders are finished here. An exam's alert is only an alert.
         var finishesItem = reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task;
@@ -29,7 +30,6 @@ public partial class App
         SystemSounds.Asterisk.Play();
         ReminderWindow? window = null;
         ReminderCardHold? holdLater = null;
-        var toldDidntHelp = false;
 
         // A dose gets Took it, Not now (once), and Skip, each kept for the day the card is for, whichever card answers first.
         if (reminder.Item is { Dose: true, Recurs: not null, DueDate: { } dueOn })
@@ -50,11 +50,7 @@ public partial class App
                 dose: new ReminderDose(!reminder.IsFollowUp, () => Answer(DoseAnswer.Skip)))
             {
                 Slot = _openCards % MaxStackedCards,
-                FeedbackKept = () =>
-                {
-                    toldDidntHelp = true;
-                    return _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now);
-                },
+                FeedbackKept = () => _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now),
                 FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
             };
             _openCards++;
@@ -65,7 +61,7 @@ public partial class App
             {
                 _openCards--;
                 _cardsUp.Remove(doseRef);
-                CardClosed(doseCard.Answered || toldDidntHelp, reminder, closed, snoozeMinutes);
+                CardClosed(doseCard.Answered, reminder, closed, snoozeMinutes, cameBack);
             };
             window.Show();
             return;
@@ -131,8 +127,8 @@ public partial class App
             Slot = _openCards % MaxStackedCards,
             FeedbackKept = () =>
             {
-                // Saying it didn't help answers the card, so it isn't held for after this either, or shown again.
-                toldDidntHelp = true;
+                // Saying it didn't help means it isn't held for after this. The card is still up, and closing it
+                // without a button is treated like any other card closed that way.
                 holdLater?.Answered();
                 return _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now);
             },
@@ -153,16 +149,18 @@ public partial class App
             _openCards--;
             _cardsUp.Remove(cardRef);
             holdLater?.Answered();
-            CardClosed(card.Answered || toldDidntHelp, reminder, closed, snoozeMinutes);
+            CardClosed(card.Answered, reminder, closed, snoozeMinutes, cameBack);
         };
         window.Show();
     }
 
     /// <summary>
     /// An answered card lets its reminder go now. One closed without an answer comes back once after the snooze time,
-    /// unless it was answered meanwhile somewhere else, such as in Discord or on the To do page.
+    /// unless it was answered meanwhile somewhere else, such as in Discord or on the To do page, or it's quiet hours
+    /// for it then. The card that came back, closed the same way, doesn't come back again: its reminder stays held,
+    /// shown nowhere, until it's answered elsewhere or Waypoint starts again.
     /// </summary>
-    private void CardClosed(bool answered, DueReminder reminder, Action closed, int snoozeMinutes)
+    private void CardClosed(bool answered, DueReminder reminder, Action closed, int snoozeMinutes, bool cameBack)
     {
         if (answered || _restoring)
         {
@@ -170,11 +168,16 @@ public partial class App
             return;
         }
 
-        UnansweredCard.ComeBackAfter(
+        UnansweredCard.Wait(
             TimeSpan.FromMinutes(snoozeMinutes),
-            () => !_restoring && UnansweredCard.StillUnanswered(_database, reminder, DateTime.Now),
-            () => ShowReminderCard(reminder, closed),
-            closed);
+            comeBack: !cameBack,
+            () => _restoring ? null : UnansweredCard.StillDue(_database, reminder, DateTime.Now),
+
+            // The same quiet part of the night the reminder checks keep to: assignment nudges wait it out.
+            due => due.Item.Source == ItemSource.Calendar && _bedtimeSchedule?.IsQuiet(DateTime.Now) == true,
+            due => ShowReminderCard(due, closed, cameBack: true),
+            closed,
+            LogError);
     }
 
     /// <summary>The same form and save as the To do page's Save my spot, opened over the reminder card.</summary>

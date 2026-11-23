@@ -8,7 +8,7 @@ namespace Waypoint.App.Tests;
 
 /// <summary>
 /// A PC reminder card closed without one of its buttons comes back once after the snooze time, unless it was answered
-/// meanwhile somewhere else. Made up reminders only, in a temp database.
+/// meanwhile somewhere else or it's quiet hours, and then goes quiet. Made up reminders only, in a temp database.
 /// </summary>
 public sealed class UnansweredCardTests
 {
@@ -18,24 +18,85 @@ public sealed class UnansweredCardTests
     private static readonly DateTime Later = DateTime.Now.AddHours(3);
 
     [Fact]
-    public void A_card_closed_with_its_reminder_still_unanswered_comes_back_once_after_the_wait() => Ui.Run(ui =>
+    public void A_card_closed_unanswered_comes_back_once_then_goes_quiet_until_its_answered_elsewhere() => Ui.Run(ui =>
     {
         var reminder = DueNow(ui.Database, "Water the made up fern");
-        var shown = 0;
+        var shown = new List<DueReminder>();
         var released = 0;
+        var problems = new List<Exception>();
 
-        UnansweredCard.ComeBackAfter(Soon, () => UnansweredCard.StillUnanswered(ui.Database, reminder, Later), () => shown++, () => released++);
+        // As the app does: the card that came back, closed again without an answer, waits without coming back.
+        void ClosedUnanswered(DueReminder card, bool cameBack) => UnansweredCard.Wait(
+            Soon,
+            comeBack: !cameBack,
+            () => UnansweredCard.StillDue(ui.Database, card, Later),
+            _ => false,
+            due =>
+            {
+                shown.Add(due);
+                ClosedUnanswered(due, cameBack: true);
+            },
+            () => released++,
+            problems.Add);
+
+        ClosedUnanswered(reminder, cameBack: false);
 
         // Not straight away, so closing it isn't met with the same card again.
-        Assert.Equal(0, shown);
-        ServerToDoClickTests.PumpUntil(ui, () => shown + released > 0, "the wait to end");
-        Assert.Equal(1, shown);
+        Assert.Empty(shown);
+        ServerToDoClickTests.PumpUntil(ui, () => shown.Count > 0, "the card to come back");
+
+        // Shown again as it's due now, and only once: several more waits go by with nothing shown or let go.
+        Assert.Equal(reminder.Id, Assert.Single(shown).Id);
+        PumpFor(ui, TimeSpan.FromMilliseconds(400));
+        Assert.Single(shown);
         Assert.Equal(0, released);
 
-        // Once only: the card shown again is what brings it back after that, if it's closed again.
-        Thread.Sleep(200);
-        ui.Pump();
-        Assert.Equal(1, shown);
+        // Done from the To do page: only then is it let go, so the usual checks take it up.
+        ui.Database.SetDone(reminder.Item, true);
+        ServerToDoClickTests.PumpUntil(ui, () => released == 1, "the reminder to be let go");
+        PumpFor(ui, TimeSpan.FromMilliseconds(200));
+        Assert.Single(shown);
+        Assert.Equal(1, released);
+        Assert.Empty(problems);
+    });
+
+    [Fact]
+    public void A_card_that_would_come_back_in_quiet_hours_stays_quiet() => Ui.Run(ui =>
+    {
+        var reminder = DueNow(ui.Database, "Read the made up chapter");
+        var shown = 0;
+        var released = 0;
+        var asked = 0;
+        UnansweredCard.Wait(Soon, comeBack: true, () => UnansweredCard.StillDue(ui.Database, reminder, Later), _ =>
+        {
+            asked++;
+            return true;
+        }, _ => shown++, () => released++, exception => throw exception);
+
+        ServerToDoClickTests.PumpUntil(ui, () => asked > 0, "the quiet check");
+        PumpFor(ui, TimeSpan.FromMilliseconds(400));
+        Assert.Equal(0, shown);
+        Assert.Equal(0, released);
+        Assert.Equal(1, asked);
+
+        ui.Database.SnoozeReminder(reminder, Later.AddMinutes(30));
+        ServerToDoClickTests.PumpUntil(ui, () => released == 1, "the reminder to be let go");
+        Assert.Equal(0, shown);
+    });
+
+    [Fact]
+    public void A_problem_showing_it_again_is_logged_and_the_reminder_let_go() => Ui.Run(ui =>
+    {
+        var reminder = DueNow(ui.Database, "Book the made up haircut");
+        var released = 0;
+        var problems = new List<Exception>();
+        UnansweredCard.Wait(Soon, comeBack: true, () => UnansweredCard.StillDue(ui.Database, reminder, Later), _ => false,
+            _ => throw new InvalidOperationException("Made up problem"), () => released++, problems.Add);
+
+        ServerToDoClickTests.PumpUntil(ui, () => released > 0, "the reminder to be let go");
+        PumpFor(ui, TimeSpan.FromMilliseconds(200));
+        Assert.Equal(1, released);
+        Assert.Equal("Made up problem", Assert.Single(problems).Message);
     });
 
     [Fact]
@@ -45,11 +106,14 @@ public sealed class UnansweredCardTests
         var putOff = DueNow(ui.Database, "Call the made up dentist");
         var shown = new List<string>();
         var released = new List<string>();
-        void Wait(DueReminder reminder) => UnansweredCard.ComeBackAfter(
+        void Wait(DueReminder reminder) => UnansweredCard.Wait(
             Soon,
-            () => UnansweredCard.StillUnanswered(ui.Database, reminder, Later),
-            () => shown.Add(reminder.Item.Title),
-            () => released.Add(reminder.Item.Title));
+            comeBack: true,
+            () => UnansweredCard.StillDue(ui.Database, reminder, Later),
+            _ => false,
+            due => shown.Add(due.Item.Title),
+            () => released.Add(reminder.Item.Title),
+            exception => throw exception);
 
         Wait(finished);
         Wait(putOff);
@@ -83,6 +147,41 @@ public sealed class UnansweredCardTests
             closed.Close();
         }
     });
+
+    [Fact]
+    public void Saying_it_didnt_help_then_closing_the_card_isnt_an_answer() => Ui.Run(ui =>
+    {
+        var reminder = DueNow(ui.Database, "Stretch the made up hamstrings");
+        var kept = 0;
+        var card = new ReminderWindow(reminder, "Done", 15, () => { }, () => { })
+        {
+            ShowActivated = false,
+            Left = -20000,
+            Top = -20000,
+            FeedbackKept = () => ++kept,
+        };
+        ui.Pump();
+        try
+        {
+            var link = UiTest.Descendants<Button>(UiTest.Named<FeedbackPrompt>(card, "FeedbackLine")).First(button => button.Content as string == CardLabels.DidntHelp);
+            link.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, link));
+            card.Close();
+
+            Assert.Equal(1, kept);
+            Assert.False(card.Answered);
+        }
+        finally
+        {
+            card.Close();
+        }
+    });
+
+    /// <summary>Keeps the window thread running for <paramref name="span"/>, so timers due meanwhile get to run.</summary>
+    private static void PumpFor(UiTest ui, TimeSpan span)
+    {
+        var until = DateTime.UtcNow + span;
+        ServerToDoClickTests.PumpUntil(ui, () => DateTime.UtcNow >= until, "the time to pass");
+    }
 
     /// <summary>A made up reminder for two hours from now, which has come due by <see cref="Later"/>.</summary>
     private static DueReminder DueNow(WaypointDatabase database, string title)
