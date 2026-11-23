@@ -9,8 +9,6 @@ namespace Waypoint.App;
 /// </summary>
 public partial class RecordOfferWindow : Window
 {
-    private const int ScreenMargin = 16;
-
     private readonly Action _record;
 
     public RecordOfferWindow(string course, Action record)
@@ -19,11 +17,7 @@ public partial class RecordOfferWindow : Window
         InitializeComponent();
         WindowStyling.Apply(this);
         Question.Text = $"Record {course}?";
-        Loaded += (_, _) =>
-        {
-            Left = SystemParameters.WorkArea.Right - ActualWidth - ScreenMargin;
-            Top = SystemParameters.WorkArea.Bottom - ActualHeight - ScreenMargin;
-        };
+        CornerCards.Track(this);
     }
 
     private void OnRecordClicked(object sender, RoutedEventArgs e)

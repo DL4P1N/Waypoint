@@ -49,17 +49,14 @@ public partial class App
                 () => Answer(DoseAnswer.NotNow),
                 dose: new ReminderDose(!reminder.IsFollowUp, () => Answer(DoseAnswer.Skip)))
             {
-                Slot = _openCards % MaxStackedCards,
                 FeedbackKept = () => _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now),
                 FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
             };
-            _openCards++;
             var doseRef = ItemRef.Format(reminder.Item);
             _cardsUp.Add(doseRef);
             var doseCard = window;
             window.Closed += (_, _) =>
             {
-                _openCards--;
                 _cardsUp.Remove(doseRef);
                 CardClosed(doseCard.Answered, reminder, closed, snoozeMinutes, cameBack);
             };
@@ -124,7 +121,6 @@ public partial class App
             transition,
             waiting)
         {
-            Slot = _openCards % MaxStackedCards,
             FeedbackKept = () =>
             {
                 // Saying it didn't help means it isn't held for after this. The card is still up, and closing it
@@ -134,7 +130,6 @@ public partial class App
             },
             FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
         };
-        _openCards++;
 
         // A card with Start left unanswered for a while means "after this", so the item is held once, to come back
         // when To do or Ask next opens. The card stays up, and answering it after all drops the hold.
@@ -146,7 +141,6 @@ public partial class App
         var card = window;
         window.Closed += (_, _) =>
         {
-            _openCards--;
             _cardsUp.Remove(cardRef);
             holdLater?.Answered();
             CardClosed(card.Answered, reminder, closed, snoozeMinutes, cameBack);

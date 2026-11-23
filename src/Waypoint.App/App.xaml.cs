@@ -27,7 +27,6 @@ public partial class App : System.Windows.Application
     private const string ErrorLogFile = "errors.log";
     private const string NotesFolderKey = "notes_files_root";
     private const long MaxErrorLogBytes = 1024 * 1024;
-    private const int MaxStackedCards = 4;
 
     private static readonly TimeSpan StatusRefreshInterval = TimeSpan.FromMinutes(1);
 
@@ -43,7 +42,6 @@ public partial class App : System.Windows.Application
     private DispatcherTimer? _statusTimer;
     private DispatcherTimer? _alertTimer;
     private BedtimeSchedule? _bedtimeSchedule;
-    private int _openCards;
 
     // Items whose reminder card is up, so Ask doesn't show the same thing as held from earlier beside it.
     private readonly HashSet<string> _cardsUp = [];

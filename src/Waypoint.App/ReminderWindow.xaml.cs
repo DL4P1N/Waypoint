@@ -28,9 +28,6 @@ public sealed record ReminderDose(bool OffersNotNow, Action Skip);
 /// <summary>Corner card that stays up until answered and doesn't take focus from what's running.</summary>
 public partial class ReminderWindow : Window
 {
-    private const int ScreenMargin = 16;
-    private const int CardGap = 8;
-
     private readonly Action _primary;
     private readonly Action _snooze;
     private readonly Action? _skip;
@@ -50,9 +47,6 @@ public partial class ReminderWindow : Window
         Answered = true;
         Close();
     }
-
-    /// <summary>How many cards up from the corner this one sits, so they don't cover each other.</summary>
-    public int Slot { get; init; }
 
     /// <summary>Keeps This didn't help for this card and returns its ID. Without it, the card has no This didn't help.</summary>
     public Func<long>? FeedbackKept
@@ -124,11 +118,7 @@ public partial class ReminderWindow : Window
 
         Details.Text = DetailLine(reminder, DateOnly.FromDateTime(DateTime.Now));
 
-        Loaded += (_, _) =>
-        {
-            Left = SystemParameters.WorkArea.Right - ActualWidth - ScreenMargin;
-            Top = SystemParameters.WorkArea.Bottom - ((ActualHeight + CardGap) * (Slot + 1)) - ScreenMargin + CardGap;
-        };
+        CornerCards.Track(this);
     }
 
     private static string MinutesText(int minutes) =>
