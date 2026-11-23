@@ -1036,7 +1036,9 @@ public sealed partial class WaypointDatabase
 
     /// <summary>
     /// A purchase typed into the Budget page's form. It's stored like a sorted note, so with no category picked
-    /// the merchant rule places it. A category picked in the form wins over any merchant rule.
+    /// the merchant rule places it. A category picked in the form wins over any merchant rule. One no rule places,
+    /// or whose category isn't one of the budget's, is left under Uncategorized so the page asks for a category,
+    /// rather than going quietly into Buffer.
     /// </summary>
     public OpReply AddExpense(string title, long? cents, string? category, DateOnly date, DateTime now)
     {
@@ -1056,7 +1058,7 @@ public sealed partial class WaypointDatabase
         using var lease = Connect(out var connection);
         using var transaction = Begin(connection);
         var captureId = InsertHandTyped(connection, clean, now);
-        CompleteCapture(connection, captureId, [new SortedItem(ItemKind.Expense, clean, date, cents, Category: chosen)], null);
+        CompleteCapture(connection, captureId, [new SortedItem(ItemKind.Expense, clean, date, cents, Category: chosen ?? BudgetMath.Uncategorized)], null);
         if (chosen is not null)
         {
             using var command = connection.CreateCommand();
