@@ -62,7 +62,15 @@ public partial class App
 
         LogError(e.Exception);
         e.Handled = _started;
+
+        // Kept going, so it's said once in Ask in a plain line. The same problem coming back stays quiet.
+        if (_started && _unexpected.FirstTime(e.Exception) is { } line)
+        {
+            _itemsWindow?.ShowReply(line);
+        }
     }
+
+    private readonly UnexpectedProblems _unexpected = new();
 
     private string? _loggedSortFailure;
 
@@ -112,5 +120,35 @@ public partial class App
         {
             // Nothing else to do with it, and the app should keep running.
         }
+    }
+}
+
+/// <summary>
+/// The plain line for a problem nothing else caught, given once for each distinct problem: the same kind, words and
+/// place. The detail is in errors.log either way.
+/// </summary>
+internal sealed class UnexpectedProblems
+{
+    /// <summary>Enough to tell problems apart for a long run, without growing forever.</summary>
+    private const int MaxRemembered = 100;
+
+    private readonly HashSet<string> _said = [];
+
+    /// <summary>The line to say, or null when this problem was already said.</summary>
+    public string? FirstTime(Exception exception)
+    {
+        var key = $"{exception.GetType().FullName}|{exception.Message}|{exception.TargetSite?.DeclaringType?.FullName}.{exception.TargetSite?.Name}";
+        if (_said.Contains(key))
+        {
+            return null;
+        }
+
+        if (_said.Count >= MaxRemembered)
+        {
+            _said.Clear();
+        }
+
+        _said.Add(key);
+        return $"{Waypoint.Core.PlainProblem.Describe(exception)} Waypoint kept going, and the detail is in errors.log.";
     }
 }
