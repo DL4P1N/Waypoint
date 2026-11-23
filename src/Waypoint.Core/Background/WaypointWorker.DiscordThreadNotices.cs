@@ -19,15 +19,24 @@ public sealed partial class WaypointWorker
     /// </remarks>
     private async Task NoticeAsync(DiscordBridge discord, string thread, string title, string text, CardTone tone)
     {
-        var notice = new WaitingNotice(title, text, tone);
         var key = NoticeSendPrefix(thread) + Hash(DiscordText.Notice(title, text, tone));
         var send = _database.BeginDiscordSend(key, thread, _clock());
-        if (send.MessageId is null)
+        var notice = send.Fresh ? null : WaitingNoticeFor(key);
+        if (send.Fresh)
         {
+            _noticeRetries.TryRemove(key, out _);
+        }
+
+        // Where the post ended when it was first noted is kept with it, so a try that went out unheard is looked for
+        // from there, even after a new part has gone in under it since. A note kept without it is looked for from when
+        // it was noted.
+        if (send.MessageId is null && notice is null)
+        {
+            notice = new WaitingNotice(title, text, tone, send.Fresh ? NewestInPost(thread, withNotices: true) : null);
             _database.SetDiscordSendCard(key, JsonSerializer.Serialize(notice));
         }
 
-        await TryNoticeAsync(discord, thread, send, notice, raised: true);
+        await TryNoticeAsync(discord, thread, send, notice ?? new WaitingNotice(title, text, tone), raised: true);
     }
 
     /// <summary>
@@ -36,7 +45,16 @@ public sealed partial class WaypointWorker
     /// </summary>
     private void ShowHereOnceWaitedLong(DiscordSend send, WaitingNotice notice)
     {
-        if (_clock() - send.StartedAt >= AlertRetry.Total && _database.MarkDiscordSendShownHere(send.Key))
+        if (_clock() - send.StartedAt >= AlertRetry.Total)
+        {
+            ShowHereOnce(send, notice);
+        }
+    }
+
+    /// <summary>A notice shows on this PC instead, once however many times it's asked.</summary>
+    private void ShowHereOnce(DiscordSend send, WaitingNotice notice)
+    {
+        if (_database.MarkDiscordSendShownHere(send.Key))
         {
             _host.ShowNotice(notice.Title, $"{notice.Text}\n\nThis was meant for a post in Discord, which couldn't be checked.");
         }
@@ -54,7 +72,8 @@ public sealed partial class WaypointWorker
         var sent = send.MessageId;
         if (sent is null && !send.Fresh)
         {
-            var search = await FindUnkeptAsync(discord, thread, send.Nonce, card);
+            var from = notice.After ?? DiscordBridge.SnowflakeAt(send.StartedAt - TimeSpan.FromMinutes(1));
+            var search = await FindUnkeptAsync(discord, thread, send.Nonce, card, after: from);
             if (search.Result == SentLookup.Unknown)
             {
                 // Whether the earlier try went out can't be told, so it's never sent again from here. It's looked for
@@ -70,7 +89,7 @@ public sealed partial class WaypointWorker
                 // same notice raised again is wanted in the post too, so it goes out, and could show on the PC again.
                 if (!raised)
                 {
-                    _database.FinishDiscordSend(key);
+                    FinishNotice(key);
                     return;
                 }
 
@@ -87,7 +106,7 @@ public sealed partial class WaypointWorker
                 // and is looked for and tried again on a later round, and shows on this PC once it has waited long enough.
                 if (outcome is ThreadChange.Missing or ThreadChange.NotAllowed)
                 {
-                    _database.FinishDiscordSend(key);
+                    FinishNotice(key);
                 }
                 else
                 {
@@ -103,8 +122,25 @@ public sealed partial class WaypointWorker
         KeepNotice(thread, key, sent, _clock());
     }
 
-    /// <summary>What a notice says, kept with its note so it can be tried again.</summary>
-    private sealed record WaitingNotice(string Title, string Text, CardTone Tone);
+    /// <summary>
+    /// What a notice says, kept with its note so it can be tried again, and the newest message in the post when it
+    /// was first noted, after which it's looked for.
+    /// </summary>
+    private sealed record WaitingNotice(string Title, string Text, CardTone Tone, string? After = null);
+
+    /// <summary>The newest of a post's parts, with or without its notices, or the post itself.</summary>
+    private string NewestInPost(string thread, bool withNotices) =>
+        (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
+            .Concat(withNotices ? _database.GetDiscordNotices(thread).Select(notice => notice.Message) : [])
+            .Append(thread)
+            .MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
+
+    /// <summary>A notice's note goes, and with it when it was to be tried next.</summary>
+    private void FinishNotice(string key)
+    {
+        _database.FinishDiscordSend(key);
+        _noticeRetries.TryRemove(key, out _);
+    }
 
     /// <summary>The notice a note was kept for, or null when it was noted without one, such as by an older version.</summary>
     private WaitingNotice? WaitingNoticeFor(string key)
@@ -122,25 +158,30 @@ public sealed partial class WaypointWorker
     private static string NoticeSendPrefix(string thread) => $"notice:{thread}:";
 
     /// <summary>A notice is kept to be cleared away later, and its note goes, in one write.</summary>
-    private void KeepNotice(string thread, string key, string message, DateTime sentAt) =>
+    private void KeepNotice(string thread, string key, string message, DateTime sentAt)
+    {
         _database.InOneWrite(write =>
         {
             write.AddDiscordNotice(thread, message, sentAt);
             write.FinishDiscordSend(key);
         });
+        _noticeRetries.TryRemove(key, out _);
+    }
 
     /// <summary>
     /// A message of Waypoint's in a post, such as a notice or a part, that isn't one of the post's parts or a notice
     /// already kept. With <paramref name="button"/>, one not found by its words is looked for by a button whose action
-    /// starts that way, for a part whose words may have changed since it was sent.
+    /// starts that way, for a part whose words may have changed since it was sent. It's read from
+    /// <paramref name="after"/>, or else from the post's last part, not its last notice, since a notice can come after
+    /// a part sent unheard.
     /// </summary>
-    private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card, string? button = null)
+    private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card, string? button = null, string? after = null)
     {
-        // Read from the post's last part, not its last notice, since a notice can come after a part sent unheard.
-        var parts = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? []).Append(thread).ToList();
-        var after = parts.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
-        var known = parts.Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message)).ToHashSet(StringComparer.Ordinal);
-        return await discord.FindSentAfterAsync(thread, after, nonce, card, known, actionPrefix: button);
+        var known = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
+            .Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message))
+            .Append(thread)
+            .ToHashSet(StringComparer.Ordinal);
+        return await discord.FindSentAfterAsync(thread, after ?? NewestInPost(thread, withNotices: false), nonce, card, known, actionPrefix: button);
     }
 
     /// <summary>
@@ -201,6 +242,20 @@ public sealed partial class WaypointWorker
         }
     }
 
+    /// <summary>
+    /// A notice that never went out, or can't be told to have, is let go, and shows on this PC first if it hasn't
+    /// already, so none is ever dropped without a word.
+    /// </summary>
+    private void LetNoticeGo(DiscordSend send)
+    {
+        if (WaitingNoticeFor(send.Key) is { } notice)
+        {
+            ShowHereOnce(send, notice);
+        }
+
+        FinishNotice(send.Key);
+    }
+
     private async Task ClearNoticesAsync(DiscordBridge discord, string thread, bool all)
     {
         // A notice sent just before a crash, before it was kept, is kept now so it's cleared away like the rest.
@@ -212,7 +267,7 @@ public sealed partial class WaypointWorker
             }
             else if (_clock() - send.StartedAt >= NoticeGiveUp)
             {
-                _database.FinishDiscordSend(send.Key);
+                LetNoticeGo(send);
             }
         }
 

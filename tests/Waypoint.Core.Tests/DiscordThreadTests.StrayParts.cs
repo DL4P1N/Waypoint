@@ -93,6 +93,7 @@ public sealed partial class DiscordThreadTests
         var second = MakeWorker(lists: null);
         second.StartDiscord();
         await second.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        _now = _now.AddMinutes(2);
         await second.SyncDiscordThreadsAsync();
 
         var bots = post.Messages.Where(message => message.Bot).ToList();
