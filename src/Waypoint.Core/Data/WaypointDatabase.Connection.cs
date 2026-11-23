@@ -2,7 +2,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Waypoint.Core.Data;
 
-/// <summary>Opening a connection, with SQLite's busy wait set, or joining the write already running on this flow.</summary>
+/// <summary>Opening a connection, with SQLite's busy wait set.</summary>
 public sealed partial class WaypointDatabase
 {
     private readonly string _connectionString;
@@ -18,16 +18,11 @@ public sealed partial class WaypointDatabase
     /// it that size on disk for good. It's set here because whichever connection commits next does the cutting.
     /// Foreign keys are checked on every connection too (see the constructor), so a row can't point at one that
     /// isn't there. Rows from older copies that already do are left alone: SQLite doesn't recheck them, and the
-    /// reads join to what they point at, so they stay out of sight. Inside <see cref="InOneWrite{T}"/>, it's a
-    /// stand-in for that write's connection instead.
+    /// reads join to what they point at, so they stay out of sight. Calls get their connection through
+    /// <see cref="Connect"/>, which only opens one here when the call isn't part of a single write.
     /// </summary>
     internal SqliteConnection Open()
     {
-        if (_oneWrite.Value is { Over: false } shared)
-        {
-            return new SharedConnection(shared.Join());
-        }
-
         var connection = new SqliteConnection(_connectionString);
         connection.Open();
         using var wait = connection.CreateCommand();

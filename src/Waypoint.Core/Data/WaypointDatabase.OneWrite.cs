@@ -3,126 +3,210 @@ using Microsoft.Data.Sqlite;
 namespace Waypoint.Core.Data;
 
 /// <summary>
-/// Work made of many of this class's own calls saved as one write, so a crash partway keeps all of it or none. While
-/// <see cref="InOneWrite{T}"/> runs, every connection opened on the same flow shares one real connection and its
-/// transaction. A transaction begun on one of those becomes a savepoint inside it, so a call that rolls its own
-/// write back still does, and nothing is saved until the whole of the work is.
+/// Who owns the connection and transaction a call works on. A call on the database itself opens a connection of its
+/// own and, when it needs one, a transaction of its own. A call on the database handed to the work of
+/// <see cref="InOneWrite{T}(Func{WaypointDatabase, T})"/> works on that write's one connection instead, and a
+/// transaction it begins is a savepoint of its own inside the write's transaction.
 /// </summary>
 public sealed partial class WaypointDatabase
 {
-    private readonly AsyncLocal<OneWrite?> _oneWrite = new();
+    /// <summary>The database itself. A write's database keeps its settings there, so both always agree.</summary>
+    private readonly WaypointDatabase _root;
+
+    /// <summary>The write every call on this database runs in, or null for the database itself.</summary>
+    private readonly Write? _write;
+
+    /// <summary>The database handed to a write's work. Every call made on it runs on <paramref name="write"/>.</summary>
+    private WaypointDatabase(WaypointDatabase root, Write write)
+    {
+        _root = root;
+        _write = write;
+        _connectionString = root._connectionString;
+    }
 
     /// <summary>
-    /// The write running on this flow, and the thread that began it. Work handed to another thread carries it along,
-    /// so <see cref="Open"/> refuses that loudly while the write runs instead of sharing its connection. Once it's
-    /// over, anything still carrying it opens a connection of its own as usual.
+    /// The one connection and transaction of a single write, owned by the <see cref="InOneWrite{T}(Func{WaypointDatabase, T})"/>
+    /// that began them. A connection can't be shared between threads, so its database refuses use from any thread but
+    /// the one that began it, and refuses use once the write is over, such as by work handed on that outlived it.
     /// </summary>
-    private sealed class OneWrite(SqliteConnection connection, SqliteTransaction transaction)
+    private sealed class Write(SqliteConnection connection, SqliteTransaction transaction)
     {
-        public (SqliteConnection Connection, SqliteTransaction Transaction) Shared { get; } = (connection, transaction);
-
-        public int Thread { get; } = Environment.CurrentManagedThreadId;
+        private readonly int _thread = Environment.CurrentManagedThreadId;
+        private int _savepoints;
 
         /// <summary>Set once the write has landed or been let go. Read from other threads, so always read fresh.</summary>
         public volatile bool Over;
 
-        public (SqliteConnection Connection, SqliteTransaction Transaction) Join() =>
-            Thread != Environment.CurrentManagedThreadId
-                ? throw new InvalidOperationException("A single write was used from a thread other than the one that began it.")
-                : Shared;
+        /// <summary>The write's connection, for a call on the thread that began it while it's still running.</summary>
+        public SqliteConnection Connection
+        {
+            get
+            {
+                Check();
+                return connection;
+            }
+        }
+
+        /// <summary>A savepoint of its own inside the write, with a name not used before on its connection.</summary>
+        public Step Savepoint()
+        {
+            Check();
+            return Step.Savepoint(transaction, $"one_write_{++_savepoints}");
+        }
+
+        private void Check()
+        {
+            if (Over)
+            {
+                throw new InvalidOperationException("A single write was used after it was over.");
+            }
+
+            if (_thread != Environment.CurrentManagedThreadId)
+            {
+                throw new InvalidOperationException("A single write was used from a thread other than the one that began it.");
+            }
+        }
+    }
+
+    /// <summary>Closes a connection a call opened for itself, and leaves a write's connection to the write.</summary>
+    internal readonly struct Lease(SqliteConnection? owned) : IDisposable
+    {
+        public void Dispose() => owned?.Dispose();
     }
 
     /// <summary>
-    /// Runs <paramref name="work"/> as a single write. It all lands when the work returns, and none of it lands when
-    /// the work throws or the process dies first. Work already inside one just joins it. The work must stay on its
-    /// own flow and not hand database calls to other threads, since they would share the one connection.
+    /// The connection a call works on: this database's write's, or else one of the call's own from <see cref="Open"/>,
+    /// closed when the lease is.
     /// </summary>
-    public T InOneWrite<T>(Func<T> work)
+    internal Lease Connect(out SqliteConnection connection)
     {
-        if (_oneWrite.Value is { Over: false } running)
+        if (_write is { } write)
         {
-            running.Join();
-            return work();
+            connection = write.Connection;
+            return default;
         }
 
-        if (_write is not null)
+        connection = Open();
+        return new Lease(connection);
+    }
+
+    /// <summary>
+    /// A transaction for one call on <paramref name="connection"/>, which came from <see cref="Connect"/>. In a write it's
+    /// a savepoint of the call's own, so a call that commits keeps its part and one that doesn't undoes only its own,
+    /// just as with a transaction of its own. Otherwise it's a transaction of its own, begun with BEGIN IMMEDIATE.
+    /// </summary>
+    internal Step Begin(SqliteConnection connection)
+    {
+        if (_write is not { } write)
         {
-            throw new InvalidOperationException("A single write of the older kind was begun inside one of the newer kind.");
+            return Step.Own(connection.BeginTransaction());
+        }
+
+        if (!ReferenceEquals(connection, write.Connection))
+        {
+            throw new InvalidOperationException("A transaction was begun inside a single write on a connection that isn't the write's.");
+        }
+
+        return write.Savepoint();
+    }
+
+    /// <summary>
+    /// What a call begins with <see cref="Begin"/>: a transaction of its own, or a savepoint of its own in a write's
+    /// transaction. Either way, Commit keeps what the call wrote, and disposing it uncommitted undoes it.
+    /// </summary>
+    internal sealed class Step : IDisposable
+    {
+        private readonly SqliteTransaction _transaction;
+        private readonly string? _savepoint;
+        private bool _done;
+
+        private Step(SqliteTransaction transaction, string? savepoint)
+        {
+            _transaction = transaction;
+            _savepoint = savepoint;
+        }
+
+        public static Step Own(SqliteTransaction transaction) => new(transaction, null);
+
+        public static Step Savepoint(SqliteTransaction transaction, string name)
+        {
+            transaction.Save(name);
+            return new(transaction, name);
+        }
+
+        public void Commit()
+        {
+            if (_savepoint is null)
+            {
+                _transaction.Commit();
+                return;
+            }
+
+            if (_done)
+            {
+                throw new InvalidOperationException("This savepoint has already been committed or undone.");
+            }
+
+            _done = true;
+            _transaction.Release(_savepoint);
+        }
+
+        public void Dispose()
+        {
+            if (_savepoint is null)
+            {
+                _transaction.Dispose();
+                return;
+            }
+
+            if (_done)
+            {
+                return;
+            }
+
+            _done = true;
+            _transaction.Rollback(_savepoint);
+            _transaction.Release(_savepoint);
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> as a single write on one connection and one BEGIN IMMEDIATE transaction, owned here.
+    /// The work gets the write's database, and every call it makes on that one runs in the write. It all lands when
+    /// the work returns, and none of it when the work throws or the process dies first. Called on a write's database,
+    /// it runs as a savepoint inside that write, so a failure inside, even one the caller catches, undoes only its own
+    /// part. Calls on any other database, such as the one this was called on, aren't part of the write.
+    /// </summary>
+    public T InOneWrite<T>(Func<WaypointDatabase, T> work)
+    {
+        if (_write is { } running)
+        {
+            using var savepoint = running.Savepoint();
+            var inner = work(this);
+            savepoint.Commit();
+            return inner;
         }
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        var write = new OneWrite(connection, transaction);
-        _oneWrite.Value = write;
+        var write = new Write(connection, transaction);
         try
         {
-            var result = work();
-            _oneWrite.Value = null;
+            var result = work(new WaypointDatabase(this, write));
             write.Over = true;
             transaction.Commit();
             return result;
         }
         finally
         {
-            _oneWrite.Value = null;
             write.Over = true;
         }
     }
 
-    /// <summary>
-    /// A stand-in for the shared connection. It's open on an empty in-memory database of its own, so the library's
-    /// checks on an open connection and its transaction pass, but every command it makes runs on the shared one.
-    /// The BEGIN, COMMIT, and ROLLBACK its transactions send become a savepoint of their own on the shared one.
-    /// </summary>
-    private sealed class SharedConnection : SqliteConnection
+    /// <inheritdoc cref="InOneWrite{T}(Func{WaypointDatabase, T})"/>
+    public void InOneWrite(Action<WaypointDatabase> work) => InOneWrite(database =>
     {
-        private static int _savepoints;
-
-        private readonly (SqliteConnection Connection, SqliteTransaction Transaction) _shared;
-        private string? _savepoint;
-
-        public SharedConnection((SqliteConnection Connection, SqliteTransaction Transaction) shared)
-            : base("Data Source=:memory:")
-        {
-            _shared = shared;
-            Open();
-        }
-
-        public override SqliteCommand CreateCommand() => new SharedCommand(this) { Connection = _shared.Connection, Transaction = _shared.Transaction };
-
-        /// <summary>The SQL a transaction of this stand-in sends, as it runs on the shared connection instead.</summary>
-        internal string Translate(string sql)
-        {
-            switch (sql.Trim().TrimEnd(';').ToUpperInvariant())
-            {
-                case "BEGIN":
-                case "BEGIN IMMEDIATE":
-                    _savepoint = $"one_write_{Interlocked.Increment(ref _savepoints)}";
-                    return $"SAVEPOINT {_savepoint};";
-                case "COMMIT":
-                    return $"RELEASE {Take()};";
-                case "ROLLBACK":
-                    var savepoint = Take();
-                    return $"ROLLBACK TO {savepoint}; RELEASE {savepoint};";
-                default:
-                    return sql;
-            }
-        }
-
-        private string Take()
-        {
-            var savepoint = _savepoint ?? throw new InvalidOperationException("No transaction is running on this connection.");
-            _savepoint = null;
-            return savepoint;
-        }
-    }
-
-    private sealed class SharedCommand(SharedConnection owner) : SqliteCommand
-    {
-        public override int ExecuteNonQuery()
-        {
-            CommandText = owner.Translate(CommandText);
-            return base.ExecuteNonQuery();
-        }
-    }
+        work(database);
+        return 0;
+    });
 }
