@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
@@ -378,8 +379,8 @@ public partial class BudgetView : UserControl
         // Purchases with no category count against no cap, so the page says how many there are and how to file them.
         var unfiled = details.Where(detail => detail.Name == BudgetMath.UncategorizedLabel).Sum(detail => detail.Rows.Count);
         NeedCategory.Text = unfiled == 1
-            ? "1 purchase needs a category. Right-click it under Uncategorized and choose Change category."
-            : $"{unfiled} purchases need a category. Right-click one under Uncategorized and choose Change category.";
+            ? "1 purchase needs a category. Right-click it under Uncategorized, or use its ⋯ button, and choose Change category."
+            : $"{unfiled} purchases need a category. Right-click one under Uncategorized, or use its ⋯ button, and choose Change category.";
         NeedCategory.Visibility = Shown(unfiled > 0 && search.Length == 0);
         NoPurchases.Text = search.Length > 0 ? $"No purchases match \"{search}\" this month." : "No purchases this month.";
         NoPurchases.Visibility = Shown(rows.Count == 0);
@@ -1012,6 +1013,29 @@ public partial class BudgetView : UserControl
             return;
         }
 
+        OpenMenu(row, e, PurchaseMenu(purchase));
+    }
+
+    /// <summary>The row's ⋯ button opens the same menu as right-click, dropping down from the button.</summary>
+    private void OnPurchaseMoreClicked(object sender, RoutedEventArgs e)
+    {
+        var button = (FrameworkElement)sender;
+        if (button.DataContext is not PurchaseRow { Row: var purchase })
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _menuOpen = true;
+        RowMenu.Open(button, PlacementMode.Bottom, PurchaseMenu(purchase), () =>
+        {
+            _menuOpen = false;
+            Work.Show(Refresh);
+        });
+    }
+
+    private List<RowMenuEntry> PurchaseMenu(SpendingRow purchase)
+    {
         var categories = BudgetCategories
             .Where(category => category.Name != purchase.Category)
             .Select(category => new RowMenuEntry(category.Name, () => Fire(() => _database.CategorizePurchase(purchase.Id, category.Name).Text)))
@@ -1032,7 +1056,7 @@ public partial class BudgetView : UserControl
 
         entries.Add(new RowMenuEntry("Copy merchant", () => RowMenu.Copy(MerchantName.Clean(purchase.Title))));
         entries.Add(new RowMenuEntry("Delete", () => DeletePurchase(purchase)));
-        OpenMenu(row, e, entries);
+        return entries;
     }
 
     /// <summary>
