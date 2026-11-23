@@ -46,16 +46,14 @@ public sealed partial class WaypointDatabase
     public IReadOnlyList<NoteFileRecord> GetNoteFileRecords(string clientId)
     {
         using var lease = Connect(out var connection);
-        using (var transaction = connection.BeginTransaction())
+        using (var transaction = Begin(connection))
         {
             using var mine = connection.CreateCommand();
-            mine.Transaction = transaction;
             mine.CommandText = "SELECT EXISTS (SELECT 1 FROM pc_note_files WHERE client_id = $client)";
             mine.Parameters.AddWithValue("$client", clientId);
             if ((long)mine.ExecuteScalar()! == 0)
             {
                 using var adopt = connection.CreateCommand();
-                adopt.Transaction = transaction;
                 adopt.CommandText = """
                     INSERT OR IGNORE INTO pc_note_files (client_id, note_id, path, file_hash, size, modified_ticks, title, folder_id, body_hash)
                     SELECT $client, note_id, path, file_hash, size, modified_ticks, title, folder_id, body_hash FROM note_files;

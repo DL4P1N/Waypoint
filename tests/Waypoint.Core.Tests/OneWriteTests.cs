@@ -216,4 +216,27 @@ public sealed class OneWriteTests : IDisposable
         go.SetResult();
         Assert.Equal("1", await later!);
     }
+
+    [Fact]
+    public void A_pcs_note_file_records_are_read_inside_a_write_and_taken_over_with_it()
+    {
+        var record = new NoteFileRecord(1, "made-up.md", "made-up-hash", 10, 20, "Made up note", null, "made-up-body");
+        _database.SetNoteFileRecord(record);
+
+        var stopped = Record.Exception(() => _database.InOneWrite(database =>
+        {
+            Assert.Equal([record], database.GetNoteFileRecords("made-up-desk"));
+            throw new MadeUpStop();
+        }));
+
+        // Taking the old records over went with the write that failed, so they still wait for whichever PC asks first.
+        Assert.IsType<MadeUpStop>(stopped);
+        Assert.Equal([record], _database.GetNoteFileRecords());
+
+        Assert.Equal([record], _database.InOneWrite(database => database.GetNoteFileRecords("made-up-desk")));
+        Assert.Empty(_database.GetNoteFileRecords());
+        Assert.Equal([record], _database.GetNoteFileRecords("made-up-desk"));
+    }
+
+    private sealed class MadeUpStop : Exception;
 }

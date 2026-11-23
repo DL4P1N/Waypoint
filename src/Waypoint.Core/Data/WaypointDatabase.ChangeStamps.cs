@@ -96,10 +96,9 @@ public sealed partial class WaypointDatabase
         }
 
         // Swapped in one write, so the count never goes unmoved by a change made between the old going and the new coming.
-        using var transaction = connection.BeginTransaction();
+        using var transaction = Begin(connection);
         using (var swap = connection.CreateCommand())
         {
-            swap.Transaction = transaction;
             swap.CommandText = string.Concat(stale.Select(name => $"DROP TRIGGER IF EXISTS \"{name}\";\n"))
                 + string.Concat(missing.Select(trigger => $"CREATE TRIGGER IF NOT EXISTS {trigger.Name} {trigger.Sql};\n"));
             swap.ExecuteNonQuery();
