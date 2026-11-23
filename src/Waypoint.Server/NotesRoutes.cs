@@ -221,6 +221,10 @@ public static class NotesRoutes
             context.Request.Headers[ServerClient.ClientHeader].ToString() is { Length: > 0 } id ? id : null;
 
         group.MapGet("/file-states", () => notes.Value.Data.GetNoteFileStates());
+
+        // Moves whenever anything the sync reads here changes, so a PC that finds it where it was after its last
+        // pass skips the next one. Its value means nothing else. Null when it can't be read, and then the PC syncs.
+        group.MapGet("/stamp", () => new TextValue(notes.Value.Database.NotesChangeStamp()));
         group.MapGet("/files", (HttpContext context) =>
             Pc(context) is { } pc ? notes.Value.Database.GetNoteFileRecords(pc) : notes.Value.Data.GetNoteFileRecords());
         group.MapPut("/files", (NoteFileRecord record, HttpContext context) =>
