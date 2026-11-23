@@ -64,6 +64,8 @@ public partial class App
 
             _later.Clear();
             StopTimers();
+            _askKey?.Dispose();
+            _askKey = null;
             return System.Threading.Tasks.Task.FromResult(true);
         },
 

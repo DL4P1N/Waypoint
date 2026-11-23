@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Interop;
 
 namespace Waypoint.App;
@@ -7,7 +8,7 @@ namespace Waypoint.App;
 /// <summary>Registers Ctrl+Alt with a key system-wide, such as M for marking a recording.</summary>
 public sealed class GlobalHotkey : IDisposable
 {
-    private const int HotkeyId = 1;
+    private static int _lastId;
     private const int WmHotkey = 0x0312;
     private const uint ModAlt = 0x0001;
     private const uint ModControl = 0x0002;
@@ -16,12 +17,21 @@ public sealed class GlobalHotkey : IDisposable
     /// <summary>Ctrl+Alt+M, for marking a moment while recording. Registered only while a recording is going.</summary>
     public const uint VkM = 0x4D;
 
+    /// <summary>Ctrl+Alt+Space, for asking Waypoint from anywhere.</summary>
+    public const uint VkSpace = 0x20;
+
     private static readonly IntPtr MessageOnlyParent = new(-3);
 
     private readonly HwndSource _source;
     private readonly Action _pressed;
     private readonly uint _key;
+
+    /// <summary>Each key has its own id, so two registered at once never answer for each other.</summary>
+    private readonly int _id = Interlocked.Increment(ref _lastId);
     private bool _registered;
+
+    /// <summary>This key's id with Windows, different for every one made.</summary>
+    public int Id => _id;
 
     public GlobalHotkey(Action pressed, uint key)
     {
@@ -31,9 +41,15 @@ public sealed class GlobalHotkey : IDisposable
         _source.AddHook(OnMessage);
     }
 
+    /// <summary>False when another app already has the keys, which isn't a problem worth stopping for.</summary>
     public bool Register()
     {
-        _registered = RegisterHotKey(_source.Handle, HotkeyId, ModControl | ModAlt | ModNoRepeat, _key);
+        if (_registered)
+        {
+            return true;
+        }
+
+        _registered = RegisterHotKey(_source.Handle, _id, ModControl | ModAlt | ModNoRepeat, _key);
         return _registered;
     }
 
@@ -41,7 +57,8 @@ public sealed class GlobalHotkey : IDisposable
     {
         if (_registered)
         {
-            UnregisterHotKey(_source.Handle, HotkeyId);
+            UnregisterHotKey(_source.Handle, _id);
+            _registered = false;
         }
 
         _source.RemoveHook(OnMessage);
@@ -50,7 +67,7 @@ public sealed class GlobalHotkey : IDisposable
 
     private IntPtr OnMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == WmHotkey && wParam.ToInt32() == HotkeyId)
+        if (message == WmHotkey && wParam.ToInt32() == _id)
         {
             handled = true;
             _pressed();

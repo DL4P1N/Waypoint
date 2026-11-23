@@ -83,6 +83,9 @@ public partial class App : System.Windows.Application
     private Waypoint.Core.Recording.ClassStartOffer? _recordOffer;
     private Forms.ToolStripMenuItem? _recordItem;
     private CaptureWindow _captureWindow = null!;
+
+    /// <summary>Ctrl+Alt+Space opens Ask Waypoint from anywhere, when no other app has those keys.</summary>
+    private GlobalHotkey? _askKey;
     private ItemsWindow _itemsWindow = null!;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -398,6 +401,7 @@ public partial class App : System.Windows.Application
         }
 
         _tray = CreateTray();
+        RegisterAskKey();
         RefreshStatus();
         if (!_sends)
         {
