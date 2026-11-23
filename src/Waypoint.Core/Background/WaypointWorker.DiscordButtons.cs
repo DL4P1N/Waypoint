@@ -317,11 +317,11 @@ public sealed partial class WaypointWorker
 
     /// <summary>
     /// The one item held from earlier, taken so it's shown only this once, as a line and its Start and Not now for a
-    /// card that's already going out. Nothing when there's none.
+    /// card that's already going out. Nothing when there's none. <paramref name="write"/> takes it inside that write.
     /// </summary>
-    private (string? Line, IReadOnlyList<CardAction>? Actions) TakeAfterThisLine()
+    private (string? Line, IReadOnlyList<CardAction>? Actions) TakeAfterThisLine(Data.WaypointDatabase? write = null)
     {
-        if (_database.TakeAfterThis(_clock()) is not { } item)
+        if ((write ?? _database).TakeAfterThis(_clock()) is not { } item)
         {
             return default;
         }
