@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Waypoint.Core.Data;
 using Waypoint.Core.Notes;
 using Waypoint.Core.Remote;
 
@@ -14,9 +16,14 @@ public sealed partial class NotesApiTests
     private const string StampPath = "/api/notes/stamp";
     private const string FileStatesPath = "/api/notes/file-states";
 
-    /// <summary>Notes every path asked for, and can answer the stamp as a server from before would, with a 404.</summary>
-    private sealed class Counted(HttpMessageHandler inner) : DelegatingHandler(inner)
+    /// <summary>
+    /// Notes every path asked for, and can answer the stamp as a server from before would, with a 404. What it
+    /// passes requests on to can be swapped, as for a server started again at the same address.
+    /// </summary>
+    private sealed class Counted(HttpMessageHandler inner) : HttpMessageHandler
     {
+        public HttpMessageInvoker Target { get; set; } = new(inner);
+
         public List<string> Used { get; } = [];
 
         public bool NoStamp { get; set; }
@@ -31,7 +38,7 @@ public sealed partial class NotesApiTests
 
             return NoStamp && path == StampPath
                 ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))
-                : base.SendAsync(request, cancellationToken);
+                : Target.SendAsync(request, cancellationToken);
         }
 
         public string[] TakeUsed()
@@ -88,6 +95,49 @@ public sealed partial class NotesApiTests
         var deleted = notes.NotesChangeStamp();
         Assert.NotEqual(moved, deleted);
         Assert.NotNull(deleted);
+    }
+
+    [Fact]
+    public void The_notes_stamp_moves_when_a_folder_is_renamed_or_deleted()
+    {
+        var (notes, _, _) = Pc();
+        var folder = notes.CreateNoteFolder("Chemistry", null, DateTime.Now).Id;
+
+        var before = notes.NotesChangeStamp();
+        Assert.Null(notes.RenameNoteFolder(folder, "Organic chemistry").Problem);
+        var renamed = notes.NotesChangeStamp();
+        Assert.NotEqual(before, renamed);
+
+        notes.DeleteNoteFolder(folder, NotesInFolder.Refuse);
+        Assert.Null(notes.GetNoteFolder(folder));
+        Assert.NotEqual(renamed, notes.NotesChangeStamp());
+    }
+
+    [Fact]
+    public void After_the_server_restarts_a_settled_notes_folder_sync_makes_a_full_pass()
+    {
+        var root = Path.Combine(_pc, "Waypoint Notes");
+        var (notes, counted) = CountedPc();
+        var files = new NoteFiles(notes.ForSync(), root);
+        notes.CreateNote("Groceries", "milk", DateTime.Now);
+        files.Sync(DateTime.Now);
+        files.Sync(DateTime.Now);
+        var before = notes.NotesChangeStamp();
+        counted.TakeUsed();
+        Assert.Equal(new NoteSyncResult(0, 0, 0, false), files.Sync(DateTime.Now));
+        Assert.Equal([StampPath], counted.TakeUsed());
+
+        // Started again over the same data, with nothing changed: the count is the same, but it's another run's.
+        _factory.Dispose();
+        SqliteConnection.ClearAllPools();
+        using var restarted = StartServer();
+        counted.Target = new HttpMessageInvoker(restarted.Server.CreateHandler());
+
+        Assert.NotEqual(before, notes.NotesChangeStamp());
+        counted.TakeUsed();
+        files.Sync(DateTime.Now);
+        Assert.Contains(FileStatesPath, counted.TakeUsed());
+        Assert.Equal("milk", File.ReadAllText(Path.Combine(root, "Groceries.md")));
     }
 
     [Fact]

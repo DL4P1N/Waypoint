@@ -36,7 +36,12 @@ public sealed partial class NotesApiTests : IDisposable
         Directory.CreateDirectory(_folder);
         Directory.CreateDirectory(_pc);
         _token = ServerToken.Create(_folder);
-        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        _factory = StartServer();
+    }
+
+    /// <summary>The server over this test's data folder. Started again, it's the server after a restart.</summary>
+    private WebApplicationFactory<Program> StartServer() =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Waypoint:DataDirectory", _folder);
             builder.UseSetting("Waypoint:RunBackground", "false");
@@ -48,7 +53,6 @@ public sealed partial class NotesApiTests : IDisposable
                 services.AddSingleton<IClaudeRunner>(_haiku);
             });
         });
-    }
 
     public void Dispose()
     {
