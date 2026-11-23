@@ -146,6 +146,24 @@ public sealed class ServerNotesData : INotesData
 
     public void NotesRestoreHandled(string stamp) => _server.Send(Put, "api/notes/files/restored", new PreferenceValue(stamp));
 
+    /// <summary>
+    /// The server's count of changes to anything the sync reads there, asked of it each time and never taken from a
+    /// kept answer, so a sync that finds it where it was after its last pass skips reading every note. Null when it
+    /// can't be had: the server is away or busy, or is one from before that has none, and then the sync makes a full
+    /// pass as it always has. A restore or a restart of the server gives a count no earlier one matches.
+    /// </summary>
+    public string? NotesChangeStamp()
+    {
+        try
+        {
+            return _server.Send<TextValue>(Get, "api/notes/stamp")?.Value is { Length: > 0 } stamp ? stamp : null;
+        }
+        catch (Exception exception) when (exception is ServerUnavailableException or InvalidOperationException or HttpRequestException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
     // Notes
 
     public NoteDetail? GetNote(long id)

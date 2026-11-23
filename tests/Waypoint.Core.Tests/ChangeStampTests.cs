@@ -57,6 +57,17 @@ public sealed class ChangeStampTests : IDisposable
     }
 
     [Fact]
+    public void A_notes_folder_kept_for_one_pc_in_server_mode_moves_the_stamp()
+    {
+        Changes(() => _database.SetPreference("note_files_synced_root:made-up-pc", Path.Combine(_folder, "pc notes")));
+        Changes(() => _database.SetPreference("note_files_synced_root:made-up-pc", Path.Combine(_folder, "other notes")));
+
+        var stamp = _database.NotesChangeStamp();
+        _database.SetPreference("note_files_synced_root_made_up", "1");
+        Assert.Equal(stamp, _database.NotesChangeStamp());
+    }
+
+    [Fact]
     public void A_restore_never_gives_back_a_stamp_from_before_it()
     {
         _database.CreateNote("Made up note", "Made up body", Now);

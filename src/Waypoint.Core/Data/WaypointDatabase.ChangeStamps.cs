@@ -13,7 +13,7 @@ public sealed partial class WaypointDatabase
 
     /// <summary>
     /// What changes a note's file or its forum post: the note, its capture's text, its folders, its sources, its
-    /// file records, its forum post, and the notes folder's own settings. Each change, from anywhere, moves the count.
+    /// file records, its forum post, and the notes folder's own settings, each PC's own folder in server mode included. Each change, from anywhere, moves the count.
     /// </summary>
     private static readonly (string Table, string? Columns, string? When)[] NotesStampTriggers =
     [
@@ -24,7 +24,7 @@ public sealed partial class WaypointDatabase
         ("note_files", null, null),
         ("pc_note_files", null, null),
         ("discord_posts", null, $"{{0}}.kind = '{ThreadNote}'"),
-        ("preferences", null, $"{{0}}.key IN ('{NoteFilesRootKey}', '{NotesRestoredKey}', '{NotesRestoreHandledKey}') OR {{0}}.key LIKE '{NotesRestoreHandledKey}:%'"),
+        ("preferences", null, $"{{0}}.key IN ('{NoteFilesRootKey}', '{NotesRestoredKey}', '{NotesRestoreHandledKey}') OR {{0}}.key LIKE '{NotesRestoreHandledKey}:%' OR {{0}}.key LIKE '{NoteFilesRootKey}:%'"),
     ];
 
     /// <summary>Told apart from the counts of any other copy of the data this one held, such as before a restore.</summary>

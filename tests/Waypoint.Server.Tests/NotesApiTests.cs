@@ -20,7 +20,7 @@ namespace Waypoint.Server.Tests;
 /// The Notes page through the server, run in memory against a database in a temporary folder. Haiku is a fake that
 /// answers at once, and the server can be made to go away and come back, for what happens to typing meanwhile.
 /// </summary>
-public sealed class NotesApiTests : IDisposable
+public sealed partial class NotesApiTests : IDisposable
 {
     private const long AttachmentLimit = 1000;
     private const long RequestLimit = 100_000;
@@ -36,7 +36,12 @@ public sealed class NotesApiTests : IDisposable
         Directory.CreateDirectory(_folder);
         Directory.CreateDirectory(_pc);
         _token = ServerToken.Create(_folder);
-        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        _factory = StartServer();
+    }
+
+    /// <summary>The server over this test's data folder. Started again, it's the server after a restart.</summary>
+    private WebApplicationFactory<Program> StartServer() =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Waypoint:DataDirectory", _folder);
             builder.UseSetting("Waypoint:RunBackground", "false");
@@ -48,7 +53,6 @@ public sealed class NotesApiTests : IDisposable
                 services.AddSingleton<IClaudeRunner>(_haiku);
             });
         });
-    }
 
     public void Dispose()
     {
@@ -167,6 +171,7 @@ public sealed class NotesApiTests : IDisposable
     [InlineData("/api/notes/folders")]
     [InlineData("/api/notes/files")]
     [InlineData("/api/notes/file-states")]
+    [InlineData("/api/notes/stamp")]
     [InlineData("/api/notes/search?words=x")]
     [InlineData("/api/notes/1/sources")]
     [InlineData("/api/notes/1/sources/1/file")]
