@@ -200,6 +200,51 @@ public sealed class NoteJobsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_start_sent_again_with_the_same_key_gives_back_the_same_job_and_runs_it_once()
+    {
+        var jobs = Jobs();
+        var runs = 0;
+        var release = new TaskCompletionSource();
+        async Task<NoteJobState> Work(CancellationToken stop)
+        {
+            Interlocked.Increment(ref runs);
+            await release.Task;
+            return Written();
+        }
+
+        var first = jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:write")!.Id;
+        var again = jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:write")!.Id;
+        var other = jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:other")!.Id;
+
+        // Two are running, so a new start is turned away, but the same one sent again is still given back.
+        Assert.Null(jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:third"));
+        Assert.Equal(first, jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:write")!.Id);
+
+        release.SetResult();
+        Assert.Equal(NoteJobOutcome.Succeeded, (await Finished(jobs, first)).Kind());
+        await Finished(jobs, other);
+
+        Assert.Equal(first, again);
+        Assert.NotEqual(first, other);
+        Assert.Equal(first, jobs.Start(NoteJobKind.Notes, 7, Work, once: "pc-1:write")!.Id);
+        Assert.Equal(2, runs);
+    }
+
+    [Fact]
+    public async Task A_key_whose_job_was_forgotten_starts_a_new_one()
+    {
+        var jobs = Jobs();
+        var first = jobs.Start(NoteJobKind.Notes, 7, _ => Task.FromResult(Written()), once: "pc-1:write")!.Id;
+        await Finished(jobs, first);
+
+        _now = _now.AddHours(2);
+        var later = jobs.Start(NoteJobKind.Notes, 7, _ => Task.FromResult(Written()), once: "pc-1:write")!.Id;
+
+        Assert.NotEqual(first, later);
+        Assert.Equal(NoteJobOutcome.Succeeded, (await Finished(jobs, later)).Kind());
+    }
+
+    [Fact]
     public void An_unknown_job_reports_lost_the_way_it_always_did()
     {
         var state = Jobs().State("made-up-job");

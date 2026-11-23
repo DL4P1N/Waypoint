@@ -22,8 +22,9 @@ public static class BudgetRoutes
         budget.MapGet("/purchases", (string? words, int? limit, WaypointServer server) =>
             server.Database.SearchPurchases(words, Math.Clamp(limit ?? 20, 1, 100)));
 
-        budget.MapPost("/expenses", (ExpenseRequest request, WaypointServer server) =>
-            server.Database.AddExpense(request.Title, request.Cents, request.Category, request.Date, DateTime.Now));
+        // An expense, a repayment, and pay received are each kept once per key the PC sent them with.
+        budget.MapPost("/expenses", (ExpenseRequest request, HttpContext context, WaypointServer server) =>
+            SentOnce.Run(context, server.Database, database => database.AddExpense(request.Title, request.Cents, request.Category, request.Date, DateTime.Now)));
         budget.MapPost("/ops", (BudgetOp op, WaypointServer server) => new TextValue(server.Database.ApplyBudgetOp(op, Today)));
         budget.MapPost("/categories", (CategoryRequest request, WaypointServer server) =>
             server.Database.AddCategory(request.Name, request.MonthlyCents, request.Period));
@@ -38,7 +39,8 @@ public static class BudgetRoutes
         budget.MapDelete("/goal", (WaypointServer server) => server.Database.ClearSavingsGoal());
         budget.MapPost("/scores", (CreditScoreRequest request, WaypointServer server) =>
             server.Database.AddCreditScore(request.Score, request.Source, request.At, request.Note, DateTime.Now));
-        budget.MapPost("/pay-received", (AmountRequest request, WaypointServer server) => server.Database.ConfirmPayTyped(request.Cents, Today));
+        budget.MapPost("/pay-received", (AmountRequest request, HttpContext context, WaypointServer server) =>
+            SentOnce.Run(context, server.Database, database => database.ConfirmPayTyped(request.Cents, Today)));
         budget.MapPost("/wait-hours", (TextValue hours, WaypointServer server) => server.Database.SetDefaultWaitHours(hours.Value));
         budget.MapGet("/patterns", (WaypointServer server) => server.Database.GetSpendingPatterns(Today));
         budget.MapPost("/afford", (AffordCheckRequest request, WaypointServer server) => server.Database.CheckAffordable(request.Cents, request.Card, Today));
@@ -52,8 +54,8 @@ public static class BudgetRoutes
             server.Database.CategorizePurchase(id, request.Name));
         budget.MapPost("/purchases/{id:long}/one-off", (long id, FlagValue oneOff, WaypointServer server) =>
             server.Database.MarkPurchaseOneOff(id, oneOff.Value));
-        budget.MapPost("/purchases/{id:long}/repayment", (long id, AmountRequest request, WaypointServer server) =>
-            server.Database.RecordRepayment(id, request.Cents));
+        budget.MapPost("/purchases/{id:long}/repayment", (long id, AmountRequest request, HttpContext context, WaypointServer server) =>
+            SentOnce.Run(context, server.Database, database => database.RecordRepayment(id, request.Cents)));
         budget.MapPost("/purchases/{id:long}/delete", (long id, WaypointServer server) => server.Database.DeletePurchase(id, DateTime.Now));
         budget.MapPost("/waits/{id:long}/resolve", (long id, TextValue decision, WaypointServer server) =>
             decision.Value is { Length: > 0 } value ? Results.Ok(server.Database.ResolveWaitItem(id, value)) : Results.BadRequest());

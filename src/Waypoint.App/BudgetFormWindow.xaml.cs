@@ -218,10 +218,11 @@ public partial class BudgetFormWindow : Window
             {
                 return (submit?.Invoke(this), null);
             }
-            catch (ServerUnavailableException)
+            catch (ServerUnavailableException away)
             {
                 // In server mode, with the server away. What was typed stays in the form, so it can be saved once it's back.
-                return (null, $"{ServerAway} What you typed is still here.");
+                // One the server was slow to answer may have gone through, and says so.
+                return (null, away.TimedOut ? away.Message : $"{ServerAway} What you typed is still here.");
             }
             catch (ServerTimedOutException slow)
             {

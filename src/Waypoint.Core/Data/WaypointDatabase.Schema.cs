@@ -159,6 +159,7 @@ public sealed partial class WaypointDatabase
         CreateDiscordSendTables();
         AddDiscordSendShownHere();
         CreateNoteJobTables();
+        CreateSentOnceTables();
         CreateDiscordInboxTables();
         AddDiscordGivenUp();
         AddDiscordSendTriedName();

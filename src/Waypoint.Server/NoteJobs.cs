@@ -48,11 +48,19 @@ public sealed class NoteJobs
 
     /// <summary>
     /// Starts a job, or returns null when as many as allowed are already running, so the PC can try later.
-    /// <paramref name="noteId"/> is the note it writes, when that's known at the start.
+    /// <paramref name="noteId"/> is the note it writes, when that's known at the start. With <paramref name="once"/>,
+    /// the key the PC sent the start with, a job already started under it is given back instead of starting another,
+    /// so a start sent again after its answer was lost checks on the first.
     /// </summary>
-    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work)
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null)
     {
         Sweep();
+        var seen = once is not null && _store.SentOnceAnswer(once) is { } kept ? kept : null;
+        if (seen is not null && StillKnown(seen) is { } already)
+        {
+            return already;
+        }
+
         if (!_running.Wait(0))
         {
             return null;
@@ -61,12 +69,27 @@ public sealed class NoteJobs
         var id = Guid.NewGuid().ToString("N");
         try
         {
-            _store.AddNoteJob(id, kind, noteId, _utcNow());
+            // A key whose job has since been forgotten starts a new one, as sending it fresh would.
+            var started = once is null || seen is not null
+                ? Add(_store)
+                : _store.Once(once, _utcNow(), Add);
+            if (started.Id != id)
+            {
+                // Started under the same key a moment ago, by the same start sent twice at once.
+                _running.Release();
+                return started;
+            }
         }
         catch
         {
             _running.Release();
             throw;
+        }
+
+        NoteJobStarted Add(WaypointDatabase store)
+        {
+            store.AddNoteJob(id, kind, noteId, _utcNow());
+            return new NoteJobStarted(id);
         }
 
         // Known as running before it starts, so a job that ends at once is never missed while it's kept.
@@ -95,6 +118,22 @@ public sealed class NoteJobs
         }
 
         return _store.GetNoteJob(id) is { } kept ? FromStore(kept) : NoteJobState.Lost();
+    }
+
+    /// <summary>The job a kept start answered with, while it's still known here.</summary>
+    private NoteJobStarted? StillKnown(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<NoteJobStarted>(json, RemoteJson.Options) is { Id.Length: > 0 } job
+                && (_jobs.ContainsKey(job.Id) || _store.GetNoteJob(job.Id) is not null)
+                    ? job
+                    : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Stops a job. A job that already ended, or one that isn't known, is left as it is.</summary>

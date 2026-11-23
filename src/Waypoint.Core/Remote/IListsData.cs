@@ -95,7 +95,8 @@ public sealed class ServerListsData(ServerClient server) : IListsData
 
     public string DeleteList(string name, DateTime now) => server.Send<TextValue>(Post, "api/lists/delete", new NameRequest(name)).Value ?? "";
 
-    public void AddListEntry(string list, string text, DateTime now) => server.Send(Post, "api/lists/entries", new ListEntryRequest(list, text));
+    /// <summary>Sent once, so adding the same again after the answer was lost adds it once.</summary>
+    public void AddListEntry(string list, string text, DateTime now) => server.SendOnce(Post, "api/lists/entries", new ListEntryRequest(list, text));
 
     public void SetEntryDone(ListEntry entry, bool done, DateTime now) => server.Send(Post, "api/lists/entries/done", new EntryDoneRequest(entry, done));
 

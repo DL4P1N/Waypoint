@@ -91,7 +91,12 @@ public sealed class ServerToDoData(ServerClient server) : IToDoData
 
     public void SetDone(StoredItem item, bool done) => server.Send(Post, "api/items/done", new DoneRequest(item, done));
 
-    public DoseReply TakeDose(StoredItem item, DateTime now) => server.Send<DoseReply>(Post, "api/items/took", new ItemRequest(item));
+    /// <summary>
+    /// Sent once, so taking it again after the answer was lost counts one dose. It's the same dose whatever else
+    /// about the item was read since, so only which item it is makes two the same.
+    /// </summary>
+    public DoseReply TakeDose(StoredItem item, DateTime now) =>
+        server.SendOnce<DoseReply>(Post, "api/items/took", new ItemRequest(item), same: $"took:{item.Source}:{item.Id}");
 
     public bool SetDose(StoredItem item, bool dose) => server.Send<FlagValue>(Post, "api/items/dose", new DoseRequest(item, dose)).Value;
 

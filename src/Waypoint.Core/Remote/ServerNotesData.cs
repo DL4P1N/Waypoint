@@ -530,7 +530,8 @@ public sealed class ServerNotesData : INotesData
         NoteJobState? state;
         try
         {
-            state = await RunJobAsync(() => _server.Send<NoteJobStarted>(Post, $"api/notes/{Real(noteId)}/write", new WriteNotesRequest(request, replaceEdits, marks)), cancellationToken);
+            // Started once, so asking again after the answer was lost checks on the job already started there.
+            state = await RunJobAsync(() => _server.SendOnce<NoteJobStarted>(Post, $"api/notes/{Real(noteId)}/write", new WriteNotesRequest(request, replaceEdits, marks)), cancellationToken);
         }
         catch (ServerBusyException)
         {
@@ -570,7 +571,7 @@ public sealed class ServerNotesData : INotesData
         NoteJobState? state;
         try
         {
-            state = await RunJobAsync(() => _server.Send<NoteJobStarted>(Post, "api/notes/study", new StudyRequest(exam, folderId, replaceEdits)), cancellationToken);
+            state = await RunJobAsync(() => _server.SendOnce<NoteJobStarted>(Post, "api/notes/study", new StudyRequest(exam, folderId, replaceEdits)), cancellationToken);
         }
         catch (ServerBusyException)
         {

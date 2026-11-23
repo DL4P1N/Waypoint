@@ -500,6 +500,72 @@ public sealed partial class ServerClient
 
     public void Send(HttpMethod method, string path, object? body = null) => SendRaw(method, path, body);
 
+    /// <summary>The header a change that mustn't happen twice is sent with, so the server can tell a resend.</summary>
+    public const string OnceHeader = "X-Waypoint-Once";
+
+    /// <summary>
+    /// How long a change sent without an answer back is taken to be the same one when it's sent again. After that,
+    /// the same again is taken to be a new one, such as a second coffee the next morning.
+    /// </summary>
+    public static readonly TimeSpan OnceReuse = TimeSpan.FromHours(1);
+
+    private readonly Lock _onceGate = new();
+
+    /// <summary>The last change sent once that no answer came back for, what it was, and the key it went with.</summary>
+    private (string Same, string Key, DateTime At)? _unanswered;
+
+    /// <summary>
+    /// A change that mustn't happen twice, such as an expense or a dose taken. It goes with a key of its own, and the
+    /// same change sent again before an answer came back goes with the same key, so a server that did it the first
+    /// time without the PC hearing gives back what it said then instead of doing it again. A server from before
+    /// leaves the key unread. <paramref name="same"/> says what makes two of them the same, the path and body when
+    /// it's not given.
+    /// </summary>
+    public T SendOnce<T>(HttpMethod method, string path, object? body = null, string? same = null) => Parse<T>(SendOnceRaw(method, path, body, same));
+
+    /// <inheritdoc cref="SendOnce{T}(HttpMethod, string, object?, string?)"/>
+    public void SendOnce(HttpMethod method, string path, object? body = null, string? same = null) => SendOnceRaw(method, path, body, same);
+
+    private string SendOnceRaw(HttpMethod method, string path, object? body, string? same)
+    {
+        same ??= $"{method} {path} {(body is null ? "" : JsonSerializer.Serialize(body, body.GetType(), RemoteJson.Options))}";
+        string key;
+        lock (_onceGate)
+        {
+            if (_unanswered is not { } unanswered || unanswered.Same != same || UtcNow() - unanswered.At > OnceReuse)
+            {
+                unanswered = (same, $"{ClientId}:{Guid.NewGuid():N}", UtcNow());
+            }
+
+            _unanswered = unanswered with { At = UtcNow() };
+            key = unanswered.Key;
+        }
+
+        try
+        {
+            var answer = SendRaw(method, path, body, once: key);
+            Answered(key);
+            return answer;
+        }
+        catch (Exception exception) when (exception is not ServerUnavailableException)
+        {
+            // The server answered, even if only to turn it down, so the same again is a new one.
+            Answered(key);
+            throw;
+        }
+    }
+
+    private void Answered(string key)
+    {
+        lock (_onceGate)
+        {
+            if (_unanswered is { } sent && sent.Key == key)
+            {
+                _unanswered = null;
+            }
+        }
+    }
+
     /// <summary>A change with a large body, such as a lecture's transcript, sent with the longer wait files get.</summary>
     public T SendLong<T>(HttpMethod method, string path, object? body = null) => Parse<T>(SendRaw(method, path, body, slow: true));
 
@@ -551,7 +617,7 @@ public sealed partial class ServerClient
     private string SendRaw(HttpMethod method, string path, object? body, bool slow) =>
         SendRaw(method, path, body, slow ? FileHttp : null);
 
-    private string SendRaw(HttpMethod method, string path, object? body, HttpClient? client = null, string? check = null)
+    private string SendRaw(HttpMethod method, string path, object? body, HttpClient? client = null, string? check = null, string? once = null)
     {
         if (!IsOnline)
         {
@@ -562,6 +628,11 @@ public sealed partial class ServerClient
         try
         {
             using var request = client is null ? new HttpRequestMessage(method, path) : FileRequest(method, path);
+            if (once is not null)
+            {
+                request.Headers.Add(OnceHeader, once);
+            }
+
             if (body is not null)
             {
                 request.Content = new StringContent(JsonSerializer.Serialize(body, body.GetType(), RemoteJson.Options), Encoding.UTF8, "application/json");
@@ -579,12 +650,22 @@ public sealed partial class ServerClient
         {
             throw new ServerTimedOutException($"The server didn't answer in time. It may have gone through. Check {check} before trying again.", exception);
         }
+        catch (Exception exception) when (method != HttpMethod.Get && exception is TaskCanceledException or OperationCanceledException)
+        {
+            // Nothing here cancels a change, so this is the wait running out. The server may well have done it and
+            // only been slow to answer, so it isn't taken to be away, and the reads it answers carry on.
+            throw new ServerUnavailableException(once is null ? NotAnsweredInTime : NotAnsweredInTimeOnce, exception, timedOut: true);
+        }
         catch (Exception exception) when (IsConnectionProblem(exception, CancellationToken.None))
         {
             MarkOffline();
             throw Unavailable(exception);
         }
     }
+
+    public const string NotAnsweredInTime = "The server didn't answer in time, so that may have gone through. Check before trying it again.";
+
+    public const string NotAnsweredInTimeOnce = "The server didn't answer in time, so that may have gone through. Trying the same again won't do it twice.";
 
     private ServerUnavailableException Unavailable(Exception? inner = null) =>
         new(State == ServerState.NotPaired

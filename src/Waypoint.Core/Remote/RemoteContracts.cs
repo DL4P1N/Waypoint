@@ -100,8 +100,15 @@ public sealed record StillWaitingRequest(long? ItemId, DateOnly? Until);
 /// <summary>Items with their placements, which the dictionary type can't carry as JSON keys of its own.</summary>
 public sealed record PlacementEntry(long ItemId, Data.ItemPlacement Placement);
 
-/// <summary>The server couldn't be reached, or refused the pairing token. What's shown stays as it last was.</summary>
-public sealed class ServerUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
+/// <summary>
+/// The server couldn't be reached, or refused the pairing token. What's shown stays as it last was. TimedOut is set
+/// for a change the server didn't answer in time: it may have gone through, so the server isn't taken to be away and
+/// the message says so instead of "can't change yet".
+/// </summary>
+public sealed class ServerUnavailableException(string message, Exception? inner = null, bool timedOut = false) : Exception(message, inner)
+{
+    public bool TimedOut { get; } = timedOut;
+}
 
 /// <summary>
 /// A long change, such as a restore, ran out of time while the server was still working on it. It may have gone
