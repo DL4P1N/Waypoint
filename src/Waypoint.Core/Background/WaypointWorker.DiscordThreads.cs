@@ -401,9 +401,17 @@ public sealed partial class WaypointWorker
                     return;
                 }
 
-                foreach (var later in parts.Skip(index + 1))
+                // Taken away from the last back, each dropped from the row once it's gone, so one whose delete fails
+                // stays in the row and is tried again on a later round, rather than left in the post for good.
+                for (var later = parts.Count - 1; later > index; later--)
                 {
-                    await discord.DeleteAsync(row.Thread, later.Message);
+                    if (!await discord.DeleteInThreadAsync(row.Thread, parts[later].Message))
+                    {
+                        _database.SetDiscordThreadParts(row.Thread, parts);
+                        return;
+                    }
+
+                    parts.RemoveAt(later);
                 }
 
                 parts.RemoveRange(index, parts.Count - index);
