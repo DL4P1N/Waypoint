@@ -483,6 +483,42 @@ public sealed class RecorderTests : IDisposable
     }
 
     [Fact]
+    public void Working_files_left_by_a_copy_cut_off_before_are_swept_when_transcribing_starts_but_kept_copies_stay()
+    {
+        var audio = Path.Combine(_folder, "audio");
+        var work = Path.Combine(_folder, "whisper", "work");
+        Directory.CreateDirectory(audio);
+        Directory.CreateDirectory(work);
+        var old = DateTime.UtcNow.AddHours(-3);
+        string Made(string folder, string name, DateTime written)
+        {
+            var path = Path.Combine(folder, name);
+            File.WriteAllText(path, "made up");
+            File.SetLastWriteTimeUtc(path, written);
+            return path;
+        }
+
+        var cutOff = Made(audio, "2026-11-03 1002 lecture.m4a.part", old);
+        var copying = Made(audio, "2026-11-03 1100 talk.m4a.part", DateTime.UtcNow);
+        var kept = Made(audio, "2026-11-03 1002 week 3.part 2.m4a", old);
+        var converting = Made(work, "job-4.part.wav", old);
+        var compressing = Made(work, "2026-11-03 1002 lecture.part.m4a", old);
+        var converted = Made(work, "job-5.wav", old);
+
+        using (var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now))
+        {
+            queue.Start();
+        }
+
+        Assert.False(File.Exists(cutOff));
+        Assert.False(File.Exists(converting));
+        Assert.False(File.Exists(compressing));
+        Assert.True(File.Exists(copying));
+        Assert.True(File.Exists(kept));
+        Assert.True(File.Exists(converted));
+    }
+
+    [Fact]
     public void A_hand_off_that_cant_be_saved_leaves_no_job_or_empty_note_and_the_recording_still_waiting()
     {
         using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);

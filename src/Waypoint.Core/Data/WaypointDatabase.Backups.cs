@@ -265,22 +265,33 @@ public sealed partial class WaypointDatabase
             path = BackupPath(at, suffix);
         }
 
+        // A copy cut off by a crash before, at any time, is never finished, so it goes rather than fill the disk.
+        Platform.PartFiles.SweepStale(BackupFolder, Platform.PartFiles.EndingIn(".partial"), Platform.PartFiles.StaleAfter);
         var partial = $"{path}.partial";
         File.Delete(partial);
-        using (Connect(out var source))
-        using (var target = OpenFile(partial, SqliteOpenMode.ReadWriteCreate))
+        try
         {
-            source.BackupDatabase(target);
+            using (Connect(out var source))
+            using (var target = OpenFile(partial, SqliteOpenMode.ReadWriteCreate))
+            {
+                source.BackupDatabase(target);
 
-            // The copy keeps a plain journal, so it's one file with no log beside it, and opening it to check it or
-            // restore from it never leaves one behind in the backups folder.
-            using var plain = target.CreateCommand();
-            plain.CommandText = "PRAGMA journal_mode = DELETE";
-            plain.ExecuteScalar();
+                // The copy keeps a plain journal, so it's one file with no log beside it, and opening it to check it or
+                // restore from it never leaves one behind in the backups folder.
+                using var plain = target.CreateCommand();
+                plain.CommandText = "PRAGMA journal_mode = DELETE";
+                plain.ExecuteScalar();
+            }
+
+            File.Move(partial, path);
+            return path;
         }
-
-        File.Move(partial, path);
-        return path;
+        finally
+        {
+            // A copy that didn't finish, such as with the disk full, goes with its journal.
+            Platform.PartFiles.TryDelete(partial);
+            Platform.PartFiles.TryDelete(partial + "-journal");
+        }
     }
 
     private string BackupPath(DateTime at, string suffix) =>

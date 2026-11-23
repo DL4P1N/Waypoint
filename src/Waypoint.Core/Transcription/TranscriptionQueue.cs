@@ -196,6 +196,7 @@ public sealed class TranscriptionQueue : IDisposable
     /// <summary>Starts the background worker, which carries on with any jobs left from last time.</summary>
     public void Start()
     {
+        SweepStaleParts();
         lock (_lock)
         {
             _loop ??= Task.Run(LoopAsync);
@@ -660,14 +661,33 @@ public sealed class TranscriptionQueue : IDisposable
         var extension = Path.GetExtension(source);
         var target = FreeAudioPath(stem, extension);
         var part = target + ".part";
-        await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
-        await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+        try
         {
-            await from.CopyToAsync(to, cancellationToken);
-        }
+            await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
+            await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            {
+                await from.CopyToAsync(to, cancellationToken);
+            }
 
-        File.Move(part, target);
-        return target;
+            File.Move(part, target);
+            return target;
+        }
+        finally
+        {
+            // A copy cut short, by a full disk or being stopped, is never finished, so it goes.
+            Delete(part);
+        }
+    }
+
+    /// <summary>
+    /// Working files left by a copy or conversion cut off when Waypoint last stopped suddenly. Only names that can't
+    /// be a kept copy are taken: in the audio folder ones ending in .part, and in the work folder, which holds only
+    /// Waypoint's own working files, any part file.
+    /// </summary>
+    private void SweepStaleParts()
+    {
+        Platform.PartFiles.SweepStale(_audioFolder, Platform.PartFiles.EndingIn(".part"), Platform.PartFiles.StaleAfter);
+        Platform.PartFiles.SweepStale(_workFolder, name => name.Contains(".part", StringComparison.OrdinalIgnoreCase), Platform.PartFiles.StaleAfter);
     }
 
     private string FreeAudioPath(string stem, string extension)
@@ -687,8 +707,10 @@ public sealed class TranscriptionQueue : IDisposable
         var extension = _converter.CompressedExtension;
         var target = FreeAudioPath(stem, extension);
 
-        // The encoder picks the kind of file from its extension, so the part file keeps it.
-        var part = Path.ChangeExtension(target, ".part" + extension);
+        // The encoder picks the kind of file from its extension, so the part file keeps it. It's made in the work
+        // folder, so one left by a crash can't be mistaken for a kept copy whose own name has ".part" in it.
+        Directory.CreateDirectory(_workFolder);
+        var part = Path.Combine(_workFolder, Path.GetFileNameWithoutExtension(target) + ".part" + extension);
         try
         {
             if (await _converter.CompressAsync(source, part, cancellationToken) && File.Exists(part) && new FileInfo(part).Length > 0)

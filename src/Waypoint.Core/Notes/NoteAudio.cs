@@ -163,15 +163,23 @@ public sealed class NoteAudio(WaypointDatabase database, string dataDirectory, F
             target = Path.Combine(_audioFolder, $"{stem} ({n}){extension}");
         }
 
+        // A copy cut short is never finished, so it goes. One left by a crash is swept when transcribing starts up.
         var part = target + ".part";
-        await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
-        await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+        try
         {
-            await from.CopyToAsync(to, cancellationToken);
-        }
+            await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
+            await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            {
+                await from.CopyToAsync(to, cancellationToken);
+            }
 
-        File.Move(part, target);
-        return target;
+            File.Move(part, target);
+            return target;
+        }
+        finally
+        {
+            Platform.PartFiles.TryDelete(part);
+        }
     }
 
     private static void TryDelete(string path)

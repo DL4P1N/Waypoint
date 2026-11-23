@@ -33,6 +33,20 @@ public sealed class BackupTests : IDisposable
     }
 
     [Fact]
+    public void ACopyCutOffBeforeIsSweptByTheNextBackup()
+    {
+        Directory.CreateDirectory(_database.BackupFolder);
+        var stale = Path.Combine(_database.BackupFolder, "waypoint-2026-11-01-100000.db.partial");
+        File.WriteAllText(stale, "half a copy");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-2));
+
+        _database.BackUpNow(Now);
+
+        Assert.False(File.Exists(stale));
+        Assert.Single(_database.GetBackups());
+    }
+
+    [Fact]
     public void ABackupHoldsTheNotesAtThatTime()
     {
         _database.CreateNote("Lecture 1", "Recursion basics", Now);

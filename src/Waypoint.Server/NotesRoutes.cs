@@ -6,6 +6,7 @@ using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 using Waypoint.Core.Files;
 using Waypoint.Core.Notes;
+using Waypoint.Core.Platform;
 using Waypoint.Core.Remote;
 
 namespace Waypoint.Server;
@@ -27,6 +28,9 @@ public sealed class ServerNotes
         // Files sent in Discord's notes channel make notes the same way as files sent from the PC's Notes page.
         server.Worker.NoteFiles = Data;
         Attachments = Path.Combine(server.DataDirectory, "attachments");
+
+        // An upload cut off when the server last stopped suddenly is never finished, so it goes rather than fill the disk.
+        PartFiles.SweepStale(Attachments, PartFiles.EndingIn(".part"), PartFiles.StaleAfter);
 
         // Jobs kept as running from before this start were cut off by a restart, and are marked so, never run again.
         _jobs = new NoteJobs(services.GetService<ILogger<ServerNotes>>() ?? NullLogger<ServerNotes>.Instance, server.Database, MaxRunning);
@@ -355,10 +359,8 @@ public static class NotesRoutes
             }
             finally
             {
-                if (File.Exists(part))
-                {
-                    File.Delete(part);
-                }
+                // One still held now is swept the next time the server starts.
+                PartFiles.TryDelete(part);
             }
         }).WithMetadata(Api.LargeBody.Instance);
 
