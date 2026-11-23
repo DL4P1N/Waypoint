@@ -405,7 +405,12 @@ public sealed partial class WaypointWorker
             var sent = send.MessageId;
             if (sent is null && !send.Fresh)
             {
-                var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card);
+                // The note may have changed since that try, so a part of the bot's own with this part's Edit button
+                // is taken too, and drawn again below. While the post can't be read, it waits for a later round.
+                var button = long.TryParse(row.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var noteId) && row.Kind == WaypointDatabase.ThreadNote
+                    ? PartEditPrefix(noteId, index)
+                    : null;
+                var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card, button);
                 if (search.Result == SentLookup.Unknown)
                 {
                     return;

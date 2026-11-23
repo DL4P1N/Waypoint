@@ -52,6 +52,33 @@ public sealed partial class DiscordThreadTests
     }
 
     [Fact]
+    public async Task A_later_part_never_heard_back_about_is_found_by_its_button_after_its_words_change_and_not_sent_again()
+    {
+        var id = _database.CreateNote("Made up long reading", LongReading, _now);
+        var post = await SecondPartSentButNotKept(id, "BEFORE UPDATE OF message_id ON discord_sends WHEN NEW.send_key LIKE 'part:%'");
+        var sentBefore = post.Messages.Where(message => message.Bot).Select(message => message.Id).ToList();
+
+        // The note's end changes, so the part already sent no longer shows the words it would be found by.
+        Assert.True(_database.SaveNote(id, "Made up long reading", LongReading.Replace("Made up line 90 about", "Made up line 90, now changed, about"), _now));
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+
+        // While who the bot is can't be told, the post can't be looked through, so nothing is sent.
+        await second.SyncDiscordThreadsAsync();
+        Assert.Equal(sentBefore, post.Messages.Where(message => message.Bot).Select(message => message.Id));
+        Assert.Single(_database.GetDiscordSends("part:"));
+
+        await second.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await second.SyncDiscordThreadsAsync();
+        await second.SyncDiscordThreadsAsync();
+
+        Assert.Equal(sentBefore, post.Messages.Where(message => message.Bot).Select(message => message.Id));
+        Assert.Equal(sentBefore, _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message));
+        Assert.Contains("now changed", Descriptions(post)[^1]);
+        Assert.Empty(_database.GetDiscordSends("part:"));
+    }
+
+    [Fact]
     public async Task A_stray_part_already_taken_away_by_hand_is_let_go()
     {
         var id = _database.CreateNote("Made up long reading", LongReading, _now);

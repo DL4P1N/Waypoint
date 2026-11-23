@@ -99,15 +99,22 @@ public sealed partial class WaypointWorker
             write.FinishDiscordSend(key);
         });
 
-    /// <summary>A message of Waypoint's in a post, such as a notice or a part, that isn't one of the post's parts or a notice already kept.</summary>
-    private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card)
+    /// <summary>
+    /// A message of Waypoint's in a post, such as a notice or a part, that isn't one of the post's parts or a notice
+    /// already kept. With <paramref name="button"/>, one not found by its words is looked for by a button whose action
+    /// starts that way, for a part whose words may have changed since it was sent.
+    /// </summary>
+    private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card, string? button = null)
     {
         var known = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
             .Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message))
             .Append(thread)
             .ToHashSet(StringComparer.Ordinal);
         var after = known.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
-        return await discord.FindSentAfterAsync(thread, after, nonce, card, known);
+        var search = await discord.FindSentAfterAsync(thread, after, nonce, card, known);
+        return search.Result == SentLookup.NotFound && button is not null
+            ? await discord.FindSentWithButtonAfterAsync(thread, after, nonce, button, known)
+            : search;
     }
 
     /// <summary>
