@@ -49,6 +49,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
     private const string Scope = "Mail.Read offline_access";
     private const string LastMailKey = "outlook_last_received";
     private const string SeenMailKey = "outlook_seen_at_last";
+    private const string SignedOutKey = "outlook_signed_out";
     private const int FirstLookBackDays = 7;
     private const int MaxFetched = 25;
 
@@ -59,7 +60,14 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
     /// <summary>The latest bank or payment app email left out because it failed the sender check, said plainly.</summary>
     public string? SkippedSender { get; private set; }
 
-    public bool IsConnected => tokens.Load() is not null;
+    /// <summary>Signed in, with a sign-in Microsoft still takes.</summary>
+    public bool IsConnected => tokens.Load() is not null && !NeedsSignIn;
+
+    /// <summary>
+    /// Microsoft turned the kept sign-in down, as when it expires or the password changes, so it has to be done
+    /// again. Kept in the database, so it still shows after a restart, and cleared by signing in.
+    /// </summary>
+    public bool NeedsSignIn => tokens.Load() is not null && database.GetPreference(SignedOutKey) == "1";
 
     public async Task<DeviceCode> BeginSignInAsync(CancellationToken cancellationToken = default)
     {
@@ -90,6 +98,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             if (document.RootElement.TryGetProperty("refresh_token", out var refresh))
             {
                 tokens.Save(refresh.GetString()!);
+                database.SetPreference(SignedOutKey, "");
                 return true;
             }
 
@@ -106,7 +115,8 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
     /// <summary>Hands over new purchases, stores them, and reports alerts it couldn't read.</summary>
     public async Task PollAsync(Action<EmailPurchase> onPurchase, Action<UnreadAlert> onUnread, Action<long>? onDeposit = null, Action<PaymentAppOutcome>? onPaymentApp = null, CancellationToken cancellationToken = default)
     {
-        if (tokens.Load() is not { } refreshToken || !await _polling.WaitAsync(0, cancellationToken))
+        // A sign-in Microsoft turned down isn't tried again until it's done afresh.
+        if (tokens.Load() is not { } refreshToken || NeedsSignIn || !await _polling.WaitAsync(0, cancellationToken))
         {
             return;
         }
@@ -119,9 +129,24 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
                 ["client_id"] = settings.ClientId,
                 ["refresh_token"] = refreshToken,
                 ["scope"] = Scope,
-            }, cancellationToken);
-            tokens.Save(tokenDocument.RootElement.GetProperty("refresh_token").GetString()!);
-            var accessToken = tokenDocument.RootElement.GetProperty("access_token").GetString()!;
+            }, cancellationToken, allowErrors: true);
+            var tokenRoot = tokenDocument.RootElement;
+            if (Text(tokenRoot, "error") is { } error)
+            {
+                // An expired or withdrawn sign-in shows as needing sign-in, not as connected. Anything else is a
+                // problem with this try, and the next one goes ahead as usual.
+                if (error is "invalid_grant" or "interaction_required")
+                {
+                    database.SetPreference(SignedOutKey, "1");
+                    LastError = SignInEnded;
+                    return;
+                }
+
+                throw new HttpRequestException(Text(tokenRoot, "error_description") ?? $"Microsoft sign-in said {error}.");
+            }
+
+            tokens.Save(Text(tokenRoot, "refresh_token") ?? throw new HttpRequestException("Microsoft sign-in sent no token."));
+            var accessToken = Text(tokenRoot, "access_token") ?? throw new HttpRequestException("Microsoft sign-in sent no token.");
 
             var since = database.GetPreference(LastMailKey)
                 ?? DateTimeOffset.UtcNow.AddDays(-FirstLookBackDays).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -189,6 +214,9 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             _polling.Release();
         }
     }
+
+    /// <summary>Said when Microsoft no longer takes the kept sign-in.</summary>
+    public const string SignInEnded = "Microsoft ended the sign-in, so alert email needs to be connected again.";
 
     /// <summary>Said when an email came back in a shape that couldn't be read. It's passed over, and the rest are read.</summary>
     public const string UnreadableEmail = "An email couldn't be read, so it was skipped.";
@@ -327,7 +355,17 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             response.EnsureSuccessStatusCode();
         }
 
-        return JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var text = await response.Content.ReadAsStringAsync(cancellationToken);
+        try
+        {
+            return JsonDocument.Parse(text);
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+            // An error page that isn't JSON, such as from a proxy, is reported by its status instead.
+            response.EnsureSuccessStatusCode();
+            throw;
+        }
     }
 }
 
