@@ -388,11 +388,11 @@ public sealed class CaptureService(
         var focus = FocusOf(progress.FocusRef, answer, Shown(context));
 
         // Finished and kept together, so a crash between can't leave the reply kept for a capture that comes round again.
-        var outcome = database.InOneWrite(() =>
+        var outcome = database.InOneWrite(write =>
         {
             if (total > 0)
             {
-                database.CompleteCapture(capture.Id, []);
+                write.CompleteCapture(capture.Id, []);
             }
 
             var finished = new CaptureOutcome(
@@ -403,8 +403,8 @@ public sealed class CaptureService(
                 capture.Origin,
                 budgetReplies,
                 opReplies.Where(reply => !reply.IsAnswer).Select(reply => reply.Text).ToList(),
-                ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? database.GetActiveSession(Now) : null);
-            Keep(database, capture, finished, focus);
+                ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? write.GetActiveSession(Now) : null);
+            Keep(write, capture, finished, focus);
             return finished;
         });
 
@@ -473,11 +473,10 @@ public sealed class CaptureService(
     {
         var added = items.Count(item => item.Kind != ItemKind.Note);
         var outcome = new CaptureOutcome(items.Where(item => item.Kind != ItemKind.Note).ToList(), [], answer.Length > 0 ? answer : null, Origin: capture.Origin);
-        database.InOneWrite(() =>
+        database.InOneWrite(write =>
         {
-            database.CompleteCapture(capture.Id, items);
-            Keep(database, capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
-            return 0;
+            write.CompleteCapture(capture.Id, items);
+            Keep(write, capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
         });
         Announce(capture, outcome);
     }
