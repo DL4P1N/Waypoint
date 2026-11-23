@@ -32,7 +32,7 @@ public partial class NotesView
             Multiselect = attachTo is null,
             Title = attachTo is null ? "Choose files to make notes from" : "Choose a file to add to this note",
         };
-        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        if (FileDialogs.Shared.Show(() => dialog.ShowDialog(Window.GetWindow(this)), false) != true)
         {
             return;
         }

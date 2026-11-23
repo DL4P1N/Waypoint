@@ -39,6 +39,18 @@ public partial class ReminderWindow : Window
     private readonly ReminderWaiting? _waiting;
     private readonly ReminderDose? _dose;
 
+    /// <summary>
+    /// Set once one of the card's buttons answered it. A card closed some other way, such as with Alt+F4, wasn't
+    /// answered, so it can come back later.
+    /// </summary>
+    public bool Answered { get; private set; }
+
+    private void Answer()
+    {
+        Answered = true;
+        Close();
+    }
+
     /// <summary>How many cards up from the corner this one sits, so they don't cover each other.</summary>
     public int Slot { get; init; }
 
@@ -152,13 +164,13 @@ public partial class ReminderWindow : Window
     private void OnPrimaryClicked(object sender, RoutedEventArgs e)
     {
         _primary();
-        Close();
+        Answer();
     }
 
     private void OnSnoozeClicked(object sender, RoutedEventArgs e)
     {
         (_transition?.MoreTime ?? _snooze)();
-        Close();
+        Answer();
     }
 
     /// <summary>
@@ -169,14 +181,14 @@ public partial class ReminderWindow : Window
     {
         (_transition?.Clear ?? _snooze)();
         _start?.Invoke();
-        Close();
+        Answer();
     }
 
     private void OnSkipOneClicked(object sender, RoutedEventArgs e)
     {
         _dose?.Skip();
         _transition?.NotNow();
-        Close();
+        Answer();
     }
 
     /// <summary>The card stays up, so Start is still one click away once the spot is saved.</summary>
@@ -191,18 +203,18 @@ public partial class ReminderWindow : Window
     private void OnFollowUpClicked(object sender, RoutedEventArgs e)
     {
         _waiting?.FollowUp();
-        Close();
+        Answer();
     }
 
     private void OnStillWaitingClicked(object sender, RoutedEventArgs e)
     {
         _waiting?.StillWaiting();
-        Close();
+        Answer();
     }
 
     private void OnSkipClicked(object sender, RoutedEventArgs e)
     {
         _skip?.Invoke();
-        Close();
+        Answer();
     }
 }

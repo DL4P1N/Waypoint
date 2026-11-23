@@ -54,7 +54,7 @@ public partial class App
             Title = "Choose a backup to restore",
             InitialDirectory = _database.BackupFolder,
         };
-        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        if (FileDialogs.Shared.Show(dialog.ShowDialog, Forms.DialogResult.Cancel) != Forms.DialogResult.OK)
         {
             return;
         }
@@ -124,7 +124,7 @@ public partial class App
     private void ExportNotes()
     {
         using var dialog = new Forms.FolderBrowserDialog { Description = "Choose where to save your notes", UseDescriptionForTitle = true };
-        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        if (FileDialogs.Shared.Show(dialog.ShowDialog, Forms.DialogResult.Cancel) != Forms.DialogResult.OK)
         {
             return;
         }
@@ -146,7 +146,7 @@ public partial class App
     private void ImportCsv()
     {
         using var dialog = new Forms.OpenFileDialog { Filter = "CSV files (*.csv)|*.csv", Title = "Import card or bank CSV", Multiselect = true };
-        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        if (FileDialogs.Shared.Show(dialog.ShowDialog, Forms.DialogResult.Cancel) != Forms.DialogResult.OK)
         {
             return;
         }

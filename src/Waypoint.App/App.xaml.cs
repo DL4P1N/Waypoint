@@ -429,7 +429,7 @@ public partial class App : System.Windows.Application
         _closing = new EventWaitHandle(false, EventResetMode.ManualReset, $"{instance}.Closing");
         _closing.Reset();
         ThreadPool.RegisterWaitForSingleObject(
-            _exitRequest, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
+            _exitRequest, (_, _) => Dispatcher.BeginInvoke(RequestExit), null, Timeout.Infinite, executeOnlyOnce: true);
 
         if (_server is null)
         {

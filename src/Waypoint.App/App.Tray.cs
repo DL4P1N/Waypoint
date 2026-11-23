@@ -110,7 +110,7 @@ public partial class App
         }
 
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("Exit", null, (_, _) => Shutdown());
+        menu.Items.Add("Exit", null, (_, _) => RequestExit());
 
         using var iconStream = typeof(App).Assembly.GetManifestResourceStream("waypoint.ico")!;
         var icon = new Icon(iconStream, Forms.SystemInformation.SmallIconSize);
