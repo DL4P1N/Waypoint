@@ -75,10 +75,10 @@ public sealed partial class WaypointWorker
         // name it was made with and needing the rest drawn again, and the sync just below brings it up to date.
         var meta = recovered ? Hash(madeAs) + ":" : Meta(wanted.Name, tags);
         var row = new DiscordThreadRow(post.Thread, wanted.Kind, wanted.Key, forum, WaypointDatabase.PostLive, false, meta, [new DiscordThreadPart(post.Message, recovered ? "" : Hash(wanted.Parts[0]))], post.Message);
-        var replaced = _database.InOneWrite(() =>
+        var replaced = _database.InOneWrite(write =>
         {
-            var older = _database.AddDiscordThread(row);
-            _database.FinishDiscordSend(sendKey);
+            var older = write.AddDiscordThread(row);
+            write.FinishDiscordSend(sendKey);
             return older;
         });
         foreach (var old in replaced)

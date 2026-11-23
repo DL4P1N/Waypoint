@@ -48,11 +48,10 @@ public sealed partial class WaypointWorker
 
     /// <summary>A notice is kept to be cleared away later, and its note goes, in one write.</summary>
     private void KeepNotice(string thread, string key, string message, DateTime sentAt) =>
-        _database.InOneWrite(() =>
+        _database.InOneWrite(write =>
         {
-            _database.AddDiscordNotice(thread, message, sentAt);
-            _database.FinishDiscordSend(key);
-            return 0;
+            write.AddDiscordNotice(thread, message, sentAt);
+            write.FinishDiscordSend(key);
         });
 
     /// <summary>A message of Waypoint's in a post, such as a notice or a part, that isn't one of the post's parts or a notice already kept.</summary>
