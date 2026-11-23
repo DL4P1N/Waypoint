@@ -187,8 +187,16 @@ public sealed partial class DiscordThreadTests : IDisposable
                 channel_id = channel,
                 content = message.Content,
                 author = new { id = message.Author, bot = message.Bot },
+
+                // Like Discord, a message read back shows what it was sent with, but never its nonce.
+                embeds = SentWith(message, "embeds"),
+                components = SentWith(message, "components"),
                 attachments = message.Files.Select(file => new { id = "a" + message.Id, filename = file, size = 2048, url = $"https://cdn.discordapp.com/attachments/{message.Id}/a{message.Id}/{file}", content_type = "application/pdf" }),
             });
+
+        /// <summary>Part of what Waypoint sent a message of its own with, or null.</summary>
+        private static JsonElement? SentWith(Message message, string name) =>
+            message.Bot && DiscordThreadTests.Json(message.Body) is { ValueKind: JsonValueKind.Object } sent && sent.TryGetProperty(name, out var part) ? part : null;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -411,10 +419,17 @@ public sealed partial class DiscordThreadTests : IDisposable
             new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
     }
 
-    private sealed class Host : IWorkerHost
+    /// <summary>Notices shown on the PC, by any worker made here.</summary>
+    private readonly List<(string Title, string Text)> _shownHere = [];
+
+    private sealed class Host(List<(string Title, string Text)> shown) : IWorkerHost
     {
         public void ShowNotice(string title, string text)
         {
+            lock (shown)
+            {
+                shown.Add((title, text));
+            }
         }
 
         public void ShowReminder(DueReminder reminder, Action closed)
@@ -458,7 +473,7 @@ public sealed partial class DiscordThreadTests : IDisposable
 
     private WaypointWorker MakeWorker(DiscordRunner? runner = null, string? notes = NotesForum, string? lists = ListsForum, string? notesView = null)
     {
-        var worker = new WaypointWorker(_database, new WaypointSettings(Discord: Settings(notes, lists, notesView)), _folder, new Host(), exception => throw exception, new WorkerParts(
+        var worker = new WaypointWorker(_database, new WaypointSettings(Discord: Settings(notes, lists, notesView)), _folder, new Host(_shownHere), exception => throw exception, new WorkerParts(
             _ => new NoTokens(),
             Clock: () => _now,
             Http: () => new HttpClient(_discord),

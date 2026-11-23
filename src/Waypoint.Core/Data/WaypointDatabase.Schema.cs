@@ -162,6 +162,7 @@ public sealed partial class WaypointDatabase
         CreateDiscordInboxTables();
         AddDiscordGivenUp();
         AddDiscordSendTriedName();
+        AddDiscordSendCard();
         CreateDiscordAttachedTables();
         CreateCaptureProgressTables();
         AddColumnIfMissing("sent_reminders", "source", "TEXT NOT NULL DEFAULT 'Capture'");

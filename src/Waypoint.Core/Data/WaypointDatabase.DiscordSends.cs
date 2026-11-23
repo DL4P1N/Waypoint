@@ -43,6 +43,43 @@ public sealed partial class WaypointDatabase
         return command.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>Whether a note's post was shown on this PC already. See <see cref="MarkDiscordSendShownHere"/>.</summary>
+    public bool WasDiscordSendShownHere(string key)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM discord_sends WHERE send_key = $key AND shown_here = 1";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteScalar() is not null;
+    }
+
+    /// <summary>
+    /// What a notice in a post says, kept with its note, so one whose try can't be checked is looked for and tried
+    /// again on a later round, even after a restart, or shown on this PC instead.
+    /// </summary>
+    private void AddDiscordSendCard() => AddColumnIfMissing("discord_sends", "card", "TEXT");
+
+    /// <summary>Keeps what the post says with its note.</summary>
+    public void SetDiscordSendCard(string key, string card)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE discord_sends SET card = $card WHERE send_key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$card", card);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>What the post says, as kept with its note, or null when nothing was kept.</summary>
+    public string? GetDiscordSendCard(string key)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT card FROM discord_sends WHERE send_key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteScalar() as string;
+    }
+
     /// <summary>
     /// Notes a post before it's made, or hands back the note from a try before. Only one for another channel starts
     /// over with a new nonce. However old a note is, its try may have gone out, so it stays until what it was for is

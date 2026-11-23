@@ -136,7 +136,7 @@ public sealed partial class WaypointWorker
             var written = await NoteJobText.GuardNotes(() => notes.WriteNotesAsync(noteId, null, false, _clock()));
             if (written.Status != NoteWriteStatus.Written)
             {
-                await NoticeAsync(discord, post.Id, DiscordText.Notice("Notes not written", written.Message, CardTone.Attention));
+                await NoticeAsync(discord, post.Id, "Notes not written", written.Message, CardTone.Attention);
             }
         }
 

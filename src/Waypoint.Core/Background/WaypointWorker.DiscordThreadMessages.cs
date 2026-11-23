@@ -54,7 +54,7 @@ public sealed partial class WaypointWorker
                         && _threadMessageTries.AddOrUpdate(tryKey, 1, (_, tries) => tries + 1) > MaxThreadMessageTries)
                     {
                         // Tried enough, so it's left in the post with a word why, and the messages after it are read.
-                        await NoticeAsync(discord, row.Thread, DiscordText.Notice("Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention));
+                        await NoticeAsync(discord, row.Thread, "Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention);
                     }
                     else
                     {
@@ -243,7 +243,7 @@ public sealed partial class WaypointWorker
             return true;
         }
 
-        await NoticeAsync(discord, thread, DiscordText.Notice("Not every file was added", string.Join("\n", problems), CardTone.Attention));
+        await NoticeAsync(discord, thread, "Not every file was added", string.Join("\n", problems), CardTone.Attention);
         return false;
     }
 
@@ -306,7 +306,7 @@ public sealed partial class WaypointWorker
 
         if (message.Attachments.Count > 0)
         {
-            await NoticeAsync(discord, row.Thread, DiscordText.Notice("Files stay out of lists", "A file can't go on a list, so it was left here. Send it in a note's post to add it to that note.", CardTone.Attention));
+            await NoticeAsync(discord, row.Thread, "Files stay out of lists", "A file can't go on a list, so it was left here. Send it in a note's post to add it to that note.", CardTone.Attention);
             return true;
         }
 
@@ -347,10 +347,12 @@ public sealed partial class WaypointWorker
         if (_database.GetPreference(ManageMessagesSaidKey) != "1")
         {
             _database.SetPreference(ManageMessagesSaidKey, "1");
-            await NoticeAsync(discord, thread, DiscordText.Notice(
+            await NoticeAsync(
+                discord,
+                thread,
                 "Saved",
                 "Messages you type here are saved, then marked with a ✅. To have them cleared away once they're saved, give the bot the Manage Messages permission.",
-                CardTone.Finished));
+                CardTone.Finished);
         }
     }
 }
