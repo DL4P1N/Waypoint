@@ -342,12 +342,12 @@ public sealed class CaptureService(
                 try
                 {
                     var current = step;
-                    var (budgetReply, opReply) = database.InOneWrite(() =>
+                    var (budgetReply, opReply) = database.InOneWrite(write =>
                     {
                         var replies = op is null
-                            ? (database.ApplyBudgetOp(budgetOps[current], DateOnly.FromDateTime(Now)), (OpReply?)null)
-                            : ((string?)null, AssistantOps.Apply(op, database, capture.Id, Now, capture.Text, bedtime));
-                        database.SetCaptureProgress(capture.Id, (progress with
+                            ? (write.ApplyBudgetOp(budgetOps[current], DateOnly.FromDateTime(Now)), (OpReply?)null)
+                            : ((string?)null, AssistantOps.Apply(op, write, capture.Id, Now, capture.Text, bedtime));
+                        write.SetCaptureProgress(capture.Id, (progress with
                         {
                             Next = current + 1,
                             Started = false,
