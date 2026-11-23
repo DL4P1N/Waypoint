@@ -342,9 +342,26 @@ public sealed class NotesFromFilesTests : IDisposable
         Assert.DoesNotContain("My edited version", input);
         Assert.Equal("My edited version", replaced.Before!.Body);
 
-        _database.RestoreNoteBody(id, replaced.Before, Now);
+        Assert.True(_database.RestoreNoteBody(id, replaced.Before, Now));
         Assert.Equal("My edited version", _database.GetNote(id)!.Body);
         Assert.True(_database.GetNoteGeneration(id)!.EditedSince);
+    }
+
+    [Fact]
+    public async Task Undo_of_written_notes_leaves_a_note_changed_since_as_it_is()
+    {
+        var maker = Maker();
+        var id = maker.StartFromFile(Text("lecture.pdf", "Original lecture text"), null, false, Now).NoteId;
+        await maker.WriteAsync(id, null, false, Now);
+        _database.SaveNote(id, "lecture", "My edited version", Now);
+        var replaced = await maker.WriteAsync(id, "make these shorter", true, Now);
+        var written = _database.GetNote(id)!.Body;
+
+        // A line added after the notes were written, as from Discord, isn't undone with them.
+        _database.SaveNote(id, "lecture", $"{written}\n\nAdded from my phone", Now);
+
+        Assert.False(_database.RestoreNoteBody(id, replaced.Before!, Now));
+        Assert.Equal($"{written}\n\nAdded from my phone", _database.GetNote(id)!.Body);
     }
 
     [Fact]

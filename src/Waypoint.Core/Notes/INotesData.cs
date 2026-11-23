@@ -118,7 +118,8 @@ public interface INotesData : INoteFileStore, IPreferences
 
     NoteGeneration? GetNoteGeneration(long noteId);
 
-    void RestoreNoteBody(long noteId, NoteBodyState state, DateTime now);
+    /// <summary>Undo for written notes. False, with nothing changed, when the note was changed since they were written.</summary>
+    bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now);
 
     string? GetNoteCourse(long noteId);
 
@@ -279,7 +280,7 @@ public sealed class LocalNotesData(WaypointDatabase database, NoteMaker? maker =
 
     public NoteGeneration? GetNoteGeneration(long noteId) => database.GetNoteGeneration(noteId);
 
-    public void RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => database.RestoreNoteBody(noteId, state, now);
+    public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => database.RestoreNoteBody(noteId, state, now);
 
     public string? GetNoteCourse(long noteId) => database.GetNoteCourse(noteId);
 

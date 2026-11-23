@@ -443,7 +443,7 @@ public sealed class ServerNotesData : INotesData
     public NoteGeneration? GetNoteGeneration(long noteId) =>
         Real(noteId) is var id and > 0 ? Read($"api/notes/{id}/generation", new Found<NoteGeneration>(null)).Value : new NoteGeneration(null, true, 0);
 
-    public void RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => _server.Send(Post, $"api/notes/{Real(noteId)}/restore-body", state);
+    public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => _server.Send<FlagValue>(Post, $"api/notes/{Real(noteId)}/restore-body", state).Value;
 
     public string? GetNoteCourse(long noteId) => Real(noteId) is var id and > 0 ? Read($"api/notes/{id}/course", new TextValue(null)).Value : null;
 

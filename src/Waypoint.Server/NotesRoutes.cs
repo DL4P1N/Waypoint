@@ -132,11 +132,7 @@ public static class NotesRoutes
         group.MapGet("/{id:long}/sources", (long id) => notes.Value.Data.GetNoteSources(id));
         group.MapGet("/sources/{id:long}/timestamps", (long id) => new TextValue(notes.Value.Data.GetSourceTimestamps(id)));
         group.MapGet("/{id:long}/generation", (long id) => new Found<NoteGeneration>(notes.Value.Data.GetNoteGeneration(id)));
-        group.MapPost("/{id:long}/restore-body", (long id, NoteBodyState state) =>
-        {
-            notes.Value.Data.RestoreNoteBody(id, state, DateTime.Now);
-            return Results.NoContent();
-        });
+        group.MapPost("/{id:long}/restore-body", (long id, NoteBodyState state) => new FlagValue(notes.Value.Data.RestoreNoteBody(id, state, DateTime.Now)));
         group.MapGet("/{id:long}/course", (long id) => new TextValue(notes.Value.Data.GetNoteCourse(id)));
         group.MapGet("/{id:long}/suggestions", (long id) => notes.Value.Data.GetNoteSuggestions(id));
         group.MapPost("/suggestions/{id:long}/accept", (long id) => notes.Value.Data.AcceptNoteSuggestion(id, DateTime.Now));
