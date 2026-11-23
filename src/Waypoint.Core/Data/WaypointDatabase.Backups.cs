@@ -8,8 +8,11 @@ namespace Waypoint.Core.Data;
 /// <summary>One saved copy of the database. BeforeRestore marks the copy taken just before a restore.</summary>
 public sealed record BackupFile(string Path, DateTime At, bool BeforeRestore);
 
-/// <summary>What came of a restore. SafetyCopy is how things were just before, so the restore can be undone.</summary>
-public sealed record RestoreResult(bool Restored, string? SafetyCopy, string? Problem = null);
+/// <summary>
+/// What came of a restore. SafetyCopy is how things were just before, so the restore can be undone. Warning says what
+/// didn't finish after the restored data was in, which leaves it restored.
+/// </summary>
+public sealed record RestoreResult(bool Restored, string? SafetyCopy, string? Problem = null, string? Warning = null);
 
 public sealed partial class WaypointDatabase
 {
@@ -92,6 +95,7 @@ public sealed partial class WaypointDatabase
             return new RestoreResult(false, null, problem);
         }
 
+        // A copy that fails partway is undone by SQLite, so up to here nothing has changed.
         var safetyCopy = SaveCopy(now, BeforeRestoreSuffix);
         using (var backup = OpenFile(source, SqliteOpenMode.ReadOnly))
         using (Connect(out var live))
@@ -99,19 +103,43 @@ public sealed partial class WaypointDatabase
             backup.BackupDatabase(live);
         }
 
+        // From here the restored data is in, and a step after that failing doesn't take it back out, so the restore
+        // is still told as done, with what didn't finish.
+        static bool Then(Action step)
+        {
+            try
+            {
+                step();
+                return true;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                PlainProblem.Report(exception);
+                return false;
+            }
+        }
+
         // The notes folder still holds the notes from before. Its next sync writes the restored ones over it.
         ForgetChangeStamps();
-        MarkNotesRestored();
+        var marked = Then(MarkNotesRestored);
 
         // The restored pages went through the log. Folding them into the file and emptying the log leaves nothing
         // from before the restore in it, so the file on its own is the restored copy.
-        Execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        var tidied = Then(() => Execute("PRAGMA wal_checkpoint(TRUNCATE)"));
 
         // Old copies go only once the restore is in, and never the one it came from, even when that's the oldest.
-        PruneBackups(now, keep: source);
+        tidied &= Then(() => PruneBackups(now, keep: source));
 
-        return new RestoreResult(true, safetyCopy);
+        // Marking the notes matters most, so it's tried once more after the rest.
+        marked = marked || Then(MarkNotesRestored);
+
+        return new RestoreResult(true, safetyCopy, Warning: !marked ? NotesNotMarked : !tidied ? TidyingNotDone : null);
     }
+
+    private const string NotesNotMarked =
+        "Waypoint couldn't mark the notes as restored, so the notes folder may still hold the notes from before. Check it before editing notes there.";
+
+    private const string TidyingNotDone = "Waypoint couldn't tidy up after it, which doesn't change what was restored.";
 
     /// <summary>
     /// Writes each note as its own Markdown file, in a folder for each notes folder and Unfiled for the

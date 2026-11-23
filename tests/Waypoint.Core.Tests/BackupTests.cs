@@ -116,6 +116,31 @@ public sealed class BackupTests : IDisposable
     }
 
     [Fact]
+    public void ARestoreThatFailsAfterTheCopyIsInIsToldAsRestoredWithAWarning()
+    {
+        _database.CreateNote("Kept", "from before", Now);
+
+        // The backup carries a trigger that turns down marking the notes as restored, so the step after the copy fails.
+        using (var connection = _database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "CREATE TRIGGER no_restore_mark BEFORE INSERT ON preferences WHEN NEW.key = 'notes_restored' BEGIN SELECT RAISE(ABORT, 'made to fail'); END";
+            command.ExecuteNonQuery();
+        }
+
+        var backup = _database.BackUpNow(Now);
+        _database.CreateNote("Added later", "after the backup", Now.AddHours(1));
+
+        var result = _database.RestoreBackup(backup, Now.AddHours(2));
+
+        Assert.True(result.Restored);
+        Assert.Null(result.Problem);
+        Assert.Contains("notes folder", result.Warning);
+        Assert.Equal("Kept", Assert.Single(_database.GetNotes()).Title);
+        Assert.DoesNotContain("—", result.Warning);
+    }
+
+    [Fact]
     public void BeforeRestoreCopiesDoNotPushOutDailyBackups()
     {
         var restoreFrom = Path.Combine(_folder, "saved.db");
