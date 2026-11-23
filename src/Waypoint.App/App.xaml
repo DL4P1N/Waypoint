@@ -171,6 +171,27 @@
             </Setter>
         </Style>
 
+        <!-- Words that read like a TextBlock but can be selected and copied, such as Ask's replies. Not a Tab stop. -->
+        <Style x:Key="SelectableText" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="Cursor" Value="IBeam" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <!-- A plain host, not a ScrollViewer, so the mouse wheel over the words still scrolls what they're in.
+                             Typed text keeps 2px of its own inset, taken back so the words line up as a TextBlock's would. -->
+                        <Decorator x:Name="PART_ContentHost" Margin="-2,0,-2,0" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- The note editor and the token box frame themselves like FieldBox: a rule, and the accent while typing,
              instead of the system's blue hover and focus borders. -->
         <Style x:Key="RichFieldBox" TargetType="RichTextBox">

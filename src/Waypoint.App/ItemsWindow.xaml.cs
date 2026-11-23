@@ -826,7 +826,17 @@ public partial class ItemsWindow : Window
         ShowThingsToTry();
         ChatScroll.UpdateLayout();
         ChatScroll.ScrollToEnd();
+        if (row.Kind == ChatKind.Reply && RowText(row) is { } words)
+        {
+            LiveRegion.Announce(words);
+        }
     }
+
+    /// <summary>The words of a row shown in the chat, once it's laid out.</summary>
+    private TextBox? RowText(ChatRow row) =>
+        Chat.ItemContainerGenerator.ContainerFromItem(row) is DependencyObject shown
+            ? Descendants(shown).OfType<TextBox>().FirstOrDefault(box => box.Name == "RowText")
+            : null;
 
     /// <param name="openKept">Shows what the server couldn't save, when there's any, through an Open link beside the status.</param>
     public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null, Action? dismissKept = null)

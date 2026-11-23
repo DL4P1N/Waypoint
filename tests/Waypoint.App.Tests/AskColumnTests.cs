@@ -56,6 +56,35 @@ public sealed class AskColumnTests
         Assert.Equal(Visibility.Collapsed, UiTest.Named<Button>(window, "ThingsToTry").Visibility);
         window.Hide();
     });
+
+    [Fact]
+    public void A_reply_can_be_selected_and_copied_and_is_read_out_as_it_comes() => Ui.Run(ui =>
+    {
+        var window = new ItemsWindow(ui.Database, _ => { }, () => { }, _ => { })
+        {
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -20000,
+        };
+        window.Show();
+        ui.Pump();
+
+        window.ShowReply("Added Call the bank for Friday.");
+        ui.Pump();
+
+        var words = UiTest.Descendants<TextBox>(UiTest.Named<ItemsControl>(window, "Chat")).Single(box => box.Name == "RowText");
+        Assert.Equal("Added Call the bank for Friday.", words.Text);
+        Assert.True(words.IsReadOnly);
+        Assert.False(words.IsTabStop);
+        words.SelectAll();
+        Assert.Equal("Added Call the bank for Friday.", words.SelectedText);
+        Assert.Equal(System.Windows.Automation.AutomationLiveSetting.Polite, System.Windows.Automation.AutomationProperties.GetLiveSetting(words));
+        Assert.Equal("Added Call the bank for Friday.", System.Windows.Automation.AutomationProperties.GetName(words));
+
+        // The wheel over a reply still scrolls the chat, since the reply has no scroller of its own.
+        Assert.Empty(UiTest.Descendants<ScrollViewer>(words));
+        window.Hide();
+    });
 }
 
 public sealed class AskWorkingTests

@@ -392,11 +392,14 @@
                                                 HorizontalAlignment="{Binding Alignment}"
                                                 Background="{Binding Fill}">
                                             <StackPanel>
-                                                <TextBlock FontSize="{Binding TextSize}"
-                                                           LineHeight="19"
-                                                           TextWrapping="Wrap"
-                                                           Text="{Binding Text}"
-                                                           Foreground="{Binding TextBrush}" />
+                                                <!-- Can be selected and copied. A reply is read out by a screen reader as it comes. -->
+                                                <TextBox x:Name="RowText"
+                                                         Style="{StaticResource SelectableText}"
+                                                         FontSize="{Binding TextSize}"
+                                                         TextBlock.LineHeight="19"
+                                                         Text="{Binding Text, Mode=OneTime}"
+                                                         AutomationProperties.Name="{Binding Text, Mode=OneTime}"
+                                                         Foreground="{Binding TextBrush}" />
                                                 <ItemsControl ItemsSource="{Binding Links}" Visibility="{Binding LinksVisibility}" Margin="0,4,0,0">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
