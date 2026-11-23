@@ -138,16 +138,34 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             // every poll until a newer one arrives. The ones already read at that second are skipped.
             var seen = (database.GetPreference(SeenMailKey) ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            string? problem = null;
             foreach (var message in document.RootElement.GetProperty("value").EnumerateArray())
             {
-                var id = message.GetProperty("id").GetString()!;
-                var received = message.GetProperty("receivedDateTime").GetString()!;
+                // One without an ID or time can't be marked as read, so it's passed over rather than stopping the rest.
+                if (Text(message, "id") is not { } id || Text(message, "receivedDateTime") is not { } received
+                    || !DateTimeOffset.TryParse(received, CultureInfo.InvariantCulture, DateTimeStyles.None, out var receivedAt))
+                {
+                    problem = UnreadableEmail;
+                    continue;
+                }
+
                 if (seen.Contains(id))
                 {
                     continue;
                 }
 
-                Read(message, onPurchase, onUnread, onDeposit, onPaymentApp);
+                // One email that can't be read doesn't stop the ones after it, and the read mark still moves past it,
+                // so it isn't read again every few minutes. Trouble saving is different: the round stops there, and
+                // the email is read again next time.
+                try
+                {
+                    Read(message, id, receivedAt.ToLocalTime(), onPurchase, onUnread, onDeposit, onPaymentApp);
+                }
+                catch (Exception exception) when (exception is not (OperationCanceledException or Microsoft.Data.Sqlite.SqliteException))
+                {
+                    problem = UnreadableEmail;
+                }
+
                 if (received != since)
                 {
                     seen.Clear();
@@ -160,7 +178,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
                 database.SetPreferences((LastMailKey, received), (SeenMailKey, string.Join('\n', seen)));
             }
 
-            LastError = null;
+            LastError = problem;
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -172,15 +190,32 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
         }
     }
 
-    private void Read(JsonElement message, Action<EmailPurchase> onPurchase, Action<UnreadAlert> onUnread, Action<long>? onDeposit, Action<PaymentAppOutcome>? onPaymentApp)
+    /// <summary>Said when an email came back in a shape that couldn't be read. It's passed over, and the rest are read.</summary>
+    public const string UnreadableEmail = "An email couldn't be read, so it was skipped.";
+
+    /// <summary>A string found by following property names, or null when one is missing or isn't text.</summary>
+    private static string? Text(JsonElement element, params string[] path)
     {
-        var from = message.GetProperty("from").GetProperty("emailAddress").GetProperty("address").GetString() ?? "";
-        var subject = message.GetProperty("subject").GetString() ?? "";
-        var body = message.GetProperty("body").GetProperty("content").GetString() ?? "";
-        var received = DateTimeOffset.Parse(message.GetProperty("receivedDateTime").GetString()!, CultureInfo.InvariantCulture).ToLocalTime();
+        foreach (var name in path)
+        {
+            if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out element))
+            {
+                return null;
+            }
+        }
+
+        return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+    }
+
+    private void Read(JsonElement message, string id, DateTimeOffset received, Action<EmailPurchase> onPurchase, Action<UnreadAlert> onUnread, Action<long>? onDeposit, Action<PaymentAppOutcome>? onPaymentApp)
+    {
+        // Mail with no sender or subject, such as a draft or a bounce, is read as blank rather than stopping here.
+        var from = Text(message, "from", "emailAddress", "address") ?? "";
+        var subject = Text(message, "subject") ?? "";
+        var body = Text(message, "body", "content") ?? "";
 
         // A reply from someone a task is waiting on brings that task back with one nudge. Only who sent it and the subject are used.
-        var sender = message.GetProperty("from").GetProperty("emailAddress").TryGetProperty("name", out var name) ? name.GetString() : null;
+        var sender = Text(message, "from", "emailAddress", "name");
         database.NoticeReply(from, sender, subject, received.DateTime);
 
         // Money is only read from mail that really came from its sender. Anyone can type a bank's name into From.
@@ -217,7 +252,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
         {
             if (AlertParser.ReadPaymentApp(from, subject, body, settings.OwnAddress) is { } payment)
             {
-                if (database.AddRepayment(message.GetProperty("id").GetString()!, payment, DateOnly.FromDateTime(received.DateTime)) is { } outcome)
+                if (database.AddRepayment(id, payment, DateOnly.FromDateTime(received.DateTime)) is { } outcome)
                 {
                     onPaymentApp?.Invoke(outcome);
                 }
@@ -233,7 +268,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
         if (AlertParser.ReadDeposit(from, subject, body) is { } deposit)
         {
             // Already counted means already told, so the same email read again after a crash sends nothing.
-            if (database.AddToCushion(deposit, DateOnly.FromDateTime(received.DateTime), message.GetProperty("id").GetString()))
+            if (database.AddToCushion(deposit, DateOnly.FromDateTime(received.DateTime), id))
             {
                 onDeposit?.Invoke(deposit);
             }
@@ -241,7 +276,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             return;
         }
 
-        switch (AlertParser.Read(from, subject, body, DateOnly.FromDateTime(received.DateTime), message.GetProperty("id").GetString()!))
+        switch (AlertParser.Read(from, subject, body, DateOnly.FromDateTime(received.DateTime), id))
         {
             case { } purchase:
                 // Already counted means already told, so a repeat sends nothing.

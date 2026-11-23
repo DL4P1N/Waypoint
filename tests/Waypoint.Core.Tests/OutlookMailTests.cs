@@ -216,6 +216,24 @@ public sealed class OutlookMailTests : IDisposable
     }
 
     [Fact]
+    public async Task An_email_that_cannot_be_read_is_skipped_and_the_rest_still_are()
+    {
+        var body = "{\"value\":[" + string.Join(",",
+            """{"id":"m1","subject":"No sender here","receivedDateTime":"2026-11-02T17:00:00Z","body":{"content":"Just text"}}""",
+            Message("m2", "alerts@lucerne.example.com", "New charge on your card", "A charge of $999999999999999999999999999999.00 at Panera was made.", "2026-11-02T17:30:00Z"),
+            """{"id":"m3","subject":"No time","from":{"emailAddress":{"address":"alerts@lucerne.example.com"}}}""",
+            Message("m4", "alerts@lucerne.example.com", "New charge on your card", "A charge of $12.00 at Panera was made.")) + "]}";
+        var mail = new OutlookMail(new HttpClient(new FakeServer(body)), _database, new OutlookSettings("id"), new MemoryTokens("old"));
+        var purchases = new List<EmailPurchase>();
+
+        await mail.PollAsync(purchases.Add, _ => { });
+
+        Assert.Equal(1200, Assert.Single(purchases).Transaction.AmountCents);
+        Assert.Equal(OutlookMail.UnreadableEmail, mail.LastError);
+        Assert.Equal("2026-11-02T18:00:00Z", _database.GetPreference("outlook_last_received"));
+    }
+
+    [Fact]
     public async Task Two_identical_purchases_in_different_emails_both_count()
     {
         var day = new DateOnly(2026, 11, 2);
