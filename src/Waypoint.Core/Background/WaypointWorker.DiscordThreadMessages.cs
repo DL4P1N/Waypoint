@@ -49,12 +49,13 @@ public sealed partial class WaypointWorker
                 if (entry.FromOwner && entry.Message is { } message)
                 {
                     // Only tries while its note or list is still there count, since one deleted on the PC keeps it unread on purpose.
-                    var tryKey = $"{row.Thread}:{message.Id}";
+                    // Each is counted before it's made and kept across restarts, so one that keeps failing, or keeps
+                    // stopping Waypoint partway, is still left after a few.
                     if (row.State != WaypointDatabase.PostPending && StillThere(row)
-                        && _threadMessageTries.AddOrUpdate(tryKey, 1, (_, tries) => tries + 1) > MaxThreadMessageTries)
+                        && _database.AddDiscordMessageTry(row.Thread, message.Id, _clock()) > MaxThreadMessageTries)
                     {
                         // Tried enough, so it's left in the post with a word why, and the messages after it are read.
-                        await NoticeAsync(discord, row.Thread, DiscordText.Notice("Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention));
+                        await NoticeAsync(discord, row.Thread, "Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention);
                     }
                     else
                     {
@@ -66,10 +67,18 @@ public sealed partial class WaypointWorker
                         }
                     }
 
-                    _threadMessageTries.TryRemove(tryKey, out _);
                 }
 
-                _database.AdvanceDiscordThread(row.Thread, entry.Id);
+                // The post is read past it in the same write that its count goes, so neither is left without the other.
+                _database.InOneWrite(write =>
+                {
+                    if (entry.FromOwner && entry.Message is { } dealtWith)
+                    {
+                        write.ForgetDiscordMessageTries(row.Thread, dealtWith.Id);
+                    }
+
+                    write.AdvanceDiscordThread(row.Thread, entry.Id);
+                });
                 cursor = entry.Id;
             }
 
@@ -80,10 +89,8 @@ public sealed partial class WaypointWorker
         }
     }
 
-    /// <summary>How many times one message in a post is tried, while the app runs, before it's left as it is.</summary>
+    /// <summary>How many times one message in a post is tried, counting every run of the app, before it's left as it is.</summary>
     private const int MaxThreadMessageTries = 5;
-
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _threadMessageTries = new();
 
     /// <summary>
     /// One of the owner's messages in a post. Dealt is true once it's saved, or once there's nothing more to do with
@@ -167,7 +174,7 @@ public sealed partial class WaypointWorker
         if (message.Attachments.Count > 0)
         {
             var files = await ReadThreadFilesAsync(discord, message);
-            allFiles = await AttachThreadFilesAsync(discord, row.Thread, noteId, files);
+            allFiles = await AttachThreadFilesAsync(discord, row.Thread, noteId, files, triedBefore: _database.DiscordMessageTries(row.Thread, message.Id) > 1);
         }
 
         if (message.Text.Trim().Length > 0)
@@ -217,12 +224,26 @@ public sealed partial class WaypointWorker
         return new ThreadFiles(files, problems);
     }
 
-    /// <summary>Each file joins the note's Sources, the same as dropping it on that note on the PC. False, after saying why, when any couldn't.</summary>
-    private async Task<bool> AttachThreadFilesAsync(DiscordBridge discord, string thread, long noteId, ThreadFiles read)
+    /// <summary>
+    /// Each file joins the note's Sources, the same as dropping it on that note on the PC. False, after saying why, when
+    /// any couldn't. When the message was <paramref name="triedBefore"/>, a try may have added a file and stopped
+    /// before remembering it, so a file the note already has, with the same name and words, is remembered instead of
+    /// added again. When the note's sources can't be read, each file is added as before.
+    /// </summary>
+    private async Task<bool> AttachThreadFilesAsync(DiscordBridge discord, string thread, long noteId, ThreadFiles read, bool triedBefore)
     {
         var problems = read.Problems.ToList();
+        var already = triedBefore && read.Files.Count > 0 ? SourcesOf(noteId) : [];
         foreach (var (attachmentId, file) in read.Files)
         {
+            var name = file.Name.Trim();
+            if (already.FindIndex(source => source.Name == name && source.Text == file.Text) is var found and >= 0)
+            {
+                already.RemoveAt(found);
+                _database.MarkDiscordFileAttached(attachmentId, noteId, _clock());
+                continue;
+            }
+
             var attached = NoteFiles is { CanMakeNotes: true } notes
                 ? notes.AttachFile(noteId, file, _clock())
                 : new StartedNote(noteId, "", null, null, "Files can't be added to notes right now.");
@@ -243,8 +264,21 @@ public sealed partial class WaypointWorker
             return true;
         }
 
-        await NoticeAsync(discord, thread, DiscordText.Notice("Not every file was added", string.Join("\n", problems), CardTone.Attention));
+        await NoticeAsync(discord, thread, "Not every file was added", string.Join("\n", problems), CardTone.Attention);
         return false;
+    }
+
+    /// <summary>A note's sources from where its files are added, or none when they can't be read.</summary>
+    private List<NoteSource> SourcesOf(long noteId)
+    {
+        try
+        {
+            return NoteFiles is { } notes ? notes.GetNoteSources(noteId).ToList() : [];
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return [];
+        }
     }
 
     private sealed record ThreadFile(FileText? File, string? Problem);
@@ -306,7 +340,7 @@ public sealed partial class WaypointWorker
 
         if (message.Attachments.Count > 0)
         {
-            await NoticeAsync(discord, row.Thread, DiscordText.Notice("Files stay out of lists", "A file can't go on a list, so it was left here. Send it in a note's post to add it to that note.", CardTone.Attention));
+            await NoticeAsync(discord, row.Thread, "Files stay out of lists", "A file can't go on a list, so it was left here. Send it in a note's post to add it to that note.", CardTone.Attention);
             return true;
         }
 
@@ -347,10 +381,12 @@ public sealed partial class WaypointWorker
         if (_database.GetPreference(ManageMessagesSaidKey) != "1")
         {
             _database.SetPreference(ManageMessagesSaidKey, "1");
-            await NoticeAsync(discord, thread, DiscordText.Notice(
+            await NoticeAsync(
+                discord,
+                thread,
                 "Saved",
                 "Messages you type here are saved, then marked with a ✅. To have them cleared away once they're saved, give the bot the Manage Messages permission.",
-                CardTone.Finished));
+                CardTone.Finished);
         }
     }
 }

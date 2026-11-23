@@ -246,6 +246,9 @@ public sealed partial class WaypointWorker
             await SyncPostAsync(discord, forum, wanted, row);
         }
 
+        // A stray part still waiting to be taken away keeps the rounds coming.
+        settled = settled && rows.Values.All(row => _database.GetDiscordSends($"part:{row.Thread}:").Count == 0);
+
         var live = notes.Select(note => note.Id.ToString(CultureInfo.InvariantCulture)).ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows.Values.Where(row => !live.Contains(row.Key)))
         {
@@ -253,6 +256,7 @@ public sealed partial class WaypointWorker
             await RetirePostAsync(discord, row, "This note was deleted on the PC");
         }
 
+        ForgetPartsOfRetiredPosts();
         _notePostsSettled = settled ? stamp : null;
     }
 
@@ -402,7 +406,12 @@ public sealed partial class WaypointWorker
             var sent = send.MessageId;
             if (sent is null && !send.Fresh)
             {
-                var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card);
+                // The note may have changed since that try, so a part of the bot's own with this part's Edit button
+                // is taken too, and drawn again below. While the post can't be read, it waits for a later round.
+                var button = long.TryParse(row.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var noteId) && row.Kind == WaypointDatabase.ThreadNote
+                    ? PartEditPrefix(noteId, index)
+                    : null;
+                var search = await FindUnkeptAsync(discord, row.Thread, send.Nonce, card, button);
                 if (search.Result == SentLookup.Unknown)
                 {
                     return;
@@ -461,7 +470,78 @@ public sealed partial class WaypointWorker
             parts.Remove(extra);
             _database.SetDiscordThreadParts(row.Thread, parts);
         }
+
+        await ClearStrayPartsAsync(discord, row, wanted.Parts.Count, parts);
+        await RetryNoticesAsync(discord, row.Thread);
     }
+
+    /// <summary>
+    /// A part sent just before a crash, before it was kept, whose note then got shorter, is past the parts the post has
+    /// now, so it's never reached above. It's taken away, being the bot's own, and its note goes. One whose message
+    /// isn't known is looked for by its Edit button after the post's last part, the newest such message being the one
+    /// taken, and while the post can't be read it waits for a later round. One that still can't be taken away after a
+    /// day is let go, so it never keeps the rounds coming for good.
+    /// </summary>
+    private async Task ClearStrayPartsAsync(DiscordBridge discord, DiscordThreadRow row, int count, List<DiscordThreadPart> parts)
+    {
+        var prefix = $"part:{row.Thread}:";
+        foreach (var send in _database.GetDiscordSends(prefix))
+        {
+            if (!int.TryParse(send.Key[prefix.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var index) || index < count)
+            {
+                continue;
+            }
+
+            if (_clock() - send.StartedAt >= NoticeGiveUp || row.Kind != WaypointDatabase.ThreadNote)
+            {
+                _database.FinishDiscordSend(send.Key);
+                continue;
+            }
+
+            var stray = send.MessageId;
+            if (stray is null && long.TryParse(row.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var noteId))
+            {
+                var kept = parts.Select(part => part.Message).Append(row.Thread).ToList();
+                var after = kept.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
+                var known = kept.Concat(_database.GetDiscordNotices(row.Thread).Select(notice => notice.Message)).ToHashSet(StringComparer.Ordinal);
+                var search = await discord.FindSentWithButtonAfterAsync(row.Thread, after, send.Nonce, PartEditPrefix(noteId, index), known);
+                if (search.Result == SentLookup.Unknown)
+                {
+                    continue;
+                }
+
+                stray = search.MessageId;
+            }
+
+            // A message already gone counts as taken away.
+            if (stray is not null && !parts.Any(part => part.Message == stray) && !await discord.DeleteInThreadAsync(row.Thread, stray))
+            {
+                continue;
+            }
+
+            _database.FinishDiscordSend(send.Key);
+        }
+    }
+
+    /// <summary>
+    /// A part noted for a post that's no longer live, such as one retired or made again, is let go, since that post is
+    /// never brought up to date again. What's in it stays as it is.
+    /// </summary>
+    private void ForgetPartsOfRetiredPosts()
+    {
+        foreach (var send in _database.GetDiscordSends("part:"))
+        {
+            var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
+            if (thread is not null && _database.FindDiscordThread(thread) is not { Live: true })
+            {
+                _database.FinishDiscordSend(send.Key);
+            }
+        }
+    }
+
+    /// <summary>How the Edit button on one part of a note starts, whatever the part says.</summary>
+    private static string PartEditPrefix(long noteId, int index) =>
+        $"{NoteEdit}{noteId.ToString(CultureInfo.InvariantCulture)}:{index.ToString(CultureInfo.InvariantCulture)}:";
 
     /// <summary>
     /// A note's messages. Each holds one stretch of the note's Markdown, laid out for Discord, with an Edit button that
@@ -494,7 +574,7 @@ public sealed partial class WaypointWorker
                 }
             }
 
-            var id = $"{NoteEdit}{note.Id.ToString(CultureInfo.InvariantCulture)}:{index.ToString(CultureInfo.InvariantCulture)}:{Hash(chunks[index])}";
+            var id = PartEditPrefix(note.Id, index) + Hash(chunks[index]);
             cards.Add(new DiscordCard(DiscordPages.Titled(title, index, chunks.Count), text, [], CardTone.Reminder)
             {
                 Actions = [new CardAction("Edit", id, ButtonRole.Other)],

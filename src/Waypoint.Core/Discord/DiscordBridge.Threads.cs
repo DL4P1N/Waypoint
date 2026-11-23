@@ -259,6 +259,38 @@ public sealed partial class DiscordBridge
         }
     }
 
+    /// <summary>
+    /// Takes away one of Waypoint's messages in a post. One already gone counts as taken away. Like an edit, when
+    /// Discord says the post is archived, it's unarchived and the delete tried once more.
+    /// </summary>
+    public async Task<bool> DeleteInThreadAsync(string thread, string messageId)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var response = await SendWithLimitsAsync(() => NewRequest(HttpMethod.Delete, $"{ApiBase}/channels/{thread}/messages/{messageId}"));
+                if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    return true;
+                }
+
+                if (response.StatusCode == HttpStatusCode.BadRequest && attempt == 0 && await ErrorCode(response) == ArchivedThread
+                    && await EditThreadAsync(thread, archived: false) == ThreadChange.Done)
+                {
+                    continue;
+                }
+
+                return false;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                LastError = exception.Message;
+                return false;
+            }
+        }
+    }
+
     /// <summary>Renames a post, sets its tags, or archives or unarchives it. Anything left null stays as it is.</summary>
     public async Task<ThreadChange> EditThreadAsync(string thread, string? name = null, IReadOnlyList<string>? tags = null, bool? archived = null)
     {
