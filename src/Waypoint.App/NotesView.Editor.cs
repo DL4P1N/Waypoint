@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Threading.Tasks;
@@ -86,6 +87,15 @@ public partial class NotesView
     /// </summary>
     public const double NarrowWidth = 210 + 240 + 48 + MinEditorWidth;
 
+    /// <summary>The narrowest a note is ever written in, so its title, toolbar, and buttons keep their shape.</summary>
+    public const double TightEditorWidth = 380;
+
+    /// <summary>
+    /// Below this width the notes list and a note can't share the page at all, as at the window's smallest. The list
+    /// asked for then takes the note's place, and the note stays open behind it, to go back to.
+    /// </summary>
+    public const double TightWidth = 210 + 240 + 48 + TightEditorWidth;
+
     /// <summary>Set when the list was asked back while narrow. Opening a note puts it away again.</summary>
     private bool _listAskedFor;
 
@@ -96,17 +106,37 @@ public partial class NotesView
         if (ListShown)
         {
             ListColumn.Width = new GridLength(0);
+            NoteColumn.Width = new GridLength(1, GridUnitType.Star);
             ListPane.Visibility = Visibility.Collapsed;
             ShowListButton.Visibility = Visibility.Collapsed;
+            BackToNoteButton.Visibility = Visibility.Collapsed;
             return;
         }
 
         var open = Editor.Visibility == Visibility.Visible || SpotView.Visibility == Visibility.Visible;
         var narrow = ActualWidth > 0 && ActualWidth < NarrowWidth;
+        var tight = ActualWidth > 0 && ActualWidth < TightWidth;
         var hide = narrow && open && !_listAskedFor;
-        ListColumn.Width = hide ? new GridLength(0) : new GridLength(240);
+        var listInstead = tight && open && _listAskedFor;
+        ListColumn.Width = hide ? new GridLength(0) : listInstead ? new GridLength(1, GridUnitType.Star) : new GridLength(240);
+        NoteColumn.Width = listInstead ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        NoteSide.Visibility = listInstead ? Visibility.Collapsed : Visibility.Visible;
         ListPane.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
         ShowListButton.Visibility = hide ? Visibility.Visible : Visibility.Collapsed;
+        BackToNoteButton.Visibility = listInstead ? Visibility.Visible : Visibility.Collapsed;
+        BackToNoteButton.Content = SpotView.Visibility == Visibility.Visible ? "Back to the saved spot ›" : "Back to the note ›";
+        AutomationProperties.SetName(BackToNoteButton, SpotView.Visibility == Visibility.Visible ? "Back to the saved spot" : "Back to the note");
+    }
+
+    private void OnBackToNoteClicked(object sender, RoutedEventArgs e)
+    {
+        _listAskedFor = false;
+        FitList();
+        if (Editor.Visibility == Visibility.Visible)
+        {
+            UIElement box = _showSource ? SourceBox : BodyBox;
+            box.Dispatcher.BeginInvoke(() => box.Focus(), DispatcherPriority.Input);
+        }
     }
 
     private void OnShowListClicked(object sender, RoutedEventArgs e)
