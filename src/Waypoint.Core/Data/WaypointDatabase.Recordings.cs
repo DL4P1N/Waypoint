@@ -100,6 +100,18 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Puts a handed-off recording back to waiting to be made into notes, as when its transcribing was stopped.</summary>
+    public void TakeBackRecording(long id)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE recordings SET status = $status, job_id = NULL, note_id = NULL WHERE id = $id AND status = $handed";
+        command.Parameters.AddWithValue("$status", RecordingStatus.Stopped);
+        command.Parameters.AddWithValue("$handed", RecordingStatus.HandedOff);
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
+    }
+
     public RecordingInfo? GetRecording(long id) => ReadRecordings("WHERE id = $id", id).FirstOrDefault();
 
     public IReadOnlyList<RecordingInfo> GetRecordingsWithStatus(string status)

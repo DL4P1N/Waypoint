@@ -98,24 +98,63 @@ public sealed class TranscriptionQueue : IDisposable
         var now = _clock();
         var full = Path.GetFullPath(path);
         var started = _notes.StartForRecording(full, pickedFolderId, folderPicked, now);
-        var id = _database.AddTranscriptionJob(started.NoteId, full, keepAudio, now);
-        Raise(new TranscriptionChange(id, started.NoteId));
-        _wake.Release();
-        return _database.GetTranscriptionJob(id)!;
+        return Queue(started.NoteId, full, keepAudio, now, null);
     }
 
     /// <summary>
     /// Queues a lecture recorded on this PC. It's filed by the class that was on when recording started, and gets
     /// the title the recorder gave it. The file is the recorder's own, which it deletes once the transcript is saved.
+    /// <paramref name="alongside"/> is saved in the same write as the job, such as the recorder marking it handed off.
     /// </summary>
-    public TranscriptionJob ImportRecording(string path, bool keepAudio, DateTime startedAt, string title)
+    public TranscriptionJob ImportRecording(string path, bool keepAudio, DateTime startedAt, string title, Action<WaypointDatabase, TranscriptionJob>? alongside = null)
     {
         var full = Path.GetFullPath(path);
         var started = _notes.StartForRecording(full, null, false, startedAt, title);
-        var id = _database.AddTranscriptionJob(started.NoteId, full, keepAudio, _clock());
-        Raise(new TranscriptionChange(id, started.NoteId));
+        return Queue(started.NoteId, full, keepAudio, _clock(), alongside);
+    }
+
+    /// <summary>
+    /// Adds the job for a note just made for it, with anything that goes with it, in one write. If that can't be
+    /// saved, the note, still empty, goes too, so an import never leaves a note waiting on a job that isn't there.
+    /// The note can live on the server, so it can't be part of the same write.
+    /// </summary>
+    private TranscriptionJob Queue(long noteId, string full, bool keepAudio, DateTime now, Action<WaypointDatabase, TranscriptionJob>? alongside)
+    {
+        TranscriptionJob job;
+        try
+        {
+            job = _database.InOneWrite(write =>
+            {
+                var made = write.GetTranscriptionJob(write.AddTranscriptionJob(noteId, full, keepAudio, now))!;
+                alongside?.Invoke(write, made);
+                return made;
+            });
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            DeleteIfEmpty(noteId);
+            throw;
+        }
+
+        Raise(new TranscriptionChange(job.Id, noteId));
         _wake.Release();
-        return _database.GetTranscriptionJob(id)!;
+        return job;
+    }
+
+    /// <summary>Deletes a note that has nothing in it, typed or attached. Best effort: one that can't be reached now is left.</summary>
+    private void DeleteIfEmpty(long noteId)
+    {
+        try
+        {
+            if (_notes.GetNote(noteId) is { } note && string.IsNullOrWhiteSpace(note.Body) && _notes.GetNoteSources(noteId).Count == 0)
+            {
+                _notes.DeleteNote(noteId, _clock());
+            }
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            PlainProblem.Report(exception);
+        }
     }
 
     /// <summary>Remembers the yes, so a download cut off by a restart carries on, and starts it.</summary>

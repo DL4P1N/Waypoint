@@ -23,6 +23,12 @@ public sealed class Recorder
     /// <summary>With computer audio only, a gap this long with nothing sent is filled with silence, so times stay true.</summary>
     public static readonly TimeSpan SilenceGap = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Checks come every few seconds. Time this long with none means the PC was asleep or its lid was shut, and nothing
+    /// was recorded then, so it's left out rather than filled with silence that would only take up space and time.
+    /// </summary>
+    public static readonly TimeSpan SuspendGap = TimeSpan.FromMinutes(1);
+
     public const int MaxMarkChars = 300;
 
     private readonly WaypointDatabase _database;
@@ -31,10 +37,13 @@ public sealed class Recorder
     private readonly ClassSchedule? _schedule;
     private readonly Func<DateTime> _clock;
     private readonly TimeSpan? _flushEvery;
+    private readonly Func<string, RecordingWriter>? _createWriter;
     private readonly object _lock = new();
     private Session? _session;
 
-    public Recorder(WaypointDatabase database, string dataDirectory, IKeepAwake keepAwake, ClassSchedule? schedule, Func<DateTime>? clock = null, TimeSpan? flushEvery = null)
+    /// <param name="createWriter">Opens the file a recording is written to. Tests use it to make the disk fail.</param>
+    public Recorder(WaypointDatabase database, string dataDirectory, IKeepAwake keepAwake, ClassSchedule? schedule, Func<DateTime>? clock = null, TimeSpan? flushEvery = null,
+        Func<string, RecordingWriter>? createWriter = null)
     {
         _database = database;
         _folder = Path.Combine(dataDirectory, "recordings");
@@ -42,6 +51,7 @@ public sealed class Recorder
         _schedule = schedule;
         _clock = clock ?? (() => DateTime.Now);
         _flushEvery = flushEvery;
+        _createWriter = createWriter;
     }
 
     public bool IsRecording => _session is not null;
@@ -65,6 +75,9 @@ public sealed class Recorder
             }
         }
     }
+
+    /// <summary>The silence being written for a gap in computer audio, off the caller's thread. Done when there's none.</summary>
+    public Task SilenceFilled => _session?.Filling ?? Task.CompletedTask;
 
     /// <summary>The problems going on now, for the indicator.</summary>
     public IReadOnlyList<RecordingWarning> Warnings => _session?.Watch.Showing ?? [];
@@ -93,7 +106,7 @@ public sealed class Recorder
             {
                 Directory.CreateDirectory(_folder);
                 path = FreePath(title, now);
-                writer = RecordingWriter.Create(path, _flushEvery);
+                writer = _createWriter?.Invoke(path) ?? RecordingWriter.Create(path, _flushEvery);
             }
             catch
             {
@@ -160,13 +173,33 @@ public sealed class Recorder
         }
 
         var now = _clock();
-        if (session.Info.Input == AudioInput.ComputerAudio)
+        var sinceLast = now - session.LastCheck;
+        session.LastCheck = now;
+        if (sinceLast > SuspendGap)
+        {
+            // Asleep since the last check, so the recording carries on from where it was, without the time away.
+            session.StartedAt += sinceLast;
+        }
+
+        if (session.Info.Input == AudioInput.ComputerAudio && session.Filling.IsCompleted)
         {
             var expected = (long)((now - session.StartedAt).TotalSeconds * RecordingWriter.SampleRate);
             var behind = expected - session.Writer.SamplesWritten;
             if (behind > SilenceGap.TotalSeconds * RecordingWriter.SampleRate)
             {
-                session.Writer.WriteSilence((int)Math.Min(behind, int.MaxValue));
+                // Written off this thread, which is the window's, so a slow disk never holds it up.
+                var writer = session.Writer;
+                session.Filling = Task.Run(() =>
+                {
+                    try
+                    {
+                        writer.WriteSilence(behind);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        // Tried again at the next check, which finds the same gap.
+                    }
+                });
             }
         }
 
@@ -214,8 +247,10 @@ public sealed class Recorder
             }
 
             _session = null;
+            Exception? failed = null;
             try
             {
+                WaitForSilence(session);
                 if (session.Mixer is { } mixer)
                 {
                     session.Writer.Write(mixer.Drain());
@@ -223,12 +258,32 @@ public sealed class Recorder
 
                 session.Writer.Dispose();
             }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                failed = exception;
+                CloseAfterFailure(session.Writer);
+            }
             finally
             {
                 _keepAwake.Release();
             }
 
             var length = session.Writer.Length;
+            if (failed is not null)
+            {
+                // The last of it couldn't be written, such as with the disk full. What reached the disk is kept the
+                // same way as after a crash. If even that can't be read now, it stays as it is for the next start.
+                try
+                {
+                    var repair = WavFile.Repair(session.Info.Path);
+                    length = repair.Usable ? repair.Length : TimeSpan.Zero;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    throw new RecordingNotFinishedException(failed);
+                }
+            }
+
             var empty = length < TimeSpan.FromSeconds(1);
             if (empty)
             {
@@ -273,12 +328,62 @@ public sealed class Recorder
             .ToList();
     }
 
-    /// <summary>Gives a stopped recording to the queue, the same way as an imported file. Its marks go with its note.</summary>
-    public TranscriptionJob HandOff(RecordingInfo recording, TranscriptionQueue queue)
+    /// <summary>
+    /// Gives a stopped recording to the queue, the same way as an imported file. Its marks go with its note. The job
+    /// and the recording being handed off are saved as one, so a crash between can't leave a job running for a
+    /// recording that's still offered, and made into notes again, as not handed off.
+    /// </summary>
+    public TranscriptionJob HandOff(RecordingInfo recording, TranscriptionQueue queue) =>
+        queue.ImportRecording(recording.Path, recording.KeepAudio, recording.StartedAt, recording.Title,
+            (write, job) => write.HandOffRecording(recording.Id, job.Id, job.NoteId));
+
+    /// <summary>
+    /// Recordings whose transcribing was stopped, or whose job is gone, go back to waiting to be made into notes, so
+    /// a recording is never left on the PC with nothing to offer it again or delete it. Returns those, so the user
+    /// can be told it's still saved and choose to delete it.
+    /// </summary>
+    public IReadOnlyList<RecordingInfo> TakeBackStopped()
     {
-        var job = queue.ImportRecording(recording.Path, recording.KeepAudio, recording.StartedAt, recording.Title);
-        _database.HandOffRecording(recording.Id, job.Id, job.NoteId);
-        return job;
+        var taken = new List<RecordingInfo>();
+        foreach (var recording in _database.GetRecordingsWithStatus(RecordingStatus.HandedOff))
+        {
+            var job = recording.JobId is { } jobId ? _database.GetTranscriptionJob(jobId) : null;
+            if (job is not null && job.Status != TranscriptionStatus.Canceled)
+            {
+                continue;
+            }
+
+            if (!File.Exists(recording.Path))
+            {
+                _database.SetRecordingStatus(recording.Id, RecordingStatus.Done);
+                continue;
+            }
+
+            _database.TakeBackRecording(recording.Id);
+            if (_database.GetRecording(recording.Id) is { } back)
+            {
+                taken.Add(back);
+            }
+        }
+
+        return taken;
+    }
+
+    /// <summary>Deletes a recording that isn't being made into notes, when the user chose to. False if its file is held.</summary>
+    public bool Discard(long recordingId)
+    {
+        if (_session?.Info.Id == recordingId || _database.GetRecording(recordingId) is not { Status: RecordingStatus.Stopped } stored)
+        {
+            return false;
+        }
+
+        if (!Delete(stored.Path))
+        {
+            return false;
+        }
+
+        _database.SetRecordingStatus(stored.Id, RecordingStatus.Empty);
+        return true;
     }
 
     /// <summary>
@@ -309,6 +414,31 @@ public sealed class Recorder
     public static string Clock(TimeSpan time) => time.TotalHours >= 1
         ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
         : $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+
+    /// <summary>Waits for silence still being written, so it lands before the file is finished.</summary>
+    private static void WaitForSilence(Session session)
+    {
+        try
+        {
+            session.Filling.Wait();
+        }
+        catch (AggregateException)
+        {
+            // Its own failure was already let go. Finishing the file is what matters here.
+        }
+    }
+
+    /// <summary>Lets go of the file after the last write failed. A second failure closing it changes nothing.</summary>
+    private static void CloseAfterFailure(RecordingWriter writer)
+    {
+        try
+        {
+            writer.Dispose();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
 
     private static void Write(Session session, ReadOnlySpan<float> samples)
     {
@@ -362,7 +492,12 @@ public sealed class Recorder
 
         public TwoSourceMixer? Mixer => mixer;
 
-        public DateTime StartedAt => startedAt;
+        /// <summary>When recording started, moved on by any time the PC was asleep, so that time isn't counted.</summary>
+        public DateTime StartedAt { get; set; } = startedAt;
+
+        public DateTime LastCheck { get; set; } = startedAt;
+
+        public Task Filling { get; set; } = Task.CompletedTask;
 
         public List<RecordingMark> Marks { get; } = [];
 
@@ -375,3 +510,10 @@ public sealed class Recorder
         }
     }
 }
+
+/// <summary>
+/// Stopping couldn't finish the file, and it couldn't be read back yet. The recording stays as it is, and the next
+/// start fixes it and offers it, the same as one cut off by a crash.
+/// </summary>
+public sealed class RecordingNotFinishedException(Exception inner)
+    : IOException("The recording stopped, but its file couldn't be finished.", inner);

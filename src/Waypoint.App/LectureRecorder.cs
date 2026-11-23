@@ -104,6 +104,11 @@ public sealed class LectureRecorder : IDisposable
         {
             stopped = _core.Stop();
         }
+        catch (RecordingNotFinishedException exception)
+        {
+            _window.ShowReply($"The recording stopped, but Waypoint couldn't finish saving its file. {Waypoint.Core.PlainProblem.Report(exception.InnerException ?? exception)} What was saved is offered as notes the next time Waypoint starts.");
+            return;
+        }
         finally
         {
             _window.HideRecording();
@@ -142,6 +147,7 @@ public sealed class LectureRecorder : IDisposable
         IReadOnlyList<RecordingInfo> waiting;
         try
         {
+            _core.TakeBackStopped();
             waiting = _core.Recover();
             _core.CleanUp();
         }
@@ -257,14 +263,39 @@ public sealed class LectureRecorder : IDisposable
 
     private void CleanUp()
     {
+        IReadOnlyList<RecordingInfo> takenBack;
         try
         {
             _core.CleanUp();
+            takenBack = _core.TakeBackStopped();
         }
         catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
         {
             // Tried again on the next change.
+            return;
         }
+
+        // Transcribing a recording was stopped. The recording is still on the PC, so the user hears where it is and
+        // can delete it now, or leave it to be asked about again.
+        foreach (var recording in takenBack)
+        {
+            _window.ShowReply(
+                $"Transcribing {recording.Title} stopped. The recording is still saved on this PC, and Waypoint will ask about making notes from it the next time it starts.",
+                "Delete the recording",
+                () => Discard(recording));
+        }
+    }
+
+    private void Discard(RecordingInfo recording)
+    {
+        if (!NoteConfirmWindow.Ask(_window, "Waypoint recording", $"Delete the recording of {recording.Title}?", "It can't be brought back after this. Your notes aren't changed.", "Delete it", "Keep it"))
+        {
+            return;
+        }
+
+        _window.ShowReply(_core.Discard(recording.Id)
+            ? $"The recording of {recording.Title} is deleted."
+            : $"The recording of {recording.Title} couldn't be deleted right now. Waypoint will ask about it the next time it starts.");
     }
 
     private void OnTick()
