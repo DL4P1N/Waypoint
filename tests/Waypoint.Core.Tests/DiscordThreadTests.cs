@@ -119,6 +119,9 @@ public sealed partial class DiscordThreadTests : IDisposable
         /// <summary>Paths whose reads fail, such as a forum or a post's first message, the way an outage does.</summary>
         public HashSet<string> FailingReads { get; } = [];
 
+        /// <summary>Whether messages sent to posts fail, the way an outage does.</summary>
+        public bool FailingSends { get; set; }
+
         /// <summary>Messages whose deletes fail, the way an outage does.</summary>
         public HashSet<string> FailingDeletes { get; } = [];
 
@@ -294,6 +297,8 @@ public sealed partial class DiscordThreadTests : IDisposable
                 case [_, _] when method == HttpMethod.Delete:
                     Posts.Remove(post.Id);
                     return Json(new { id = post.Id });
+                case [_, _, "messages"] when method == HttpMethod.Post && FailingSends:
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("{}") };
                 case [_, _, "messages"] when method == HttpMethod.Post:
                     post.Archived = false;
                     var sent = new Message { Id = NextId(), Author = "bot", Bot = true, Body = body };

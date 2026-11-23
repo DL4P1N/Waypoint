@@ -43,6 +43,7 @@ public sealed partial class DiscordThreadTests
 
         // Once the post can be looked through, the one already there is kept and cleared away like any other.
         await again.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        _now = _now.AddMinutes(5);
         await again.SyncDiscordThreadsAsync();
         Assert.Single(post.Messages, message => message.Bot && message.Says(FilesStayOut));
         Assert.Single(_database.GetDiscordNotices(post.Id));
@@ -77,10 +78,64 @@ public sealed partial class DiscordThreadTests
 
         // It isn't in the post, but it was shown on the PC, so it isn't sent now.
         await worker.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        _now = _now.AddMinutes(2);
         await worker.SyncDiscordThreadsAsync();
         Assert.DoesNotContain(post.Messages, message => message.Bot && message.Says(FilesStayOut));
         Assert.Empty(_database.GetDiscordSends("notice:"));
         Assert.Single(_shownHere);
+    }
+
+    [Fact]
+    public async Task A_notice_that_keeps_failing_to_send_is_tried_less_and_less_often_and_shows_on_the_PC_once()
+    {
+        _database.CreateList("Made up packing", _now);
+        var worker = await Started(notes: null);
+        var post = PostForList("Made up packing");
+        await worker.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        _discord.FailingSends = true;
+        var typed = _discord.UserMessage(post, "", files: ["made-up-map.pdf"]);
+        await Event(worker, "MESSAGE_CREATE", MessageEvent(post, typed));
+
+        // A round a minute for ten minutes tries it only a few times, and it shows on the PC once it has waited long enough.
+        for (var minute = 0; minute < 10; minute++)
+        {
+            _now = _now.AddMinutes(1);
+            await worker.SyncDiscordThreadsAsync();
+        }
+
+        var tries = _discord.All.Count(call => call.Method == HttpMethod.Post && call.Path == $"/channels/{post.Id}/messages");
+        Assert.InRange(tries, 2, 5);
+        Assert.Equal(FilesStayOut, Assert.Single(_shownHere).Title);
+
+        // Once Discord works again, it isn't in the post and it was shown on the PC, so it's let go without sending it.
+        _discord.FailingSends = false;
+        _now = _now.AddHours(1);
+        await worker.SyncDiscordThreadsAsync();
+        Assert.DoesNotContain(post.Messages, message => message.Bot && message.Says(FilesStayOut));
+        Assert.Empty(_database.GetDiscordSends("notice:"));
+        Assert.Single(_shownHere);
+    }
+
+    [Fact]
+    public async Task The_same_notice_raised_again_after_one_was_shown_on_the_PC_is_sent_to_the_post()
+    {
+        _database.CreateList("Made up packing", _now);
+        var worker = await Started(notes: null);
+        var post = PostForList("Made up packing");
+        await worker.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        _discord.FailingSends = true;
+        await Event(worker, "MESSAGE_CREATE", MessageEvent(post, _discord.UserMessage(post, "", files: ["made-up-map.pdf"])));
+        _now = _now.AddMinutes(6);
+        await worker.SyncDiscordThreadsAsync();
+        Assert.Single(_shownHere);
+
+        // Later another file is sent, which raises the same notice, and Discord works again.
+        _discord.FailingSends = false;
+        await Event(worker, "MESSAGE_CREATE", MessageEvent(post, _discord.UserMessage(post, "", files: ["made-up-plan.pdf"])));
+
+        Assert.Single(post.Messages, message => message.Bot && message.Says(FilesStayOut));
+        Assert.Single(_database.GetDiscordNotices(post.Id));
+        Assert.Empty(_database.GetDiscordSends("notice:"));
     }
 
     [Fact]

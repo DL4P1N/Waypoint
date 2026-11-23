@@ -27,14 +27,27 @@ public sealed partial class WaypointWorker
             _database.SetDiscordSendCard(key, JsonSerializer.Serialize(notice));
         }
 
-        await TryNoticeAsync(discord, thread, send, notice);
+        await TryNoticeAsync(discord, thread, send, notice, raised: true);
+    }
+
+    /// <summary>
+    /// A notice that hasn't gone out, whether or not it can be told, shows on this PC once it has waited as long as
+    /// sending is tried. Its note stays, so a notice found in the post later is still cleared away.
+    /// </summary>
+    private void ShowHereOnceWaitedLong(DiscordSend send, WaitingNotice notice)
+    {
+        if (_clock() - send.StartedAt >= AlertRetry.Total && _database.MarkDiscordSendShownHere(send.Key))
+        {
+            _host.ShowNotice(notice.Title, $"{notice.Text}\n\nThis was meant for a post in Discord, which couldn't be checked.");
+        }
     }
 
     /// <summary>
     /// One try at a notice, under the note it was given, with that note's key and nonce, so a try again later always
     /// settles the same note and never starts another, even when the notice is now laid out differently.
     /// </summary>
-    private async Task TryNoticeAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice notice)
+    /// <param name="raised">Raised just now, rather than tried again by a round.</param>
+    private async Task TryNoticeAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice notice, bool raised = false)
     {
         var key = send.Key;
         var card = DiscordText.Notice(notice.Title, notice.Text, notice.Tone);
@@ -45,22 +58,23 @@ public sealed partial class WaypointWorker
             if (search.Result == SentLookup.Unknown)
             {
                 // Whether the earlier try went out can't be told, so it's never sent again from here. It's looked for
-                // again on later rounds. Once that's gone on as long as sending is tried, it shows on this PC, once,
-                // and its note stays, so a notice found in the post later is still cleared away.
-                if (_clock() - send.StartedAt >= AlertRetry.Total && _database.MarkDiscordSendShownHere(key))
-                {
-                    _host.ShowNotice(notice.Title, $"{notice.Text}\n\nThis was meant for a post in Discord, which couldn't be checked.");
-                }
-
+                // again on later rounds, and shows on this PC once it has waited long enough.
+                ShowHereOnceWaitedLong(send, notice);
                 return;
             }
 
             sent = search.MessageId;
             if (sent is null && _database.WasDiscordSendShownHere(key))
             {
-                // It was shown on this PC instead, and it isn't in the post, so it's let go.
-                _database.FinishDiscordSend(key);
-                return;
+                // It was shown on this PC instead, and it isn't in the post. Tried again by a round, it's let go. The
+                // same notice raised again is wanted in the post too, so it goes out, and could show on the PC again.
+                if (!raised)
+                {
+                    _database.FinishDiscordSend(key);
+                    return;
+                }
+
+                _database.ResetDiscordSendShownHere(key);
             }
         }
 
@@ -70,10 +84,14 @@ public sealed partial class WaypointWorker
             if (sent is null)
             {
                 // Turned away for sure, so there's nothing to look for. A try that failed some other way stays noted,
-                // and is looked for and tried again on a later round.
+                // and is looked for and tried again on a later round, and shows on this PC once it has waited long enough.
                 if (outcome is ThreadChange.Missing or ThreadChange.NotAllowed)
                 {
                     _database.FinishDiscordSend(key);
+                }
+                else
+                {
+                    ShowHereOnceWaitedLong(send, notice);
                 }
 
                 return;
@@ -128,18 +146,41 @@ public sealed partial class WaypointWorker
     /// <summary>
     /// A notice whose try failed, or couldn't be checked, is looked for and tried again. The round holds the lock a
     /// post's own work can wait for, so it never waits for that post: one being read right now is tried on a later round.
-    /// A round tries them only once the post's parts are all in place, so a notice never goes between them.
+    /// A round tries them only once the post's parts are all in place, so a notice never goes between them. Each waits
+    /// longer between tries, from a minute up to an hour, so one that keeps failing isn't tried every round for a day.
     /// </summary>
     private async Task RetryNoticesAsync(DiscordBridge discord, string thread)
     {
         foreach (var send in _database.GetDiscordSends(NoticeSendPrefix(thread)))
         {
-            if (send.MessageId is null && _clock() - send.StartedAt < NoticeGiveUp && WaitingNoticeFor(send.Key) is { } waiting)
+            if (send.MessageId is not null || _clock() - send.StartedAt >= NoticeGiveUp || WaitingNoticeFor(send.Key) is not { } waiting)
             {
-                await NoticeAgainAsync(discord, thread, send, waiting);
+                continue;
+            }
+
+            if (_noticeRetries.TryGetValue(send.Key, out var before) && _clock() < before.Next)
+            {
+                continue;
+            }
+
+            await NoticeAgainAsync(discord, thread, send, waiting);
+            if (_database.GetDiscordSend(send.Key) is null)
+            {
+                _noticeRetries.TryRemove(send.Key, out _);
+            }
+            else
+            {
+                var wait = before.Wait == TimeSpan.Zero ? NoticeRetryFirst : TimeSpan.FromTicks(Math.Min(before.Wait.Ticks * 2, NoticeRetryLongest.Ticks));
+                _noticeRetries[send.Key] = (_clock() + wait, wait);
             }
         }
     }
+
+    /// <summary>When each waiting notice is next tried, and how long it waited last. Kept only while the app runs.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Next, TimeSpan Wait)> _noticeRetries = new(StringComparer.Ordinal);
+
+    private static readonly TimeSpan NoticeRetryFirst = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan NoticeRetryLongest = TimeSpan.FromHours(1);
 
     /// <summary>One waiting notice tried again, unless the post is busy.</summary>
     private async Task NoticeAgainAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice waiting)

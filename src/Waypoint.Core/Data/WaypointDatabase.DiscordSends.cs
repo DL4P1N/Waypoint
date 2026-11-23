@@ -43,6 +43,16 @@ public sealed partial class WaypointDatabase
         return command.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>The post is wanted again, so being shown on this PC before no longer stands for it.</summary>
+    public void ResetDiscordSendShownHere(string key)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE discord_sends SET shown_here = 0 WHERE send_key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        command.ExecuteNonQuery();
+    }
+
     /// <summary>Whether a note's post was shown on this PC already. See <see cref="MarkDiscordSendShownHere"/>.</summary>
     public bool WasDiscordSendShownHere(string key)
     {
