@@ -84,4 +84,69 @@ public sealed class SharedStylesTests
         Assert.Same(heading.Effect, hint.Effect);
         Assert.Equal(System.Windows.Automation.AutomationHeadingLevel.Level2, System.Windows.Automation.AutomationProperties.GetHeadingLevel(heading));
     });
+
+    [Fact]
+    public void A_button_that_cant_be_pressed_reads_as_resting_even_when_Enter_would_press_it() => Ui.Run(ui =>
+    {
+        var save = new Button { Content = "Save", IsDefault = true, IsEnabled = false };
+        ui.Host(new StackPanel { Children = { save } });
+
+        var quiet = ((System.Windows.Media.SolidColorBrush)Application.Current.Resources["QuietMark"]).Color;
+        Assert.Equal(quiet, ((System.Windows.Media.SolidColorBrush)save.Foreground).Color);
+        Assert.Equal(System.Windows.Media.Colors.Transparent, ((System.Windows.Media.SolidColorBrush)save.Background).Color);
+        save.IsEnabled = true;
+        ui.Pump();
+        Assert.NotEqual(quiet, ((System.Windows.Media.SolidColorBrush)save.Foreground).Color);
+    });
+
+    [Fact]
+    public void Check_boxes_and_choices_keep_the_gap_to_their_words_themselves() => Ui.Run(ui =>
+    {
+        var words = new CheckBox { Content = "Keep the audio" };
+        var bare = new CheckBox();
+        var choice = new RadioButton { Content = "Microphone", GroupName = "Test" };
+        var other = new RadioButton { Content = "Computer audio", GroupName = "Test" };
+        ui.Host(new StackPanel { Children = { words, bare, choice, other } });
+
+        Assert.Equal(10, ((ContentPresenter)words.Template.FindName("Words", words)).Margin.Left);
+        Assert.Equal(0, ((ContentPresenter)bare.Template.FindName("Words", bare)).Margin.Left);
+        Assert.Equal(10, ((ContentPresenter)choice.Template.FindName("Words", choice)).Margin.Left);
+
+        // The picked choice shows a dot, not only a color.
+        var dot = (Ellipse)choice.Template.FindName("Dot", choice);
+        Assert.False(dot.IsVisible);
+        choice.IsChecked = true;
+        ui.Pump();
+        Assert.True(dot.IsVisible);
+        Assert.False(((Ellipse)other.Template.FindName("Dot", other)).IsVisible);
+    });
+
+    [Fact]
+    public void Ask_Waypoint_and_the_corner_cards_use_the_app_font() => Ui.Run(ui =>
+    {
+        var capture = new CaptureWindow(_ => { }, _ => { });
+        var offer = new RecordOfferWindow("Biology 101", () => { });
+        try
+        {
+            Assert.Equal("Segoe UI Variable Text, Segoe UI", capture.FontFamily.Source);
+            Assert.Equal("Segoe UI Variable Text, Segoe UI", offer.FontFamily.Source);
+        }
+        finally
+        {
+            capture.Close();
+            offer.Close();
+        }
+    });
+
+    [Fact]
+    public void A_scroll_bar_thumb_is_thin_until_the_mouse_is_on_it() => Ui.Run(ui =>
+    {
+        var bar = new System.Windows.Controls.Primitives.ScrollBar { Height = 200, Maximum = 100, ViewportSize = 20 };
+        ui.Host(new StackPanel { Children = { bar } });
+
+        var thumb = UiTest.Descendants<System.Windows.Controls.Primitives.Thumb>(bar).Single();
+        var fill = (Border)thumb.Template.FindName("Bar", thumb);
+        Assert.Equal(4, fill.Width);
+        Assert.Equal(8, bar.Width);
+    });
 }

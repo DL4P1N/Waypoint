@@ -11,7 +11,7 @@
         Background="{StaticResource WindowBackground}"
         BorderBrush="{DynamicResource Rule}"
         BorderThickness="1"
-        FontFamily="Segoe UI Variable Text, Segoe UI">
+        Style="{StaticResource AppWindow}">
     <StackPanel Margin="18">
         <TextBlock x:Name="Heading" FontSize="16" FontWeight="Light" Text="Rename" Foreground="{DynamicResource PrimaryText}" />
         <TextBox x:Name="NameBox"

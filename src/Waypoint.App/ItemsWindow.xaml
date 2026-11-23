@@ -13,7 +13,7 @@
         Background="{DynamicResource WindowBackground}"
         BorderBrush="{StaticResource Rule}"
         BorderThickness="1"
-        FontFamily="Segoe UI Variable Text, Segoe UI"
+        Style="{StaticResource AppWindow}"
         Closing="OnClosing"
         SizeChanged="OnSizeChanged"
         PreviewKeyDown="OnShortcutKey">

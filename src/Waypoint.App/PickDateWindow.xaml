@@ -10,7 +10,7 @@
         Background="{StaticResource WindowBackground}"
         BorderBrush="{DynamicResource Rule}"
         BorderThickness="1"
-        FontFamily="Segoe UI Variable Text, Segoe UI">
+        Style="{StaticResource AppWindow}">
     <StackPanel Width="294" Margin="18">
         <TextBlock x:Name="ItemTitle"
                    Margin="0,0,0,12"
