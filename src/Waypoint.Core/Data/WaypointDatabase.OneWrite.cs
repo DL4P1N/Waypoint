@@ -51,7 +51,7 @@ public sealed partial class WaypointDatabase
         public Step Savepoint()
         {
             Check();
-            return Step.Savepoint(transaction, $"one_write_{++_savepoints}");
+            return Step.Savepoint(connection, transaction, $"one_write_{++_savepoints}");
         }
 
         private void Check()
@@ -135,22 +135,24 @@ public sealed partial class WaypointDatabase
     /// </summary>
     internal sealed class Step : IDisposable
     {
+        private readonly SqliteConnection? _connection;
         private readonly SqliteTransaction _transaction;
         private readonly string? _savepoint;
         private bool _done;
 
-        private Step(SqliteTransaction transaction, string? savepoint)
+        private Step(SqliteConnection? connection, SqliteTransaction transaction, string? savepoint)
         {
+            _connection = connection;
             _transaction = transaction;
             _savepoint = savepoint;
         }
 
-        public static Step Own(SqliteTransaction transaction) => new(transaction, null);
+        public static Step Own(SqliteTransaction transaction) => new(null, transaction, null);
 
-        public static Step Savepoint(SqliteTransaction transaction, string name)
+        public static Step Savepoint(SqliteConnection connection, SqliteTransaction transaction, string name)
         {
             transaction.Save(name);
-            return new(transaction, name);
+            return new(connection, transaction, name);
         }
 
         public void Commit()
@@ -184,10 +186,22 @@ public sealed partial class WaypointDatabase
             }
 
             _done = true;
-            _transaction.Rollback(_savepoint);
-            _transaction.Release(_savepoint);
+            try
+            {
+                _transaction.Rollback(_savepoint);
+                _transaction.Release(_savepoint);
+            }
+            catch (Exception exception) when (exception is SqliteException or InvalidOperationException && !InTransaction(_connection!))
+            {
+                // SQLite already undid the whole write, such as after a full disk or a trigger's RAISE(ROLLBACK), and
+                // the savepoint went with it. The error that did that is on its way out and is the one worth keeping.
+            }
         }
     }
+
+    /// <summary>Whether a transaction is still open on <paramref name="connection"/>, which SQLite may have ended itself.</summary>
+    private static bool InTransaction(SqliteConnection connection) =>
+        connection.Handle is { } handle && SQLitePCL.raw.sqlite3_get_autocommit(handle) == 0;
 
     /// <summary>
     /// Runs <paramref name="work"/> as a single write on one connection and one BEGIN IMMEDIATE transaction, owned here.

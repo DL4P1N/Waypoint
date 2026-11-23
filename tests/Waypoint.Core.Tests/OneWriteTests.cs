@@ -299,5 +299,28 @@ public sealed class OneWriteTests : IDisposable
         }
     }
 
+    [Fact]
+    public void A_write_that_sqlite_rolls_back_whole_keeps_the_error_that_did_it()
+    {
+        // A trigger's RAISE(ROLLBACK) undoes the whole transaction, as a full disk would, and takes every savepoint with it.
+        using (var connection = _database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "CREATE TRIGGER made_up_rollback BEFORE INSERT ON preferences WHEN NEW.key = 'made_up_boom' BEGIN SELECT RAISE(ROLLBACK, 'made up rollback'); END";
+            command.ExecuteNonQuery();
+        }
+
+        var thrown = Record.Exception(() => _database.InOneWrite(database =>
+        {
+            database.SetPreference("made_up_before", "yes");
+            database.SetPreferences(("made_up_boom", "yes"));
+        }));
+
+        Assert.Contains("made up rollback", Assert.IsType<SqliteException>(thrown).Message);
+        Assert.Null(_database.GetPreference("made_up_before"));
+        _database.SetPreference("made_up_after", "yes");
+        Assert.Equal("yes", _database.GetPreference("made_up_after"));
+    }
+
     private sealed class MadeUpStop : Exception;
 }
