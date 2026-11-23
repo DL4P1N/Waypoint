@@ -245,6 +245,27 @@ public sealed class NoteJobsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_job_whose_ending_cant_be_kept_reads_as_lost_not_running()
+    {
+        var jobs = Jobs();
+        using (var connection = new SqliteConnection($"Data Source={DatabasePath}"))
+        {
+            connection.Open();
+            using var refuse = connection.CreateCommand();
+            refuse.CommandText = "CREATE TRIGGER no_endings BEFORE UPDATE ON note_jobs BEGIN SELECT RAISE(ABORT, 'made-up full disk'); END;";
+            refuse.ExecuteNonQuery();
+        }
+
+        var id = jobs.Start(NoteJobKind.Notes, 7, _ => Task.FromResult(Written()))!.Id;
+
+        var state = await Finished(jobs, id);
+
+        Assert.Equal(NoteJobOutcome.Lost, state.Kind());
+        Assert.Equal(NoteJobOutcome.Running, _database.GetNoteJob(id)!.Outcome);
+        Assert.Contains(_log.Entries, entry => entry.Message.Contains("couldn't be kept"));
+    }
+
+    [Fact]
     public void An_unknown_job_reports_lost_the_way_it_always_did()
     {
         var state = Jobs().State("made-up-job");
@@ -520,9 +541,14 @@ public sealed class NoteJobsTests : IDisposable
 
         _now = _now.AddMinutes(2);
         Assert.Equal(NoteJobOutcome.Lost, jobs.State(done).Kind());
+
+        // Asking only reads. The sweep comes with the next start.
+        Assert.NotNull(_database.GetNoteJob(done));
+        var next = jobs.Start(NoteJobKind.Notes, 9, _ => Task.FromResult(Written()))!.Id;
         Assert.Null(_database.GetNoteJob(done));
         Assert.Equal(NoteJobOutcome.Running, jobs.State(running).Kind());
         Assert.NotNull(_database.GetNoteJob(running));
+        await Finished(jobs, next);
 
         release.SetResult();
         Assert.Equal(NoteJobOutcome.Succeeded, (await Finished(jobs, running)).Kind());

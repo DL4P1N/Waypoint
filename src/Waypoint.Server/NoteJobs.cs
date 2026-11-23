@@ -66,7 +66,11 @@ public sealed class NoteJobs
             return null;
         }
 
+        // Known here as running before it's kept, so from the moment anyone can learn of it, it's never taken for one
+        // kept as running whose ending couldn't be kept.
         var id = Guid.NewGuid().ToString("N");
+        var job = new Job(id, _newStop());
+        _jobs[id] = job;
         try
         {
             // A key whose job has since been forgotten starts a new one, as sending it fresh would.
@@ -76,13 +80,13 @@ public sealed class NoteJobs
             if (started.Id != id)
             {
                 // Started under the same key a moment ago, by the same start sent twice at once.
-                _running.Release();
+                Forget(job);
                 return started;
             }
         }
         catch
         {
-            _running.Release();
+            Forget(job);
             throw;
         }
 
@@ -92,9 +96,6 @@ public sealed class NoteJobs
             return new NoteJobStarted(id);
         }
 
-        // Known as running before it starts, so a job that ends at once is never missed while it's kept.
-        var job = new Job(id, _newStop());
-        _jobs[id] = job;
         var token = job.Token;
         var task = Task.Run(() => work(token), CancellationToken.None);
 
@@ -104,20 +105,35 @@ public sealed class NoteJobs
         return new NoteJobStarted(id);
     }
 
+    /// <summary>A job made but never run, let go of again.</summary>
+    private void Forget(Job job)
+    {
+        _jobs.TryRemove(job.Id, out _);
+        job.Release();
+        _running.Release();
+    }
+
     /// <summary>
-    /// How a job stands. One that ended is answered from the database, as often as asked, until it's swept an hour
-    /// after it ended. One the server doesn't know is lost.
+    /// How a job stands. One that ended is answered from the database, as often as asked, for an hour after it ended.
+    /// One the server doesn't know is lost, and so is one kept as running that isn't running here: how it ended
+    /// couldn't be kept. Asking only reads, so the PC checking every few seconds never writes; finished jobs are
+    /// swept as new ones start.
     /// </summary>
     public NoteJobState State(string id)
     {
-        Sweep();
         if (_jobs.ContainsKey(id))
         {
             // Still running, or ended a moment ago and not kept yet, so the PC asks again.
             return NoteJobState.Running();
         }
 
-        return _store.GetNoteJob(id) is { } kept ? FromStore(kept) : NoteJobState.Lost();
+        return _store.GetNoteJob(id) switch
+        {
+            null => NoteJobState.Lost(),
+            { Outcome: NoteJobOutcome.Running } => NoteJobState.Lost(),
+            { FinishedAt: { } ended } when ended < _utcNow() - KeepFinished => NoteJobState.Lost(),
+            { } kept => FromStore(kept),
+        };
     }
 
     /// <summary>The job a kept start answered with, while it's still known here.</summary>
@@ -187,15 +203,14 @@ public sealed class NoteJobs
         task.IsCanceled || task.Exception?.GetBaseException() is OperationCanceledException;
 
     /// <summary>
-    /// What the PC is told from a kept job. A job that ran to the end is told with what came of it. A job cut off by a
-    /// restart is lost and marked interrupted, which every PC tells as the server restarting while writing them.
+    /// What the PC is told from a kept job that ended. A job that ran to the end is told with what came of it. A job
+    /// cut off by a restart is lost and marked interrupted, which every PC tells as the server restarting while
+    /// writing them.
     /// </summary>
     private static NoteJobState FromStore(NoteJobRecord kept)
     {
         switch (kept.Outcome)
         {
-            case NoteJobOutcome.Running:
-                return NoteJobState.Running();
             case NoteJobOutcome.Succeeded:
                 var result = Result(kept.Result);
                 return new NoteJobState(Done: true, Notes: result?.Notes, Study: result?.Study, Outcome: NoteJobOutcome.Succeeded);
@@ -239,7 +254,8 @@ public sealed class NoteJobs
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            // The job is then told as lost. What it saved to the note stays saved.
+            // The job is then told as lost, since it's kept as running but no longer runs here. What it saved to the
+            // note stays saved.
             _logger.LogError(exception, "How a notes job ended couldn't be kept.");
         }
         finally
