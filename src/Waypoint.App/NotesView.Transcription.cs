@@ -28,7 +28,7 @@ public partial class NotesView
             Multiselect = true,
             Title = "Choose a recording to make notes from",
         };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        if (FileDialogs.Shared.Show(() => dialog.ShowDialog(Window.GetWindow(this)), false) == true)
         {
             ImportAudio(dialog.FileNames);
         }

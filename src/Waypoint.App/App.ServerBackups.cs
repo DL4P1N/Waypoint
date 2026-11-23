@@ -164,7 +164,7 @@ public partial class App
     private async void ExportNotesFromServer(ServerConnection server)
     {
         using var dialog = new Forms.FolderBrowserDialog { Description = "Choose where to save your notes", UseDescriptionForTitle = true };
-        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        if (FileDialogs.Shared.Show(dialog.ShowDialog, Forms.DialogResult.Cancel) != Forms.DialogResult.OK)
         {
             return;
         }

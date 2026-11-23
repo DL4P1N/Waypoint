@@ -128,8 +128,15 @@ public partial class App
             NoteConfirmWindow.Tell(null, RestoreTitle, $"{said} Waypoint couldn't open again by itself, so it closes now. Open it again the way you usually do.");
         }
 
-        Shutdown();
+        RequestExit();
     }
+
+    /// <summary>
+    /// Closes the usual way, from the tray, from install.ps1 or another program asking, or after a restore. A file or
+    /// folder dialog still open is closed first and closing goes ahead once it has returned, so it can't hold closing
+    /// open and nothing picked in it is acted on after closing.
+    /// </summary>
+    private void RequestExit() => FileDialogs.Shared.CloseThen(() => Shutdown());
 
     private static bool StartAfterRestore(string said)
     {

@@ -442,7 +442,7 @@ public partial class SettingsView : UserControl
     private void OnNotesFolderChanged(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Keep notes in this folder", InitialDirectory = _notesFolder() };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true && dialog.FolderName != _notesFolder())
+        if (FileDialogs.Shared.Show(() => dialog.ShowDialog(Window.GetWindow(this)), false) == true && dialog.FolderName != _notesFolder())
         {
             _moveNotesFolder(dialog.FolderName);
             NotesFolderPath.Text = _notesFolder();
