@@ -665,6 +665,9 @@ public partial class TodayView : UserControl
 
         public string Title => item.Title;
 
+        /// <summary>What a screen reader says for the row's "⋯" button.</summary>
+        public string MoreName => $"More for {item.Title}";
+
         public Brush Mark => item.Done ? Resource("FinishedDetail") : ThemeBrushes.For(ItemMarks.For(item, DateOnly.FromDateTime(DateTime.Now)));
 
         /// <summary>What the bar's color means, shown on hover. Null shows no tip.</summary>

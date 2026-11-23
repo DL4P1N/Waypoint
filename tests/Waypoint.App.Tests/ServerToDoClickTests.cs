@@ -31,6 +31,9 @@ public sealed class ServerToDoClickTests
 
         public int ItemReads { get; private set; }
 
+        /// <summary>While set, a done box change can't reach the server.</summary>
+        public bool Away { get; set; }
+
         /// <summary>While unset, changes wait for it.</summary>
         public ManualResetEventSlim ReleaseChanges { get; } = new(initialState: true);
 
@@ -61,6 +64,11 @@ public sealed class ServerToDoClickTests
         {
             var path = request.RequestUri!.AbsolutePath;
             object body;
+            if (path == "/api/items/done" && Away)
+            {
+                throw new HttpRequestException("No route to host");
+            }
+
             if (path == "/api/items/done")
             {
                 var sent = JsonSerializer.Deserialize<DoneRequest>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
@@ -213,6 +221,22 @@ public sealed class ServerToDoClickTests
         Assert.Equal(["Email advisor done"], server.Changes);
         Assert.True(Box(view, "Email advisor").IsChecked);
         Assert.False(Box(view, "Repot the basil").IsChecked);
+    });
+
+    [Fact]
+    public void A_click_while_the_server_is_away_goes_back_and_says_why() => Ui.Run(ui =>
+    {
+        var server = new ToDoServer();
+        var (view, work) = Open(ui, server);
+        server.Away = true;
+
+        Click(Box(view, "Email advisor"));
+        PumpUntil(ui, () => !work.IsBusy, "the change");
+
+        Assert.False(server.IsDone("Email advisor"));
+        Assert.False(Box(view, "Email advisor").IsChecked);
+        Assert.Equal(PageMessages.CantChangeYet, UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message").Text);
+        Assert.Empty(Ui.TakeUnhandled());
     });
 
     [Fact]

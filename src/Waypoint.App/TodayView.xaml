@@ -4,6 +4,40 @@
              xmlns:capture="clr-namespace:Waypoint.Core.Capture;assembly=Waypoint.Core"
              xmlns:local="clr-namespace:Waypoint.App">
     <UserControl.Resources>
+        <!-- A row's menu for the mouse, shown while the row is pointed at or has focus. The keyboard has the menu key and Delete. -->
+        <Style x:Key="RowMoreButton" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="ToolTip" Value="More" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Back" Width="26" Height="22" CornerRadius="4" Background="Transparent">
+                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="14" Text="⋯" Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Back" Property="Background" Value="{DynamicResource Surface}" />
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Border}}" Value="True">
+                    <Setter Property="Opacity" Value="1" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=Border}}" Value="True">
+                    <Setter Property="Opacity" Value="1" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <DataTemplate x:Key="RowTemplate">
             <Border Margin="-6,-2,-6,6" Padding="6,2,6,0" CornerRadius="4" Background="{Binding SelectedBrush}">
             <DockPanel>
@@ -11,6 +45,7 @@
                 <Border DockPanel.Dock="Left" Padding="0,3,8,6" Background="Transparent" ToolTip="{Binding MarkTip}">
                     <Border Width="3" Background="{Binding Mark}" />
                 </Border>
+                <Button DockPanel.Dock="Right" Style="{StaticResource RowMoreButton}" AutomationProperties.Name="{Binding MoreName}" Click="OnRowMoreClicked" />
                 <StackPanel Margin="0,0,0,4">
                     <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
                         <StackPanel Margin="11,0,0,0">
@@ -37,6 +72,8 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Margin="-4,0" Padding="4,0" CornerRadius="4" Background="{Binding SelectedBrush}">
+                                <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource RowMoreButton}" AutomationProperties.Name="{Binding MoreName}" Click="OnRowMoreClicked" />
                                 <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
                                     <TextBlock Margin="10,0,0,0"
                                                FontSize="13"
@@ -45,6 +82,7 @@
                                                Text="{Binding Title}"
                                                Foreground="{Binding TitleBrush}" />
                                 </CheckBox>
+                                </DockPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
