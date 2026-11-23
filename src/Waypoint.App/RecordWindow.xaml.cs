@@ -9,18 +9,23 @@ namespace Waypoint.App;
 /// </summary>
 public partial class RecordWindow : Window
 {
-    public RecordWindow(Window owner, string title, AudioInput input, bool keepAudio)
+    /// <param name="classTitle">The class on now and its date, or null when no class is on.</param>
+    public RecordWindow(Window owner, string? classTitle, AudioInput input, bool keepAudio)
     {
         InitializeComponent();
         WindowStyling.Apply(this);
         Owner = owner;
-        Question.Text = $"Record {title}?";
+        Question.Text = QuestionFor(classTitle);
         FromMicrophone.IsChecked = input == AudioInput.Microphone;
         FromComputer.IsChecked = input == AudioInput.ComputerAudio;
         FromBoth.IsChecked = input == AudioInput.Both;
         KeepAudio.IsChecked = keepAudio;
         Loaded += (_, _) => GoButton.Focus();
     }
+
+    /// <summary>Names the class when one is on, else asks plainly rather than "Record Recording, Mon Nov 23?".</summary>
+    public static string QuestionFor(string? classTitle) =>
+        string.IsNullOrWhiteSpace(classTitle) ? "Record a lecture now?" : $"Record {classTitle}?";
 
     public AudioInput Input =>
         FromComputer.IsChecked == true ? AudioInput.ComputerAudio : FromBoth.IsChecked == true ? AudioInput.Both : AudioInput.Microphone;
