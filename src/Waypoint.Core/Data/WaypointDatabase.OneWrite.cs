@@ -68,6 +68,24 @@ public sealed partial class WaypointDatabase
         }
     }
 
+    /// <summary>
+    /// The databases with a single write open on this thread, each held by the database itself. A transaction of its
+    /// own begun on one of those on the same thread could only wait for the write, which can't land until that call
+    /// returns, so it would stall for the whole busy wait and then fail. It's refused straight away instead. Reads
+    /// there are fine: they read what's landed on a connection of their own. A write of a single statement with no
+    /// transaction can't be told apart from a read here, so it still waits out the busy wait before it fails.
+    /// </summary>
+    [ThreadStatic]
+    private static List<WaypointDatabase>? _writingOnThread;
+
+    private void RefuseIfWritingOnThisThread()
+    {
+        if (_writingOnThread?.Contains(this) == true)
+        {
+            throw new InvalidOperationException("A write was begun on the database itself inside a single write on the same thread. Use the database the single write handed its work instead.");
+        }
+    }
+
     /// <summary>Closes a connection a call opened for itself, and leaves a write's connection to the write.</summary>
     internal readonly struct Lease(SqliteConnection? owned) : IDisposable
     {
@@ -99,6 +117,7 @@ public sealed partial class WaypointDatabase
     {
         if (_write is not { } write)
         {
+            RefuseIfWritingOnThisThread();
             return Step.Own(connection.BeginTransaction());
         }
 
@@ -187,9 +206,12 @@ public sealed partial class WaypointDatabase
             return inner;
         }
 
+        RefuseIfWritingOnThisThread();
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
         var write = new Write(connection, transaction);
+        var writing = _writingOnThread ??= [];
+        writing.Add(this);
         try
         {
             var result = work(new WaypointDatabase(this, write));
@@ -200,6 +222,7 @@ public sealed partial class WaypointDatabase
         finally
         {
             write.Over = true;
+            writing.Remove(this);
         }
     }
 

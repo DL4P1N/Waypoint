@@ -238,5 +238,66 @@ public sealed class OneWriteTests : IDisposable
         Assert.Equal([record], _database.GetNoteFileRecords("made-up-desk"));
     }
 
+    [Fact]
+    public void A_transaction_begun_on_the_database_itself_inside_a_write_on_the_same_thread_fails_straight_away()
+    {
+        _database.SetPreference("made_up_before", "yes");
+        Exception? begun = null;
+        Exception? nested = null;
+        string? read = null;
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        _database.InOneWrite(database =>
+        {
+            database.SetPreference("made_up_inside", "yes");
+            begun = Record.Exception(() => _database.SetPreferences(("made_up_refused", "yes")));
+            nested = Record.Exception(() => _database.InOneWrite(other => other.SetPreference("made_up_refused_too", "yes")));
+
+            // A read on the database itself still works, on a connection of its own, as the bedtime shift lookup does.
+            read = _database.GetPreference("made_up_before");
+        });
+        waited.Stop();
+
+        Assert.IsType<InvalidOperationException>(begun);
+        Assert.IsType<InvalidOperationException>(nested);
+        Assert.True(waited.Elapsed < TimeSpan.FromSeconds(10), $"Took {waited.Elapsed} to refuse.");
+        Assert.Equal("yes", read);
+        Assert.Equal("yes", _database.GetPreference("made_up_inside"));
+        Assert.Null(_database.GetPreference("made_up_refused"));
+        Assert.Null(_database.GetPreference("made_up_refused_too"));
+
+        // Once the write is over, the same thread begins transactions on the database itself again.
+        _database.SetPreferences(("made_up_after", "yes"));
+        _database.InOneWrite(database => database.SetPreference("made_up_after_too", "yes"));
+        Assert.Equal("yes", _database.GetPreference("made_up_after"));
+        Assert.Equal("yes", _database.GetPreference("made_up_after_too"));
+    }
+
+    [Fact]
+    public void A_write_open_on_one_database_doesnt_refuse_another_on_the_same_thread()
+    {
+        var otherPath = Path.Combine(Path.GetTempPath(), $"waypoint-onewrite-other-{Guid.NewGuid():N}.db");
+        try
+        {
+            var other = new WaypointDatabase(otherPath);
+            _database.InOneWrite(database =>
+            {
+                database.SetPreference("made_up_one", "1");
+                other.SetPreferences(("made_up_other", "yes"));
+                other.InOneWrite(write => write.SetPreference("made_up_other_too", "yes"));
+            });
+
+            Assert.Equal("yes", other.GetPreference("made_up_other"));
+            Assert.Equal("yes", other.GetPreference("made_up_other_too"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            foreach (var file in new[] { otherPath, otherPath + "-wal", otherPath + "-shm" })
+            {
+                File.Delete(file);
+            }
+        }
+    }
+
     private sealed class MadeUpStop : Exception;
 }
