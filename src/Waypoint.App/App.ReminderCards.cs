@@ -179,6 +179,30 @@ public partial class App
             LogError);
     }
 
+    private GlobalHotkey? _cardKey;
+
+    /// <summary>
+    /// The card shortcut is held only while a corner card is up, so it never takes the keys from anything else
+    /// the rest of the time. If another app already has them, the cards still work with the mouse.
+    /// </summary>
+    private void OnCornerCardsChanged()
+    {
+        if (CornerCards.Count > 0 && _cardKey is null)
+        {
+            _cardKey = new GlobalHotkey(CornerCards.FocusNewest, GlobalHotkey.VkR);
+            if (!_cardKey.Register())
+            {
+                _cardKey.Dispose();
+                _cardKey = null;
+            }
+        }
+        else if (CornerCards.Count == 0 && _cardKey is not null)
+        {
+            _cardKey.Dispose();
+            _cardKey = null;
+        }
+    }
+
     /// <summary>The same form and save as the To do page's Save my spot, opened over the reminder card.</summary>
     private bool SaveSpotFromCard(Window card)
     {

@@ -103,6 +103,51 @@ public sealed class ReminderWindowTests
         Assert.Equal(["follow up", "still waiting", "done"], said);
     });
 
+    [Fact]
+    public void Esc_is_not_now_on_a_plain_card_and_more_time_on_one_that_can_be_started() => Ui.Run(ui =>
+    {
+        var plants = ui.Database.AddByHand(new HandAddedItem(ItemKind.Reminder, "Water the plants", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var said = new List<string>();
+        var plain = new ReminderWindow(new DueReminder(1, plants, null, 1440), "Done", 1440, () => said.Add("done"), () => said.Add("snoozed"));
+        plain.Dismiss();
+        Assert.True(plain.Answered);
+
+        var essay = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var transition = new ReminderTransition(true, () => said.Add("cleared"), () => said.Add("skipped"), () => said.Add("more time"), null);
+        new ReminderWindow(new DueReminder(2, essay, null, null), "Done", 10, () => { }, () => said.Add("snoozed"), start: () => { }, transition: transition).Dismiss();
+
+        Assert.Equal(["snoozed", "more time"], said);
+    });
+
+    [Fact]
+    public void Esc_is_still_waiting_on_a_waiting_nudge_and_leaves_the_last_follow_up_unanswered() => Ui.Run(ui =>
+    {
+        var said = new List<string>();
+        var wait = ui.Database.AddWaitingByHand("Prof. Quill", "the extension", null, null, DateTime.Now).Item!;
+        new ReminderWindow(new DueReminder(1, wait, null, null), "Done", 10, () => said.Add("done"), () => { }, waiting: new ReminderWaiting(() => said.Add("follow up"), () => said.Add("still waiting"))).Dismiss();
+        Assert.Equal(["still waiting"], said);
+
+        // The follow-up has no more time to give, so Esc decides nothing: the card closes as if it was never answered.
+        var essay = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var transition = new ReminderTransition(true, () => said.Add("cleared"), () => said.Add("skipped"), null, null);
+        var last = new ReminderWindow(new DueReminder(2, essay, null, null, IsFollowUp: true), "Done", 10, () => said.Add("done"), () => said.Add("snoozed"), start: () => { }, transition: transition);
+        last.Dismiss();
+
+        Assert.False(last.Answered);
+        Assert.Equal(["still waiting"], said);
+    });
+
+    [Fact]
+    public void The_main_button_is_the_first_on_the_row_and_the_header_names_the_shortcut() => Ui.Run(ui =>
+    {
+        var essay = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "Essay", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        var transition = new ReminderTransition(true, () => { }, () => { }, () => { }, null);
+        var card = new ReminderWindow(new DueReminder(1, essay, null, null), "Done", 10, () => { }, () => { }, start: () => { }, transition: transition);
+
+        Assert.Equal("Start", card.MainButton?.Content);
+        Assert.Contains(CornerCards.KeyName, (string)UiTest.Named<TextBlock>(card, "Kind").ToolTip);
+    });
+
     private static List<Button> VisibleButtons(ReminderWindow card)
     {
         var content = (FrameworkElement)card.Content;

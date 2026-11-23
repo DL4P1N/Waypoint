@@ -2,6 +2,8 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using Waypoint.Core.Capture;
 
 namespace Waypoint.App;
@@ -26,7 +28,7 @@ public sealed record ReminderWaiting(Action FollowUp, Action StillWaiting);
 public sealed record ReminderDose(bool OffersNotNow, Action Skip);
 
 /// <summary>Corner card that stays up until answered and doesn't take focus from what's running.</summary>
-public partial class ReminderWindow : Window
+public partial class ReminderWindow : Window, ICornerCard
 {
     private readonly Action _primary;
     private readonly Action _snooze;
@@ -119,6 +121,45 @@ public partial class ReminderWindow : Window
         Details.Text = DetailLine(reminder, DateOnly.FromDateTime(DateTime.Now));
 
         CornerCards.Track(this);
+        Kind.ToolTip = CornerCards.KeyHint;
+        System.Windows.Automation.AutomationProperties.SetHelpText(this, CornerCards.KeyHint);
+        KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && !e.Handled)
+            {
+                e.Handled = true;
+                Dismiss();
+            }
+        };
+    }
+
+    /// <summary>The card's main button: the first one on its row, the same as on Discord.</summary>
+    public Button? MainButton => Buttons.Children.OfType<Button>().FirstOrDefault(button => button.Visibility == Visibility.Visible);
+
+    public void TakeFocus()
+    {
+        Activate();
+        MainButton?.Focus();
+    }
+
+    /// <summary>
+    /// Esc: Not now (or 10 more minutes) when the card has it, Still waiting on a waiting-on nudge, and otherwise the
+    /// card closes unanswered, the same as Alt+F4, so nothing is decided for the user.
+    /// </summary>
+    public void Dismiss()
+    {
+        if (Snooze.Visibility == Visibility.Visible)
+        {
+            OnSnoozeClicked(Snooze, new RoutedEventArgs());
+        }
+        else if (StillWaiting.Visibility == Visibility.Visible)
+        {
+            OnStillWaitingClicked(StillWaiting, new RoutedEventArgs());
+        }
+        else
+        {
+            Close();
+        }
     }
 
     private static string MinutesText(int minutes) =>

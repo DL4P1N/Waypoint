@@ -16,6 +16,9 @@ public sealed class GlobalHotkey : IDisposable
     /// <summary>Ctrl+Alt+M, for marking a moment while recording. Registered only while a recording is going.</summary>
     public const uint VkM = 0x4D;
 
+    /// <summary>Ctrl+Alt+R, which brings the newest corner card forward. Registered only while a card is up.</summary>
+    public const uint VkR = 0x52;
+
     private static readonly IntPtr MessageOnlyParent = new(-3);
 
     private readonly HwndSource _source;

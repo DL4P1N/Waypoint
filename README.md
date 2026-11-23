@@ -174,6 +174,7 @@ The side menu has To do, Notes, Budget, History, and Settings. Your lists are on
 | Ctrl+K | Find anywhere (in a note, Ctrl+K is the link box) |
 | Ctrl+E | Show a note's Markdown text, or the formatted note again |
 | Ctrl+Alt+M | Mark a moment while recording |
+| Ctrl+Alt+R | Bring the newest corner card forward, while one is up. Esc on a card answers it with the gentlest choice: Not now, 10 more minutes, or Still waiting, or it closes unanswered. |
 
 ### Lists
 

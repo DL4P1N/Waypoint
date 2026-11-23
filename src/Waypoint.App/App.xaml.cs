@@ -443,6 +443,7 @@ public partial class App : System.Windows.Application
         }
 
         _started = true;
+        CornerCards.Changed += OnCornerCardsChanged;
 
         // A recording cut off by a crash or power cut is fixed and offered once things have settled.
         Dispatcher.BeginInvoke(() => Guarded(() => _recorder?.OfferUnfinished()), DispatcherPriority.ApplicationIdle);

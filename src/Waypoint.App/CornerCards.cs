@@ -29,6 +29,21 @@ public static class CornerCards
 
     public static int Count => Placed.Count;
 
+    /// <summary>The shortcut that brings the newest card forward, as it's written on the cards.</summary>
+    public const string KeyName = "Ctrl+Alt+R";
+
+    /// <summary>What a card's header says when pointed at, so the keyboard way in can be found.</summary>
+    public const string KeyHint = $"{KeyName} brings the newest card forward from anywhere. Esc answers it with the gentlest choice.";
+
+    /// <summary>Brings the newest card forward with its main button focused, so Enter or Tab and Space answer it.</summary>
+    public static void FocusNewest()
+    {
+        if (Newest is ICornerCard card)
+        {
+            card.TakeFocus();
+        }
+    }
+
     /// <summary>Places the card once it's laid out, and lets its space go when it closes.</summary>
     public static void Track(Window card)
     {
@@ -72,4 +87,14 @@ public static class CornerCards
 
         return bottom - height >= highest ? bottom - height : lowest - height;
     }
+}
+
+/// <summary>A card in the corner that can be brought forward from the keyboard.</summary>
+public interface ICornerCard
+{
+    /// <summary>Activates the card and focuses its main button.</summary>
+    void TakeFocus();
+
+    /// <summary>What Esc does: the gentlest choice the card has.</summary>
+    void Dismiss();
 }
