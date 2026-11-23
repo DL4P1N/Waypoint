@@ -76,7 +76,7 @@ public sealed class FileDialogsTests
     public void A_dialog_that_wont_close_holds_closing_only_until_the_limit() => Ui.Run(ui =>
     {
         var closeAsked = 0;
-        var dialogs = new FileDialogs(() => closeAsked++, TimeSpan.FromMilliseconds(600));
+        var dialogs = new FileDialogs(() => closeAsked++, TimeSpan.FromSeconds(3));
         var closedInside = false;
         var answer = dialogs.Show(() =>
         {

@@ -40,8 +40,11 @@ internal sealed class AppClosing
     /// <summary>What Discord events handed to the window thread, run before the dispatcher stops.</summary>
     public Action? RunPosted { get; init; }
 
-    /// <summary>Takes nothing new from here on: no timer runs and the tray's menu is off.</summary>
+    /// <summary>Takes nothing new from here on: no timer runs.</summary>
     public Action? StopIntake { get; init; }
+
+    /// <summary>The tray's menu is off and the tray hidden, so no dialog opens from it. Done even if stopping the timers failed.</summary>
+    public Action? HideTray { get; init; }
 
     /// <summary>How long closing waits for Discord's events and for the worker's work.</summary>
     public TimeSpan DrainLimit { get; init; } = DiscordGateway.EventDrainLimit;
@@ -107,6 +110,7 @@ internal sealed class AppClosing
         // few seconds to end. Nothing new is started meanwhile: no timer runs, and the tray's menu is off, so no
         // dialog opens from it while this waits.
         Step(() => StopIntake?.Invoke());
+        Step(() => HideTray?.Invoke());
         Step(() =>
         {
             if (Worker is { } stopping)

@@ -188,6 +188,9 @@ public partial class App
         {
             _restoring = true;
             StopTimers();
+        },
+        HideTray = () =>
+        {
             if (_tray is { } tray)
             {
                 if (tray.ContextMenuStrip is { } menu)

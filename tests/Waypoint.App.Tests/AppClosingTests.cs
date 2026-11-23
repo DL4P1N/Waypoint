@@ -57,12 +57,13 @@ public sealed class AppClosingTests : IDisposable
         var steps = new List<string>();
         var problems = new List<Exception>();
         using var closingSaid = new EventWaitHandle(false, EventResetMode.ManualReset);
+        using var intakeStopped = new ManualResetEventSlim();
 
-        // Let go from another thread a moment after closing starts waiting, once the drafts are already saved.
+        // Let go from another thread once closing has saved everything and stopped taking anything new, just before
+        // it waits for the round. Closing can't end before then, since the round is still held.
         var letGo = Task.Run(() =>
         {
-            Assert.True(closingSaid.WaitOne(TimeSpan.FromSeconds(30)));
-            Thread.Sleep(300);
+            Assert.True(intakeStopped.Wait(TimeSpan.FromSeconds(30)));
             lock (steps)
             {
                 steps.Add("round let go");
@@ -94,7 +95,11 @@ public sealed class AppClosingTests : IDisposable
             },
             SavePlace = () => Did("place saved"),
             Worker = worker,
-            StopIntake = () => Did("intake stopped"),
+            StopIntake = () =>
+            {
+                Did("intake stopped");
+                intakeStopped.Set();
+            },
             Release = () => Did("released"),
             DrainLimit = TimeSpan.FromSeconds(30),
             LogError = problems.Add,
@@ -104,6 +109,7 @@ public sealed class AppClosingTests : IDisposable
         // What comes after Run in OnExit is the process ending, so by now the round is over and everything is saved.
         Did("closing done");
         Assert.True(round.IsCompleted);
+        Assert.True(closingSaid.WaitOne(0));
         Assert.True(letGo.Wait(TimeSpan.FromSeconds(30)));
         Assert.Empty(problems);
         Assert.Equal("Half typed made up note", _database.GetPreference("made_up_draft"));
@@ -142,6 +148,25 @@ public sealed class AppClosingTests : IDisposable
             Assert.True(round.Wait(TimeSpan.FromSeconds(30)));
         }
 
+        ui.Pump();
+    });
+
+    [Fact]
+    public void A_problem_stopping_the_timers_still_hides_the_tray_and_lets_go_of_the_lock() => Ui.Run(ui =>
+    {
+        var steps = new List<string>();
+        var problems = new List<Exception>();
+        new AppClosing
+        {
+            StopIntake = () => throw new InvalidOperationException("Made up timer problem"),
+            HideTray = () => steps.Add("tray hidden"),
+            Release = () => steps.Add("released"),
+            LogError = problems.Add,
+            LogText = _ => { },
+        }.Run(Dispatcher.CurrentDispatcher);
+
+        Assert.Equal(["tray hidden", "released"], steps);
+        Assert.Equal("Made up timer problem", Assert.Single(problems).Message);
         ui.Pump();
     });
 
