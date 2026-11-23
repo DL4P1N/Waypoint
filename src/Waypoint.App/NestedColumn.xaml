@@ -42,7 +42,6 @@
             <ListBox x:Name="Entries"
                      Margin="10,0"
                      Style="{StaticResource PlainList}"
-                     ItemContainerStyle="{StaticResource PickRow}"
                      AllowDrop="True"
                      SelectionChanged="OnEntryPicked"
                      LostKeyboardFocus="OnEntriesLeft"
@@ -53,22 +52,53 @@
                      DragLeave="OnEntriesDragLeave"
                      Drop="OnEntriesDrop"
                      ContextMenuOpening="OnEntriesMenuOpening">
+                <!-- A row as everywhere else, with a divider and a group's name above it, outside its highlight, so a picked
+                     entry is lit on its own and the group's name reads as the group's, not the entry's. -->
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource PickRow}">
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <StackPanel Background="Transparent">
+                                        <Border Height="1"
+                                                Margin="0,0,0,1"
+                                                Background="{DynamicResource Rule}"
+                                                Visibility="{Binding RuleVisibility}" />
+                                        <!-- A group's name, such as Lists, above its first entry. Only a label: picking it picks that entry. -->
+                                        <TextBlock Margin="14,8,11,0"
+                                                   FontSize="12"
+                                                   FontWeight="Normal"
+                                                   IsHitTestVisible="False"
+                                                   Text="{Binding Heading}"
+                                                   Visibility="{Binding HeadingVisibility}"
+                                                   Foreground="{DynamicResource SecondaryText}" />
+                                        <Border x:Name="Row"
+                                                Margin="0,0,0,2"
+                                                Padding="11,8"
+                                                Background="Transparent"
+                                                BorderBrush="Transparent"
+                                                BorderThickness="3,0,0,0">
+                                            <ContentPresenter />
+                                        </Border>
+                                    </StackPanel>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Row" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="Row" Property="Background" Value="{DynamicResource Surface}" />
+                                            <Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                                            <Setter Property="FontWeight" Value="SemiBold" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Margin="{Binding Indent}">
-                            <!-- Sits on the row's top edge, so it reads as a divider rather than part of the entry. -->
-                            <Border Height="1"
-                                    Margin="-14,-8,-11,9"
-                                    Background="{DynamicResource Rule}"
-                                    Visibility="{Binding RuleVisibility}" />
-                            <!-- A group's name, such as Lists, above its first entry. Only a label: picking it picks that entry. -->
-                            <TextBlock Margin="0,0,0,4"
-                                       FontSize="12"
-                                       FontWeight="Normal"
-                                       IsHitTestVisible="False"
-                                       Text="{Binding Heading}"
-                                       Visibility="{Binding HeadingVisibility}"
-                                       Foreground="{DynamicResource SecondaryText}" />
                             <TextBlock TextWrapping="Wrap" Text="{Binding Label}" />
                             <TextBlock FontSize="12"
                                        FontWeight="Normal"

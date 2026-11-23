@@ -459,4 +459,20 @@ public sealed class NestedColumnTests
         ui.Pump();
         Assert.Equal(["Task", "Exam"], UiTest.Labels(ui.Menus[before]));
     });
+
+    [Fact]
+    public void A_group_name_and_divider_sit_above_the_picked_entrys_highlight_not_inside_it() => Ui.Run(ui =>
+    {
+        var (column, _, list) = Make(ui);
+        column.SetEntries([new("all", "All"), new("list:Shopping", "Shopping", RuleAbove: true, Heading: "Lists"), new("list:Errands", "Errands", "lists")]);
+        column.Select("list:Shopping");
+        ui.Pump();
+
+        var container = ui.Container(list, Shown(list, "list:Shopping"));
+        var row = (Border)((ListBoxItem)container).Template.FindName("Row", container);
+        Assert.Contains(UiTest.Descendants<TextBlock>(container), text => text.Text == "Lists" && text.IsVisible);
+        Assert.DoesNotContain(UiTest.Descendants<TextBlock>(row), text => text.Text == "Lists");
+        Assert.DoesNotContain(UiTest.Descendants<Border>(row), border => border.Height == 1);
+        Assert.Contains(UiTest.Descendants<TextBlock>(row), text => text.Text == "Shopping");
+    });
 }
