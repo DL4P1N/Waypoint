@@ -256,7 +256,7 @@ public sealed partial class WaypointWorker
             await RetirePostAsync(discord, row, "This note was deleted on the PC");
         }
 
-        ForgetPartsOfRetiredPosts();
+        ForgetSendsOfRetiredPosts();
         _notePostsSettled = settled ? stamp : null;
     }
 
@@ -318,10 +318,23 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>
+    /// Makes one post match what it should show, then tries again any notice waiting in it, after its parts, even when
+    /// they couldn't all be put in place this round, as long as the post is still live.
+    /// </summary>
+    private async Task SyncPostAsync(DiscordBridge discord, string forum, WantedPost wanted, DiscordThreadRow? row)
+    {
+        await SyncPostPartsAsync(discord, forum, wanted, row);
+        if (row is not null && row.Forum == forum && _database.FindDiscordThread(row.Thread) is { Live: true })
+        {
+            await RetryNoticesAsync(discord, row.Thread);
+        }
+    }
+
+    /// <summary>
     /// Makes one post match what it should show, with as few calls as it takes. A message is only edited when its
     /// card changed. A post that's gone is made again, and the note or list it shows is never touched.
     /// </summary>
-    private async Task SyncPostAsync(DiscordBridge discord, string forum, WantedPost wanted, DiscordThreadRow? row)
+    private async Task SyncPostPartsAsync(DiscordBridge discord, string forum, WantedPost wanted, DiscordThreadRow? row)
     {
         if (row is null || row.Forum != forum)
         {
@@ -462,7 +475,7 @@ public sealed partial class WaypointWorker
 
         foreach (var extra in parts.Skip(wanted.Parts.Count).ToList())
         {
-            if (!await discord.DeleteAsync(row.Thread, extra.Message))
+            if (!await discord.DeleteInThreadAsync(row.Thread, extra.Message))
             {
                 return;
             }
@@ -472,7 +485,6 @@ public sealed partial class WaypointWorker
         }
 
         await ClearStrayPartsAsync(discord, row, wanted.Parts.Count, parts);
-        await RetryNoticesAsync(discord, row.Thread);
     }
 
     /// <summary>
@@ -524,15 +536,25 @@ public sealed partial class WaypointWorker
     }
 
     /// <summary>
-    /// A part noted for a post that's no longer live, such as one retired or made again, is let go, since that post is
-    /// never brought up to date again. What's in it stays as it is.
+    /// A part or a notice noted for a post that's no longer live, such as one retired or made again, is let go, since
+    /// that post is never brought up to date again. What's in it stays as it is. A notice that never went out shows
+    /// on this PC first, once.
     /// </summary>
-    private void ForgetPartsOfRetiredPosts()
+    private void ForgetSendsOfRetiredPosts()
     {
-        foreach (var send in _database.GetDiscordSends("part:"))
+        foreach (var send in _database.GetDiscordSends("part:").Concat(_database.GetDiscordSends(NoticeSends)))
         {
             var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
-            if (thread is not null && _database.FindDiscordThread(thread) is not { Live: true })
+            if (thread is null || _database.FindDiscordThread(thread) is { Live: true })
+            {
+                continue;
+            }
+
+            if (send.Key.StartsWith(NoticeSends, StringComparison.Ordinal) && send.MessageId is null)
+            {
+                LetNoticeGo(send);
+            }
+            else
             {
                 _database.FinishDiscordSend(send.Key);
             }

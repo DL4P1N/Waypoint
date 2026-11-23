@@ -119,6 +119,9 @@ public sealed partial class DiscordThreadTests : IDisposable
         /// <summary>Paths whose reads fail, such as a forum or a post's first message, the way an outage does.</summary>
         public HashSet<string> FailingReads { get; } = [];
 
+        /// <summary>Whether asking who the bot is gets an answer, as it does from Discord, rather than nothing.</summary>
+        public bool AnswersWhoAmI { get; set; }
+
         /// <summary>Whether messages sent to posts fail, the way an outage does.</summary>
         public bool FailingSends { get; set; }
 
@@ -233,6 +236,11 @@ public sealed partial class DiscordThreadTests : IDisposable
             {
                 var threads = Posts.Values.Where(post => !post.Archived).Select(post => new { id = post.Id, parent_id = post.Parent, owner_id = post.Owner, name = post.Name, applied_tags = post.Tags, last_message_id = post.Messages.LastOrDefault()?.Id });
                 return Json(new { threads });
+            }
+
+            if (parts is ["users", "@me"] && AnswersWhoAmI)
+            {
+                return Json(new { id = "bot" });
             }
 
             if (parts is ["channels", "alerts", "messages", "pins"])
