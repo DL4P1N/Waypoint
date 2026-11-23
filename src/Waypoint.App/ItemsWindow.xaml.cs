@@ -94,6 +94,13 @@ public partial class ItemsWindow : Window
         _submitted = submitted;
         InitializeComponent();
         WindowStyling.Apply(this);
+
+        // Before the place, so a window left narrow with Ask to the side opens that narrow again.
+        if (_database.GetPreference(AskHiddenKey) == "1")
+        {
+            ShowAsk(false, remember: false);
+        }
+
         RestorePlace();
         TodayPage.Work = PageWorkFor(server);
         NotesPage.Work = PageWorkFor(server);
@@ -400,7 +407,67 @@ public partial class ItemsWindow : Window
 
     /// <summary>The one rule for Ask's width, kept up as the window resizes, the page changes, or To do switches view.</summary>
     private void FitAsk() =>
-        AskWidth.Width = new GridLength(AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown));
+        AskWidth.Width = new GridLength(AskShown
+            ? AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown)
+            : HiddenAskWidth);
+
+    private const string AskHiddenKey = "ask_hidden";
+
+    /// <summary>The strip Ask leaves when it's put to the side.</summary>
+    public const double HiddenAskWidth = 44;
+
+    /// <summary>The window's narrowest with Ask open.</summary>
+    public const double AskOpenMinWidth = 1040;
+
+    /// <summary>The window's narrowest with Ask put to the side.</summary>
+    public const double AskHiddenMinWidth = 780;
+
+    /// <summary>Whether Ask is open, rather than put to the side.</summary>
+    public bool AskShown => AskColumn.Visibility == Visibility.Visible;
+
+    private void OnAskHideClicked(object sender, RoutedEventArgs e) => ShowAsk(false, moveFocus: true);
+
+    private void OnAskShowClicked(object sender, RoutedEventArgs e) => ShowAsk(true, moveFocus: true);
+
+    /// <summary>
+    /// Opens Ask or puts it to the side, and remembers which for next time. The window can be narrower while it's to
+    /// the side, and grows back to fit when it opens again.
+    /// </summary>
+    public void ShowAsk(bool shown, bool moveFocus = false, bool remember = true)
+    {
+        var focusWasInAsk = AskColumn.IsKeyboardFocusWithin;
+        AskColumn.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        AskStrip.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
+        MinWidth = shown ? AskOpenMinWidth : AskHiddenMinWidth;
+        if (shown)
+        {
+            AskNews.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetName(AskShow, "Show Ask");
+        }
+
+        FitAsk();
+        if (remember)
+        {
+            _database.SetPreference(AskHiddenKey, shown ? "0" : "1");
+        }
+
+        if (shown && moveFocus)
+        {
+            Dispatcher.BeginInvoke(() => Input.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        }
+        else if (!shown && (moveFocus || focusWasInAsk))
+        {
+            Dispatcher.BeginInvoke(() => AskShow.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        }
+    }
+
+    /// <summary>A reply that came while Ask was to the side marks its strip, and a screen reader hears that one came.</summary>
+    private void MarkAskNews()
+    {
+        AskNews.Visibility = Visibility.Visible;
+        AutomationProperties.SetName(AskShow, "Show Ask, a new reply is there");
+        LiveRegion.Announce(AskShow);
+    }
 
     /// <summary>
     /// Set while the window is hidden and a refresh was skipped: true when every one skipped was a refresh every so
@@ -708,6 +775,11 @@ public partial class ItemsWindow : Window
     public void StartTyping(string text)
     {
         ShowList();
+        if (!AskShown)
+        {
+            ShowAsk(true);
+        }
+
         Input.Text = text;
         Input.CaretIndex = text.Length;
         Input.Focus();
@@ -826,9 +898,16 @@ public partial class ItemsWindow : Window
         ShowThingsToTry();
         ChatScroll.UpdateLayout();
         ChatScroll.ScrollToEnd();
-        if (row.Kind == ChatKind.Reply && RowText(row) is { } words)
+        if (row.Kind == ChatKind.Reply)
         {
-            LiveRegion.Announce(words);
+            if (!AskShown)
+            {
+                MarkAskNews();
+            }
+            else if (RowText(row) is { } words)
+            {
+                LiveRegion.Announce(words);
+            }
         }
     }
 

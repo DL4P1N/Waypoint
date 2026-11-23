@@ -212,10 +212,18 @@
                     PreviewDragLeave="OnFileDragLeave"
                     PreviewDrop="OnFileDrop">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top"
-                               Margin="24,22,24,16"
-                               Style="{StaticResource ColumnTitle}"
-                               Text="Ask" />
+                    <DockPanel DockPanel.Dock="Top" Margin="24,22,16,16">
+                        <!-- Ask can be put to the side, for a narrower window or more room for the page. It's remembered. -->
+                        <Button x:Name="AskHide"
+                                DockPanel.Dock="Right"
+                                VerticalAlignment="Center"
+                                Style="{StaticResource SmallButton}"
+                                Content="Hide"
+                                ToolTip="Put Ask to the side"
+                                AutomationProperties.Name="Hide Ask"
+                                Click="OnAskHideClicked" />
+                        <TextBlock Style="{StaticResource ColumnTitle}" Text="Ask" />
+                    </DockPanel>
 
                     <Border x:Name="PayCard"
                             DockPanel.Dock="Top"
@@ -445,6 +453,36 @@
                         </StackPanel>
                     </Grid>
                 </DockPanel>
+            </Border>
+
+            <!-- Ask put to the side: one narrow strip to bring it back, marked when a reply came meanwhile. -->
+            <Border x:Name="AskStrip"
+                    Grid.Column="2"
+                    BorderBrush="{StaticResource Rule}"
+                    BorderThickness="1,0,0,0"
+                    Visibility="Collapsed">
+                <Button x:Name="AskShow"
+                        VerticalAlignment="Stretch"
+                        VerticalContentAlignment="Top"
+                        BorderThickness="0"
+                        Padding="0,22,0,0"
+                        ToolTip="Show Ask"
+                        AutomationProperties.Name="Show Ask"
+                        Click="OnAskShowClicked">
+                    <StackPanel>
+                        <TextBlock HorizontalAlignment="Center" FontSize="14" Text="Ask">
+                            <TextBlock.LayoutTransform>
+                                <RotateTransform Angle="-90" />
+                            </TextBlock.LayoutTransform>
+                        </TextBlock>
+                        <Ellipse x:Name="AskNews"
+                                 Width="8"
+                                 Height="8"
+                                 Margin="0,10,0,0"
+                                 Fill="{DynamicResource Accent}"
+                                 Visibility="Collapsed" />
+                    </StackPanel>
+                </Button>
             </Border>
         </Grid>
     </DockPanel>
