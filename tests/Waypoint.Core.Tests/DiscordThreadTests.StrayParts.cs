@@ -79,6 +79,31 @@ public sealed partial class DiscordThreadTests
     }
 
     [Fact]
+    public async Task A_waiting_notice_goes_after_the_parts_and_never_hides_a_part_sent_unheard()
+    {
+        var id = _database.CreateNote("Made up long reading", LongReading, _now);
+        var post = await SecondPartSentButNotKept(id, "BEFORE UPDATE OF message_id ON discord_sends WHEN NEW.send_key LIKE 'part:%'");
+        var parts = post.Messages.Where(message => message.Bot).Select(message => message.Id).ToList();
+
+        // A notice is also waiting to be tried again in the same post.
+        var key = $"notice:{post.Id}:madeupwaiting";
+        _database.BeginDiscordSend(key, post.Id, _now);
+        _database.SetDiscordSendCard(key, """{"Title":"Made up heads up","Text":"Made up words for the post","Tone":0}""");
+
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await second.SyncDiscordThreadsAsync();
+
+        var bots = post.Messages.Where(message => message.Bot).ToList();
+        Assert.Equal(3, bots.Count);
+        Assert.Equal(parts, bots.Take(2).Select(message => message.Id));
+        Assert.True(bots[2].Says("Made up words for the post"));
+        Assert.Equal(parts, _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message));
+        Assert.Empty(_database.GetDiscordSends(""));
+    }
+
+    [Fact]
     public async Task A_stray_part_already_taken_away_by_hand_is_let_go()
     {
         var id = _database.CreateNote("Made up long reading", LongReading, _now);

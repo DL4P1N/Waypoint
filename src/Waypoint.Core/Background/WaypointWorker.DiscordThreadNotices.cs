@@ -118,21 +118,30 @@ public sealed partial class WaypointWorker
     /// </summary>
     private async Task<SentSearch> FindUnkeptAsync(DiscordBridge discord, string thread, string nonce, DiscordCard card, string? button = null)
     {
-        var known = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? [])
-            .Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message))
-            .Append(thread)
-            .ToHashSet(StringComparer.Ordinal);
-        var after = known.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
-        var search = await discord.FindSentAfterAsync(thread, after, nonce, card, known);
-        return search.Result == SentLookup.NotFound && button is not null
-            ? await discord.FindSentWithButtonAfterAsync(thread, after, nonce, button, known)
-            : search;
+        // Read from the post's last part, not its last notice, since a notice can come after a part sent unheard.
+        var parts = (_database.FindDiscordThread(thread)?.Parts.Select(part => part.Message) ?? []).Append(thread).ToList();
+        var after = parts.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
+        var known = parts.Concat(_database.GetDiscordNotices(thread).Select(notice => notice.Message)).ToHashSet(StringComparer.Ordinal);
+        return await discord.FindSentAfterAsync(thread, after, nonce, card, known, actionPrefix: button);
     }
 
     /// <summary>
     /// A notice whose try failed, or couldn't be checked, is looked for and tried again. The round holds the lock a
     /// post's own work can wait for, so it never waits for that post: one being read right now is tried on a later round.
+    /// A round tries them only once the post's parts are all in place, so a notice never goes between them.
     /// </summary>
+    private async Task RetryNoticesAsync(DiscordBridge discord, string thread)
+    {
+        foreach (var send in _database.GetDiscordSends(NoticeSendPrefix(thread)))
+        {
+            if (send.MessageId is null && _clock() - send.StartedAt < NoticeGiveUp && WaitingNoticeFor(send.Key) is { } waiting)
+            {
+                await NoticeAgainAsync(discord, thread, send, waiting);
+            }
+        }
+    }
+
+    /// <summary>One waiting notice tried again, unless the post is busy.</summary>
     private async Task NoticeAgainAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice waiting)
     {
         var gate = _postsRunning.GetOrAdd(thread, _ => new SemaphoreSlim(1, 1));
@@ -163,10 +172,6 @@ public sealed partial class WaypointWorker
             else if (_clock() - send.StartedAt >= NoticeGiveUp)
             {
                 _database.FinishDiscordSend(send.Key);
-            }
-            else if (WaitingNoticeFor(send.Key) is { } waiting)
-            {
-                await NoticeAgainAsync(discord, thread, send, waiting);
             }
         }
 

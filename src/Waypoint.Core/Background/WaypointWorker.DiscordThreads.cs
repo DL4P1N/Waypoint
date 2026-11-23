@@ -471,6 +471,7 @@ public sealed partial class WaypointWorker
         }
 
         await ClearStrayPartsAsync(discord, row, wanted.Parts.Count, parts);
+        await RetryNoticesAsync(discord, row.Thread);
     }
 
     /// <summary>

@@ -50,10 +50,16 @@ public sealed partial class DiscordBridge
 
     /// <summary>
     /// The same, among the messages after <paramref name="after"/>, leaving out any already <paramref name="known"/>.
-    /// A page at a time, oldest first, up to <see cref="MaxSentPages"/> pages.
+    /// A page at a time, oldest first, up to <see cref="MaxSentPages"/> pages. With <paramref name="actionPrefix"/>, a
+    /// message with a button whose action starts that way counts too, in the same reading, for one whose words may
+    /// have changed since it was sent.
     /// </summary>
-    public Task<SentSearch> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known, bool sameTitleOnly = false) =>
-        FindOwnAfterAsync(channel, after, message => NonceOf(message) == nonce || Shows(message, card, sameTitleOnly), known);
+    public Task<SentSearch> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known, bool sameTitleOnly = false, string? actionPrefix = null) =>
+        FindOwnAfterAsync(
+            channel,
+            after,
+            message => NonceOf(message) == nonce || Shows(message, card, sameTitleOnly) || (actionPrefix is not null && HasButton(message, ActionPrefix + actionPrefix)),
+            known);
 
     /// <summary>
     /// The same, for a message whose words aren't known any more, found by this nonce or by a button whose action
