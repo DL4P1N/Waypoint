@@ -82,4 +82,28 @@ public sealed partial class DiscordThreadTests
         Assert.Empty(_database.GetDiscordSends("notice:"));
         Assert.Single(_shownHere);
     }
+
+    [Fact]
+    public async Task A_waiting_notice_noted_under_an_older_layout_is_sent_once_and_its_own_note_settled()
+    {
+        _database.CreateList("Made up packing", _now);
+        var worker = await Started(notes: null);
+        var post = PostForList("Made up packing");
+        await worker.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+
+        // Noted by a version that laid notices out differently, so its key isn't the one this version would give it.
+        var key = $"notice:{post.Id}:madeupolderlayout";
+        _database.BeginDiscordSend(key, post.Id, _now);
+        _database.SetDiscordSendCard(key, """{"Title":"Made up heads up","Text":"Made up words for the post","Tone":0}""");
+
+        for (var round = 0; round < 3; round++)
+        {
+            _now = _now.AddMinutes(2);
+            await worker.SyncDiscordThreadsAsync();
+        }
+
+        Assert.Single(post.Messages, message => message.Bot && message.Says("Made up words for the post"));
+        Assert.Single(_database.GetDiscordNotices(post.Id));
+        Assert.Empty(_database.GetDiscordSends("notice:"));
+    }
 }

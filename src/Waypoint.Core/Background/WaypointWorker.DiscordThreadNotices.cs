@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Waypoint.Core.Data;
 using Waypoint.Core.Discord;
 
 namespace Waypoint.Core.Background;
@@ -18,15 +19,26 @@ public sealed partial class WaypointWorker
     /// </remarks>
     private async Task NoticeAsync(DiscordBridge discord, string thread, string title, string text, CardTone tone)
     {
-        var card = DiscordText.Notice(title, text, tone);
-        var key = NoticeSendPrefix(thread) + Hash(card);
+        var notice = new WaitingNotice(title, text, tone);
+        var key = NoticeSendPrefix(thread) + Hash(DiscordText.Notice(title, text, tone));
         var send = _database.BeginDiscordSend(key, thread, _clock());
-        var sent = send.MessageId;
-        if (sent is null)
+        if (send.MessageId is null)
         {
-            _database.SetDiscordSendCard(key, JsonSerializer.Serialize(new WaitingNotice(title, text, tone)));
+            _database.SetDiscordSendCard(key, JsonSerializer.Serialize(notice));
         }
 
+        await TryNoticeAsync(discord, thread, send, notice);
+    }
+
+    /// <summary>
+    /// One try at a notice, under the note it was given, with that note's key and nonce, so a try again later always
+    /// settles the same note and never starts another, even when the notice is now laid out differently.
+    /// </summary>
+    private async Task TryNoticeAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice notice)
+    {
+        var key = send.Key;
+        var card = DiscordText.Notice(notice.Title, notice.Text, notice.Tone);
+        var sent = send.MessageId;
         if (sent is null && !send.Fresh)
         {
             var search = await FindUnkeptAsync(discord, thread, send.Nonce, card);
@@ -37,7 +49,7 @@ public sealed partial class WaypointWorker
                 // and its note stays, so a notice found in the post later is still cleared away.
                 if (_clock() - send.StartedAt >= AlertRetry.Total && _database.MarkDiscordSendShownHere(key))
                 {
-                    _host.ShowNotice(title, $"{text}\n\nThis was meant for a post in Discord, which couldn't be checked.");
+                    _host.ShowNotice(notice.Title, $"{notice.Text}\n\nThis was meant for a post in Discord, which couldn't be checked.");
                 }
 
                 return;
@@ -121,7 +133,7 @@ public sealed partial class WaypointWorker
     /// A notice whose try failed, or couldn't be checked, is looked for and tried again. The round holds the lock a
     /// post's own work can wait for, so it never waits for that post: one being read right now is tried on a later round.
     /// </summary>
-    private async Task NoticeAgainAsync(DiscordBridge discord, string thread, WaitingNotice waiting)
+    private async Task NoticeAgainAsync(DiscordBridge discord, string thread, DiscordSend send, WaitingNotice waiting)
     {
         var gate = _postsRunning.GetOrAdd(thread, _ => new SemaphoreSlim(1, 1));
         if (!gate.Wait(0))
@@ -131,7 +143,7 @@ public sealed partial class WaypointWorker
 
         try
         {
-            await NoticeAsync(discord, thread, waiting.Title, waiting.Text, waiting.Tone);
+            await TryNoticeAsync(discord, thread, send, waiting);
         }
         finally
         {
@@ -154,7 +166,7 @@ public sealed partial class WaypointWorker
             }
             else if (WaitingNoticeFor(send.Key) is { } waiting)
             {
-                await NoticeAgainAsync(discord, thread, waiting);
+                await NoticeAgainAsync(discord, thread, send, waiting);
             }
         }
 
