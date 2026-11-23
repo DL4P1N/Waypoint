@@ -29,6 +29,7 @@ public partial class App
         SystemSounds.Asterisk.Play();
         ReminderWindow? window = null;
         ReminderCardHold? holdLater = null;
+        var toldDidntHelp = false;
 
         // A dose gets Took it, Not now (once), and Skip, each kept for the day the card is for, whichever card answers first.
         if (reminder.Item is { Dose: true, Recurs: not null, DueDate: { } dueOn })
@@ -49,17 +50,22 @@ public partial class App
                 dose: new ReminderDose(!reminder.IsFollowUp, () => Answer(DoseAnswer.Skip)))
             {
                 Slot = _openCards % MaxStackedCards,
-                FeedbackKept = () => _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now),
+                FeedbackKept = () =>
+                {
+                    toldDidntHelp = true;
+                    return _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now);
+                },
                 FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
             };
             _openCards++;
             var doseRef = ItemRef.Format(reminder.Item);
             _cardsUp.Add(doseRef);
+            var doseCard = window;
             window.Closed += (_, _) =>
             {
                 _openCards--;
                 _cardsUp.Remove(doseRef);
-                closed();
+                CardClosed(doseCard.Answered || toldDidntHelp, reminder, closed, snoozeMinutes);
             };
             window.Show();
             return;
@@ -125,7 +131,8 @@ public partial class App
             Slot = _openCards % MaxStackedCards,
             FeedbackKept = () =>
             {
-                // Saying it didn't help answers the card, so it isn't held for after this either.
+                // Saying it didn't help answers the card, so it isn't held for after this either, or shown again.
+                toldDidntHelp = true;
                 holdLater?.Answered();
                 return _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now);
             },
@@ -140,14 +147,34 @@ public partial class App
         var cardRef = ItemRef.Format(reminder.Item);
         _cardsUp.Add(cardRef);
 
+        var card = window;
         window.Closed += (_, _) =>
         {
             _openCards--;
             _cardsUp.Remove(cardRef);
             holdLater?.Answered();
-            closed();
+            CardClosed(card.Answered || toldDidntHelp, reminder, closed, snoozeMinutes);
         };
         window.Show();
+    }
+
+    /// <summary>
+    /// An answered card lets its reminder go now. One closed without an answer comes back once after the snooze time,
+    /// unless it was answered meanwhile somewhere else, such as in Discord or on the To do page.
+    /// </summary>
+    private void CardClosed(bool answered, DueReminder reminder, Action closed, int snoozeMinutes)
+    {
+        if (answered || _restoring)
+        {
+            closed();
+            return;
+        }
+
+        UnansweredCard.ComeBackAfter(
+            TimeSpan.FromMinutes(snoozeMinutes),
+            () => !_restoring && UnansweredCard.StillUnanswered(_database, reminder, DateTime.Now),
+            () => ShowReminderCard(reminder, closed),
+            closed);
     }
 
     /// <summary>The same form and save as the To do page's Save my spot, opened over the reminder card.</summary>
