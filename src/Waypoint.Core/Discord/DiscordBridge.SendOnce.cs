@@ -52,7 +52,18 @@ public sealed partial class DiscordBridge
     /// The same, among the messages after <paramref name="after"/>, leaving out any already <paramref name="known"/>.
     /// A page at a time, oldest first, up to <see cref="MaxSentPages"/> pages.
     /// </summary>
-    public async Task<SentSearch> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known, bool sameTitleOnly = false)
+    public Task<SentSearch> FindSentAfterAsync(string channel, string after, string nonce, DiscordCard card, IReadOnlySet<string> known, bool sameTitleOnly = false) =>
+        FindOwnAfterAsync(channel, after, message => NonceOf(message) == nonce || Shows(message, card, sameTitleOnly), known);
+
+    /// <summary>
+    /// The same, for a message whose words aren't known any more, found by this nonce or by a button whose action
+    /// starts with <paramref name="actionPrefix"/>.
+    /// </summary>
+    public Task<SentSearch> FindSentWithButtonAfterAsync(string channel, string after, string nonce, string actionPrefix, IReadOnlySet<string> known) =>
+        FindOwnAfterAsync(channel, after, message => NonceOf(message) == nonce || HasButton(message, ActionPrefix + actionPrefix), known);
+
+    /// <summary>This bot's first message after <paramref name="after"/> that matches, leaving out any already <paramref name="known"/>.</summary>
+    private async Task<SentSearch> FindOwnAfterAsync(string channel, string after, Func<JsonElement, bool> matches, IReadOnlySet<string> known)
     {
         try
         {
@@ -82,7 +93,7 @@ public sealed partial class DiscordBridge
                     .OrderBy(message => SnowflakeOf(message) ?? 0)
                     .ToList();
                 var found = messages
-                    .Where(message => IsFrom(message, self) && (NonceOf(message) == nonce || Shows(message, card, sameTitleOnly)))
+                    .Where(message => IsFrom(message, self) && matches(message))
                     .Select(message => Text(message, "id")!)
                     .FirstOrDefault(id => !known.Contains(id));
                 if (found is not null)
@@ -168,6 +179,14 @@ public sealed partial class DiscordBridge
             JsonValueKind.Number => nonce.GetRawText(),
             _ => null,
         } : null;
+
+    /// <summary>Whether a message has a button whose ID starts this way.</summary>
+    private static bool HasButton(JsonElement message, string prefix) =>
+        message.TryGetProperty("components", out var rows) && rows.ValueKind == JsonValueKind.Array
+        && rows.EnumerateArray().Any(row => row.ValueKind == JsonValueKind.Object
+            && row.TryGetProperty("components", out var buttons) && buttons.ValueKind == JsonValueKind.Array
+            && buttons.EnumerateArray().Any(button => button.ValueKind == JsonValueKind.Object
+                && Text(button, "custom_id") is { } id && id.StartsWith(prefix, StringComparison.Ordinal)));
 
     /// <summary>Whether a message shows this card's title and words, or only its title, the way Waypoint posts it.</summary>
     private static bool Shows(JsonElement message, DiscordCard card, bool titleOnly) =>
