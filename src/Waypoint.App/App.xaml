@@ -553,6 +553,12 @@
             </Setter>
         </Style>
 
+        <!-- A plain list of rows or buttons is never a Tab stop itself, so Tab goes straight to what's in it rather
+             than stopping on the list with a dotted box. Lists you pick from are ListBoxes, and keep theirs. -->
+        <Style TargetType="ItemsControl">
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+
         <Style TargetType="ListBoxItem">
             <Setter Property="Template">
                 <Setter.Value>

@@ -107,8 +107,10 @@
                         BorderThickness="0"
                         FontSize="15"
                         Content="×"
-                        ToolTip="Close window"
+                        ToolTip="Close window (Alt+F4)"
                         AutomationProperties.Name="Close window"
+                        AutomationProperties.AcceleratorKey="Alt+F4"
+                        IsTabStop="False"
                         WindowChrome.IsHitTestVisibleInChrome="True"
                         Click="OnCloseClicked" />
             </Grid>

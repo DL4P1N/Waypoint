@@ -9,6 +9,13 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <!-- First, so Tab reaches the search before the + beside it. -->
+                <TextBox x:Name="SearchBox"
+                         Style="{StaticResource FieldBox}"
+                         Tag="Search"
+                         AutomationProperties.Name="Search"
+                         TextChanged="OnSearchChanged"
+                         PreviewKeyDown="OnSearchKey" />
                 <!-- Square, as tall as the search box. The + is drawn rather than typed, since a font's + sits off center. -->
                 <Button x:Name="AddButton"
                         Grid.Column="1"
@@ -24,12 +31,6 @@
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center" />
                 </Button>
-                <TextBox x:Name="SearchBox"
-                         Style="{StaticResource FieldBox}"
-                         Tag="Search"
-                         AutomationProperties.Name="Search"
-                         TextChanged="OnSearchChanged"
-                         PreviewKeyDown="OnSearchKey" />
             </Grid>
             <TextBlock x:Name="Problem"
                        AutomationProperties.LiveSetting="Polite"
