@@ -503,14 +503,14 @@ public sealed partial class NotesApiTests : IDisposable
     }
 
     [Fact]
-    public void A_file_for_a_source_on_another_note_is_turned_down()
+    public async Task A_file_for_a_source_on_another_note_is_turned_down()
     {
         var notes = Pc().Notes;
         var first = notes.StartFromFile(new FileText("a.txt", "one"), null, false, DateTime.Now).NoteId;
         var second = notes.StartFromFile(new FileText("b.txt", "two"), null, false, DateTime.Now).NoteId;
         var source = Assert.Single(notes.GetNoteSources(first));
 
-        var response = Paired().PutAsync($"/api/notes/{second}/sources/{source.Id}/file", new ByteArrayContent([1])).Result;
+        var response = await Paired().PutAsync($"/api/notes/{second}/sources/{source.Id}/file", new ByteArrayContent([1]));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -934,7 +934,7 @@ public sealed partial class NotesApiTests : IDisposable
     }
 
     [Fact]
-    public void The_notes_folder_is_left_alone_while_the_server_is_away()
+    public async Task The_notes_folder_is_left_alone_while_the_server_is_away()
     {
         var root = Path.Combine(_pc, "Waypoint Notes");
         var (notes, client, line) = Pc();
@@ -949,7 +949,7 @@ public sealed partial class NotesApiTests : IDisposable
 
         // Back again, the edit made to the file meanwhile comes in.
         line.Down = false;
-        client.CheckAsync().GetAwaiter().GetResult();
+        await client.CheckAsync();
         files.Sync(DateTime.Now);
         Assert.Equal("milk and bread", Elsewhere().GetNote(id)!.Body);
     }

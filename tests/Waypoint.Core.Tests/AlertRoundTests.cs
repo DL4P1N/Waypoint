@@ -41,7 +41,7 @@ public sealed class AlertRoundTests : IDisposable
     }
 
     [Fact]
-    public void A_round_runs_off_the_calling_thread_and_one_still_running_is_not_joined_by_a_second()
+    public async Task A_round_runs_off_the_calling_thread_and_one_still_running_is_not_joined_by_a_second()
     {
         var caller = Environment.CurrentManagedThreadId;
         var armed = false;
@@ -79,13 +79,13 @@ public sealed class AlertRoundTests : IDisposable
         Assert.NotEqual(caller, roundThread);
 
         release.Set();
-        Assert.True(first.Wait(TimeSpan.FromSeconds(30)));
+        await first.WaitAsync(TimeSpan.FromSeconds(30));
 
         // The round made the daily backup, and the next round is a new one.
         Assert.Single(_database.GetBackups());
         var third = worker.StartAlertRound();
         Assert.NotSame(first, third);
-        Assert.True(third.Wait(TimeSpan.FromSeconds(30)));
+        await third.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Single(_database.GetBackups());
     }
 

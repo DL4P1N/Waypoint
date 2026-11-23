@@ -417,7 +417,7 @@ public sealed class LifeFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void A_button_and_a_reaction_at_the_same_moment_only_apply_once()
+    public async Task A_button_and_a_reaction_at_the_same_moment_only_apply_once()
     {
         var call = StoreReminder("call");
         var now = DateTime.Now;
@@ -441,7 +441,7 @@ public sealed class LifeFeaturesTests : IDisposable
                     ? _database.ApplyAlertAction(new AlertAction(message, AlertActionKind.Snooze), now, 15)
                     : _database.ApplyTransitionAction(more, AlertActionKind.MoreTime, now);
             })).ToArray();
-            Task.WaitAll(replies);
+            await Task.WhenAll(replies);
 
             Assert.Single(replies, reply => reply.Result?.StartsWith("Back in 15") == true);
             Assert.Single(replies, reply => reply.Result?.StartsWith("Back once") == true);

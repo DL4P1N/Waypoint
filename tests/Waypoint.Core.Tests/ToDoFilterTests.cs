@@ -7,7 +7,10 @@ namespace Waypoint.Core.Tests;
 
 public sealed class ToDoFilterTests : IDisposable
 {
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.Now);
+    // Read once per test, so a run that goes past midnight still sees one day throughout.
+    private readonly DateTime _now = DateTime.Now;
+
+    private DateOnly Today => DateOnly.FromDateTime(_now);
 
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid()}.db");
     private readonly WaypointDatabase _database;
@@ -23,7 +26,7 @@ public sealed class ToDoFilterTests : IDisposable
     private void Feed(params (string Title, string? Course)[] events) =>
         _database.ReplaceCalendarEvents(events.Select(found => new CalendarEvent(found.Title, found.Title, found.Course, Today.AddDays(3), null)).ToList());
 
-    private StoredItem Add(HandAddedItem item) => _database.AddByHand(item, DateTime.Now).Item!;
+    private StoredItem Add(HandAddedItem item) => _database.AddByHand(item, _now).Item!;
 
     private StoredItem Open(string title) => _database.GetOpenItems().Single(item => item.Title == title);
 
@@ -130,8 +133,8 @@ public sealed class ToDoFilterTests : IDisposable
         var item = Add(new HandAddedItem(ItemKind.Task, "Send timesheet", null, FilterId: work.Id));
         var personal = _database.GetToDoFilters().Single(filter => filter.Source == FilterSource.Personal);
 
-        Assert.True(_database.RemoveToDoFilter(work.Id, DateTime.Now));
-        Assert.False(_database.RemoveToDoFilter(personal.Id, DateTime.Now));
+        Assert.True(_database.RemoveToDoFilter(work.Id, _now));
+        Assert.False(_database.RemoveToDoFilter(personal.Id, _now));
         Assert.DoesNotContain(_database.GetToDoFilters(), filter => filter.Name == "Work");
         Assert.True(Shows(personal, item));
 
@@ -181,7 +184,7 @@ public sealed class ToDoFilterTests : IDisposable
     {
         var meeting = Add(new HandAddedItem(ItemKind.Event, "Study group", Today.AddDays(2), new TimeOnly(14, 0), new TimeOnly(16, 0)));
 
-        _database.RescheduleItem(meeting, Today.AddDays(3), new TimeOnly(9, 30), DateTime.Now);
+        _database.RescheduleItem(meeting, Today.AddDays(3), new TimeOnly(9, 30), _now);
 
         Assert.Equal(new TimeOnly(11, 30), _database.GetItemPlacements()[meeting.Id].EndTime);
     }
@@ -198,7 +201,7 @@ public sealed class ToDoFilterTests : IDisposable
     public void A_hand_added_item_is_stored_like_a_sorted_one_with_no_pending_capture()
     {
         var due = Today.AddDays(4);
-        var result = _database.AddByHand(new HandAddedItem(ItemKind.Exam, "Midterm", due, new TimeOnly(10, 0), Course: "MATH 130", RemindBefore: TimeSpan.FromHours(3)), DateTime.Now);
+        var result = _database.AddByHand(new HandAddedItem(ItemKind.Exam, "Midterm", due, new TimeOnly(10, 0), Course: "MATH 130", RemindBefore: TimeSpan.FromHours(3)), _now);
 
         Assert.Null(result.Problem);
         Assert.Empty(_database.GetPendingCaptures());
@@ -214,13 +217,13 @@ public sealed class ToDoFilterTests : IDisposable
     [Fact]
     public void The_add_form_says_what_is_missing()
     {
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Task, " ", null), DateTime.Now).Problem);
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Deadline, "Paper", null), DateTime.Now).Problem);
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Note, "Thought", null), DateTime.Now).Problem);
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Event, "Game", Today.AddDays(1), new TimeOnly(18, 0), new TimeOnly(17, 0)), DateTime.Now).Problem);
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Reminder, "Call", Today.AddDays(-1), new TimeOnly(9, 0), RemindBefore: TimeSpan.Zero), DateTime.Now).Problem);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Task, " ", null), _now).Problem);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Deadline, "Paper", null), _now).Problem);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Note, "Thought", null), _now).Problem);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Event, "Game", Today.AddDays(1), new TimeOnly(18, 0), new TimeOnly(17, 0)), _now).Problem);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Reminder, "Call", Today.AddDays(-1), new TimeOnly(9, 0), RemindBefore: TimeSpan.Zero), _now).Problem);
         Assert.Empty(_database.GetOpenItems());
-        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Task, "Laundry", null), DateTime.Now).Item);
+        Assert.NotNull(_database.AddByHand(new HandAddedItem(ItemKind.Task, "Laundry", null), _now).Item);
     }
 
     [Fact]

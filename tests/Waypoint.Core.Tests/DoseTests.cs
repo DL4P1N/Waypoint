@@ -11,7 +11,8 @@ namespace Waypoint.Core.Tests;
 /// <summary>Dose reminders: Took it kept once for its day from any card, local "did I take it?" answers, and pruning.</summary>
 public sealed class DoseTests : IDisposable
 {
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.Now);
+    // Read once per test rather than once per run, so a run that goes past midnight still sees one day in each test.
+    private readonly DateOnly Today = DateOnly.FromDateTime(DateTime.Now);
 
     private readonly string _folder = Path.Combine(Path.GetTempPath(), $"waypoint-doses-{Guid.NewGuid()}");
     private readonly WaypointDatabase _database;

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -32,6 +31,17 @@ public sealed class ServerNoteSaveTests
         /// <summary>While unset, saves wait for it. Kept well inside the client's wait, so a held save still goes through.</summary>
         public ManualResetEventSlim Release { get; } = new(initialState: true);
 
+        private int _answered;
+
+        /// <summary>How many held requests (saves and Find's search) have been answered.</summary>
+        public int Answered => Volatile.Read(ref _answered);
+
+        private async Task Hold(CancellationToken cancellationToken)
+        {
+            await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(2)), cancellationToken);
+            Interlocked.Increment(ref _answered);
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -40,7 +50,7 @@ public sealed class ServerNoteSaveTests
             {
                 var sent = JsonSerializer.Deserialize<SaveNoteRequest>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                 SaveArrived.Set();
-                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(2)), cancellationToken);
+                await Hold(cancellationToken);
                 lock (_gate)
                 {
                     Saves.Add(sent.Body);
@@ -64,7 +74,7 @@ public sealed class ServerNoteSaveTests
             }
             else if (path == "/api/items/open")
             {
-                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(2)), cancellationToken);
+                await Hold(cancellationToken);
                 body = new[] { new StoredItem(1, ItemKind.Task, "Repot the basil", null, null, false) };
             }
             else if (path is "/api/notes/folders" or "/api/notes/spots" or "/api/notes/classes" or "/api/lists"
@@ -115,9 +125,10 @@ public sealed class ServerNoteSaveTests
 
         Type(body, "radish, kale");
         server.Release.Reset();
-        var watch = Stopwatch.StartNew();
+        var answered = server.Answered;
         UiTest.Call(view, "SaveSoon");
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+        // The server holds the save until it's let go, so had the window waited for it, it would have been answered.
+        Assert.Equal(answered, server.Answered);
         Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
 
         // Typing goes on while that save is on its way. Leaving waits for it, then saves the rest, in order.
@@ -142,11 +153,7 @@ public sealed class ServerNoteSaveTests
 
         Type(body, "radish and leeks");
         UiTest.Call(view, "SaveSoon");
-        for (var tries = 0; tries < 50 && UiTest.Named<TextBlock>(view, "SavedLabel").Text != "Saved"; tries++)
-        {
-            Thread.Sleep(20);
-            ui.Pump();
-        }
+        ServerToDoClickTests.PumpUntil(ui, () => UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the save");
 
         Assert.Equal("Saved", UiTest.Named<TextBlock>(view, "SavedLabel").Text);
         view.Leave();
@@ -167,17 +174,14 @@ public sealed class ServerNoteSaveTests
 
         server.Release.Reset();
         UiTest.Named<TextBox>(view, "SearchBox").Text = "basil";
-        var watch = Stopwatch.StartNew();
+        var answered = server.Answered;
         UiTest.Call(view, "SearchSoon");
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"The window waited {watch.Elapsed.TotalMilliseconds:0} ms for the server");
+        // The search is held until it's let go, so had the window waited for it, it would have been answered.
+        Assert.Equal(answered, server.Answered);
         Assert.Empty(results.Items);
 
         server.Release.Set();
-        for (var tries = 0; tries < 100 && results.Items.Count == 0; tries++)
-        {
-            Thread.Sleep(20);
-            ui.Pump();
-        }
+        ServerToDoClickTests.PumpUntil(ui, () => results.Items.Count > 0, "the search");
 
         Assert.Equal(["Repot the basil"], results.Items.Cast<FoundThing>().Select(thing => thing.Title));
     });
