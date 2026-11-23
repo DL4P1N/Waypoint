@@ -43,4 +43,37 @@ public sealed partial class DiscordThreadTests
         Assert.Contains(post.Messages, message => message.Id == stuck.Id);
         Assert.Contains(post.Messages, message => message.Bot && message.Says("send the text again"));
     }
+
+    [Fact]
+    public async Task A_message_that_keeps_failing_is_still_left_after_a_few_tries_when_Waypoint_restarts_between_them()
+    {
+        var id = _database.CreateNote("Made up trip", "Pack made up bags", _now);
+        (await Started(lists: null)).StopDiscord();
+        var post = PostFor(id);
+        var stuck = _discord.UserMessage(post, StuckWords);
+        FailPartway($"BEFORE UPDATE OF body ON items WHEN NEW.body LIKE '%{StuckWords}%'");
+
+        // Each try is made by a fresh start, the way a message that stops Waypoint partway is.
+        for (var start = 0; start < 10 && !post.Messages.Any(message => message.Bot && message.Says("send the text again")); start++)
+        {
+            var worker = MakeWorker(lists: null);
+            worker.StartDiscord();
+            await Record.ExceptionAsync(() => Event(worker, "MESSAGE_CREATE", MessageEvent(post, stuck)));
+            worker.StopDiscord();
+        }
+
+        StopFailingPartway();
+        Assert.Single(post.Messages, message => message.Bot && message.Says("send the text again"));
+        Assert.Contains(post.Messages, message => message.Id == stuck.Id);
+        Assert.Equal(stuck.Id, _database.FindDiscordThread(post.Id)!.Cursor);
+        Assert.Equal(0, _database.DiscordMessageTries(post.Id, stuck.Id));
+        Assert.Equal("Pack made up bags", _database.GetNote(id)!.Body);
+
+        // Once left, it isn't tried again, and what's typed after it is added.
+        var later = _discord.UserMessage(post, "Made up later words");
+        var again = MakeWorker(lists: null);
+        again.StartDiscord();
+        await Event(again, "MESSAGE_CREATE", MessageEvent(post, later));
+        Assert.Equal("Pack made up bags\n\nMade up later words", _database.GetNote(id)!.Body);
+    }
 }

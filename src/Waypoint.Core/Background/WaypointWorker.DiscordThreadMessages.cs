@@ -49,9 +49,10 @@ public sealed partial class WaypointWorker
                 if (entry.FromOwner && entry.Message is { } message)
                 {
                     // Only tries while its note or list is still there count, since one deleted on the PC keeps it unread on purpose.
-                    var tryKey = $"{row.Thread}:{message.Id}";
+                    // Each is counted before it's made and kept across restarts, so one that keeps failing, or keeps
+                    // stopping Waypoint partway, is still left after a few.
                     if (row.State != WaypointDatabase.PostPending && StillThere(row)
-                        && _threadMessageTries.AddOrUpdate(tryKey, 1, (_, tries) => tries + 1) > MaxThreadMessageTries)
+                        && _database.AddDiscordMessageTry(row.Thread, message.Id, _clock()) > MaxThreadMessageTries)
                     {
                         // Tried enough, so it's left in the post with a word why, and the messages after it are read.
                         await NoticeAsync(discord, row.Thread, "Not added", "A message here couldn't be added after several tries, so it was left as it is. Any files in it may already be on the note, so send the text again.", CardTone.Attention);
@@ -66,10 +67,18 @@ public sealed partial class WaypointWorker
                         }
                     }
 
-                    _threadMessageTries.TryRemove(tryKey, out _);
                 }
 
-                _database.AdvanceDiscordThread(row.Thread, entry.Id);
+                // The post is read past it in the same write that its count goes, so neither is left without the other.
+                _database.InOneWrite(write =>
+                {
+                    if (entry.FromOwner && entry.Message is { } dealtWith)
+                    {
+                        write.ForgetDiscordMessageTries(row.Thread, dealtWith.Id);
+                    }
+
+                    write.AdvanceDiscordThread(row.Thread, entry.Id);
+                });
                 cursor = entry.Id;
             }
 
@@ -80,10 +89,8 @@ public sealed partial class WaypointWorker
         }
     }
 
-    /// <summary>How many times one message in a post is tried, while the app runs, before it's left as it is.</summary>
+    /// <summary>How many times one message in a post is tried, counting every run of the app, before it's left as it is.</summary>
     private const int MaxThreadMessageTries = 5;
-
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _threadMessageTries = new();
 
     /// <summary>
     /// One of the owner's messages in a post. Dealt is true once it's saved, or once there's nothing more to do with

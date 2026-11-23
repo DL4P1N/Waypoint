@@ -31,6 +31,34 @@ public sealed class DiscordSchemaUpgradeTests : IDisposable
         Assert.Equal("made-up-post", after.GetDiscordSend("notice:made-up-post:abc")!.Channel);
     }
 
+    [Fact]
+    public void A_database_from_before_tries_were_kept_starts_counting_them_when_opened()
+    {
+        var before = new WaypointDatabase(_path);
+        Run(before, "DROP TABLE discord_message_tries");
+
+        var after = Reopened();
+        Assert.Equal(0, after.DiscordMessageTries("made-up-post", "made-up-message"));
+        Assert.Equal(1, after.AddDiscordMessageTry("made-up-post", "made-up-message", Morning));
+        Assert.Equal(2, after.AddDiscordMessageTry("made-up-post", "made-up-message", Morning.AddMinutes(5)));
+        Assert.Equal(2, Reopened().DiscordMessageTries("made-up-post", "made-up-message"));
+    }
+
+    [Fact]
+    public void A_count_of_tries_is_forgotten_once_the_message_is_dealt_with_or_after_a_month()
+    {
+        var database = new WaypointDatabase(_path);
+        database.AddDiscordMessageTry("made-up-post", "made-up-old", Morning);
+        database.AddDiscordMessageTry("made-up-post", "made-up-done", Morning);
+        database.ForgetDiscordMessageTries("made-up-post", "made-up-done");
+
+        database.AddDiscordMessageTry("made-up-post", "made-up-new", Morning.AddDays(31));
+
+        Assert.Equal(0, database.DiscordMessageTries("made-up-post", "made-up-old"));
+        Assert.Equal(0, database.DiscordMessageTries("made-up-post", "made-up-done"));
+        Assert.Equal(1, database.DiscordMessageTries("made-up-post", "made-up-new"));
+    }
+
     private WaypointDatabase Reopened()
     {
         SqliteConnection.ClearAllPools();
