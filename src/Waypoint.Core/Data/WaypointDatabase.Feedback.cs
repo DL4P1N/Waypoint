@@ -20,7 +20,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Keeps one click. The item's title is kept beside its reference, so it still reads after the item is gone.</summary>
     public long AddFeedback(string feature, string? itemRef, string? note, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         string? title = null;
         if (ItemRef.TryParse(itemRef, out var source, out var id))
         {
@@ -40,7 +40,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds the optional note to a click already kept. Returns false if it was cleared meanwhile.</summary>
     public bool NoteFeedback(long id, string? note)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE feedback SET note = $note WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);
@@ -51,7 +51,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Newest first.</summary>
     public IReadOnlyList<FeedbackEntry> GetFeedback()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, at, feature, item_ref, item_title, note FROM feedback ORDER BY at DESC, id DESC";
         var entries = new List<FeedbackEntry>();
@@ -73,8 +73,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Puts cleared entries back as they were, for Undo. One that's somehow still there is left alone.</summary>
     public void RestoreFeedback(IEnumerable<FeedbackEntry> entries)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var entry in entries)
         {
             using var command = connection.CreateCommand();
@@ -94,7 +94,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Forgets all of it. Returns how many there were.</summary>
     public int ClearFeedback()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM feedback";
         return command.ExecuteNonQuery();

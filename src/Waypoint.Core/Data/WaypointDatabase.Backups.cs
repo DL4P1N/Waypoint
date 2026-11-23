@@ -94,7 +94,7 @@ public sealed partial class WaypointDatabase
 
         var safetyCopy = SaveCopy(now, BeforeRestoreSuffix);
         using (var backup = OpenFile(source, SqliteOpenMode.ReadOnly))
-        using (var live = Open())
+        using (Connect(out var live))
         {
             backup.BackupDatabase(live);
         }
@@ -267,7 +267,7 @@ public sealed partial class WaypointDatabase
 
         var partial = $"{path}.partial";
         File.Delete(partial);
-        using (var source = Open())
+        using (Connect(out var source))
         using (var target = OpenFile(partial, SqliteOpenMode.ReadWriteCreate))
         {
             source.BackupDatabase(target);

@@ -7,6 +7,8 @@ public sealed partial class WaypointDatabase
 {
     public WaypointDatabase(string path)
     {
+        _root = this;
+
         // Asked for on every open, so it doesn't rest on how the bundled SQLite was built or on what a pooled
         // connection was last set to. None of the keys cascade: a row still pointed at can't be deleted.
         _connectionString = new SqliteConnectionStringBuilder { DataSource = path, ForeignKeys = true }.ToString();
@@ -256,7 +258,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private void RenameOldRepaymentsTable()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var find = connection.CreateCommand();
         find.CommandText = """
             SELECT name FROM sqlite_master
@@ -276,7 +278,7 @@ public sealed partial class WaypointDatabase
 
     private void AddColumnIfMissing(string table, string column, string type)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var check = connection.CreateCommand();
         check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'";
         if ((long)check.ExecuteScalar()! == 0)

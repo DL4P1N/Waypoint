@@ -11,7 +11,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Pop-ups due at or before <paramref name="now"/> for items that aren't done, oldest first.</summary>
     public IReadOnlyList<DueReminder> GetDueReminders(DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var reminders = new List<(string At, DueReminder Reminder)>();
 
         using (var command = connection.CreateCommand())
@@ -75,8 +75,8 @@ public sealed partial class WaypointDatabase
 
     public void SnoozeReminder(DueReminder reminder, DateTime until)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         ForgetAfterThis(connection, reminder.Item.Source, reminder.Item.Id);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE {ReminderTable(reminder.Item)} SET remind_at = $until WHERE id = $id";
@@ -88,8 +88,8 @@ public sealed partial class WaypointDatabase
 
     public void DismissReminder(DueReminder reminder)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"DELETE FROM {ReminderTable(reminder.Item)} WHERE id = $id";
         if (reminder.Item.Source != ItemSource.Calendar)
@@ -120,8 +120,8 @@ public sealed partial class WaypointDatabase
         }
         else if (reminder.Item.Recurs is not null)
         {
-            using var connection = Open();
-            using var transaction = connection.BeginTransaction();
+            using var lease = Connect(out var connection);
+            using var transaction = Begin(connection);
             Finish(connection, reminder.Item, now, HistoryAction.Past);
             transaction.Commit();
         }
@@ -136,7 +136,7 @@ public sealed partial class WaypointDatabase
     /// <param name="dueOn">For a dose, the day the card was for, so Took it on it counts for that day even after the reminder moves on.</param>
     public void TrackSentReminder(string messageId, long itemId, ItemSource source = ItemSource.Capture, bool startOnly = false, DateTime? sentAt = null, DateOnly? dueOn = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT OR IGNORE INTO sent_reminders (message_id, item_id, source, start_only, sent_at, due_on) VALUES ($message, $item, $source, $startOnly, $sentAt, $dueOn)";
         command.Parameters.AddWithValue("$dueOn", dueOn is { } day ? day.ToString("O", CultureInfo.InvariantCulture) : DBNull.Value);
@@ -152,8 +152,8 @@ public sealed partial class WaypointDatabase
     public string? ApplyAlertAction(AlertAction action, DateTime now, int snoozeMinutes)
     {
         // Claiming the card and doing what it says are one write, so a failure between can't use up the press.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         string? messageId = null;
         long itemId = 0;
         DateOnly? dueOn = null;

@@ -45,7 +45,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<NoteFileRecord> GetNoteFileRecords(string clientId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using (var transaction = connection.BeginTransaction())
         {
             using var mine = connection.CreateCommand();
@@ -76,7 +76,7 @@ public sealed partial class WaypointDatabase
 
     public void SetNoteFileRecord(string clientId, NoteFileRecord record)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO pc_note_files (client_id, note_id, path, file_hash, size, modified_ticks, title, folder_id, body_hash)
@@ -91,7 +91,7 @@ public sealed partial class WaypointDatabase
 
     public void RemoveNoteFileRecord(string clientId, long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM pc_note_files WHERE client_id = $client AND note_id = $id";
         command.Parameters.AddWithValue("$client", clientId);
@@ -101,7 +101,7 @@ public sealed partial class WaypointDatabase
 
     public void ClearNoteFileRecords(string clientId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM pc_note_files WHERE client_id = $client";
         command.Parameters.AddWithValue("$client", clientId);
@@ -142,7 +142,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<NoteFileRecord> GetNoteFileRecords()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT note_id, path, file_hash, size, modified_ticks, title, folder_id, body_hash FROM note_files";
         using var reader = command.ExecuteReader();
@@ -165,7 +165,7 @@ public sealed partial class WaypointDatabase
 
     public void SetNoteFileRecord(NoteFileRecord record)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO note_files (note_id, path, file_hash, size, modified_ticks, title, folder_id, body_hash)
@@ -186,7 +186,7 @@ public sealed partial class WaypointDatabase
 
     public void RemoveNoteFileRecord(long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM note_files WHERE note_id = $id";
         command.Parameters.AddWithValue("$id", noteId);

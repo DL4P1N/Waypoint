@@ -78,7 +78,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A notice Waypoint sent in a post, such as a file that couldn't be added, to be cleared away later.</summary>
     public void AddDiscordNotice(string threadId, string messageId, DateTime sentAt)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT OR REPLACE INTO discord_post_notices (message_id, thread_id, sent_at) VALUES ($message, $thread, $at)";
         command.Parameters.AddWithValue("$message", messageId);
@@ -90,7 +90,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Whether any post still has a notice to clear away, or one noted as being sent under <paramref name="sendPrefix"/>.</summary>
     public bool HasDiscordNotices(string sendPrefix)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT EXISTS (SELECT 1 FROM discord_post_notices)
@@ -103,7 +103,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The notices still in a post, oldest first.</summary>
     public IReadOnlyList<(string Message, DateTime SentAt)> GetDiscordNotices(string threadId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT message_id, sent_at FROM discord_post_notices WHERE thread_id = $thread ORDER BY rowid";
         command.Parameters.AddWithValue("$thread", threadId);
@@ -119,7 +119,7 @@ public sealed partial class WaypointDatabase
 
     public void RemoveDiscordNotice(string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM discord_post_notices WHERE message_id = $message";
         command.Parameters.AddWithValue("$message", messageId);
@@ -166,8 +166,8 @@ public sealed partial class WaypointDatabase
         var replaced = row.Live
             ? ReadPosts("WHERE kind = $kind AND item_key = $key AND state = 'live' AND thread_id <> $thread", ("$kind", row.Kind), ("$key", row.Key), ("$thread", row.Thread))
             : [];
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var old in replaced)
         {
             using var retire = connection.CreateCommand();
@@ -211,7 +211,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A post the owner started now shows this note or list.</summary>
     public void SetDiscordThreadKey(string threadId, string key, string state)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_posts SET item_key = $key, state = $state WHERE thread_id = $thread";
         command.Parameters.AddWithValue("$thread", threadId);
@@ -223,7 +223,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Discord said a post was deleted. Only the record of it changes: the note or list is never touched.</summary>
     public bool MarkDiscordThreadGone(string threadId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_posts SET state = 'gone' WHERE thread_id = $thread";
         command.Parameters.AddWithValue("$thread", threadId);
@@ -233,7 +233,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Moves how far a post has been read, only ever forward, once what a message said is dealt with.</summary>
     public void AdvanceDiscordThread(string threadId, string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         Advance(connection, threadId, messageId);
     }
 
@@ -251,7 +251,7 @@ public sealed partial class WaypointDatabase
 
     private void UpdatePost(string threadId, string set, string value)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE discord_posts SET {set} WHERE thread_id = $thread";
         command.Parameters.AddWithValue("$thread", threadId);
@@ -261,7 +261,7 @@ public sealed partial class WaypointDatabase
 
     private List<DiscordThreadRow> ReadPosts(string condition, params (string Name, string Value)[] values)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {PostColumns} FROM discord_posts {condition} ORDER BY rowid";
         foreach (var (name, value) in values)
@@ -316,8 +316,8 @@ public sealed partial class WaypointDatabase
     public bool SaveNoteIfUnchanged(long id, string title, string body, string expectedBody, DateTime now, out NoteDetail? saved, (string Thread, string Message)? readTo = null, string? expectedTitle = null)
     {
         saved = null;
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         NoteDetail stored;
         using (var check = connection.CreateCommand())
         {
@@ -367,8 +367,8 @@ public sealed partial class WaypointDatabase
         var current = GetListEntries(name);
 
         // One write, so the lines are on the list whole or not at all.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var finished in current.Where(entry => entry.Done && clean.Any(text => Same(text, entry.Text))))
         {
             SetEntryDone(connection, finished, false, now);

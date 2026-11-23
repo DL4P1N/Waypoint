@@ -30,7 +30,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Classes a notes folder can be made for: the schedule in settings, plus courses from the feed and items. Sorted by name.</summary>
     public IReadOnlyList<string> GetClassNames()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ActiveCourses(connection).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
     }
 }

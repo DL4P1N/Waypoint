@@ -84,7 +84,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Notes directly in a folder, or in Unfiled when <paramref name="folderId"/> is null.</summary>
     public int CountNotesInFolder(long? folderId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM items i WHERE i.kind = 'Note' AND i.canceled = 0 AND {LiveFolder} IS $id";
         command.Parameters.AddWithValue("$id", (object?)folderId ?? DBNull.Value);
@@ -94,8 +94,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds a folder at the end of its level. A null parent puts it at the top level.</summary>
     public FolderEdit CreateNoteFolder(string name, long? parentId, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var edit = InsertFolder(connection, name, parentId, null, now);
         transaction.Commit();
         return edit;
@@ -104,8 +104,8 @@ public sealed partial class WaypointDatabase
     public FolderEdit RenameNoteFolder(long id, string name)
     {
         var clean = name.Trim();
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (!FolderExists(connection, id))
         {
             return new FolderEdit(0, clean, "That folder is gone.");
@@ -132,8 +132,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool MoveNoteFolder(long id, long? parentId, int position)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (!FolderExists(connection, id) || (parentId is { } parent && (!FolderExists(connection, parent) || IsInside(connection, parent, id))))
         {
             return false;
@@ -169,8 +169,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool ReorderNoteFolders(long? parentId, IReadOnlyList<long> ids)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (ids.Distinct().Count() != ids.Count
             || (parentId is { } parent && !FolderExists(connection, parent))
             || ids.Any(id => !FolderExists(connection, id) || (parentId is { } inside && IsInside(connection, inside, id))))
@@ -205,8 +205,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public FolderDeleteResult DeleteNoteFolder(long id, NotesInFolder notes)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (!FolderExists(connection, id))
         {
             return FolderDeleteResult.NotFound;
@@ -251,7 +251,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Files a note in a folder, or in Unfiled when <paramref name="folderId"/> is null. False if either is gone.</summary>
     public bool MoveNoteToFolder(long noteId, long? folderId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         if (folderId is { } folder && !FolderExists(connection, folder))
         {
             return false;
@@ -277,7 +277,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The folder made for a class, if there is one.</summary>
     public long? FindClassFolder(string course)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id FROM note_folders WHERE course = $course COLLATE NOCASE ORDER BY id LIMIT 1";
         command.Parameters.AddWithValue("$course", course.Trim());
@@ -296,8 +296,8 @@ public sealed partial class WaypointDatabase
             return new FolderEdit(0, clean, "Which class is the folder for?");
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var find = connection.CreateCommand())
         {
             find.CommandText = """
@@ -475,7 +475,7 @@ public sealed partial class WaypointDatabase
 
     private List<NoteFolder> ReadFolderRows()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT f.id, f.name, f.parent_id, f.position, f.created_at, f.course,

@@ -36,7 +36,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool MarkDiscordSendShownHere(string key)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_sends SET shown_here = 1 WHERE send_key = $key AND shown_here = 0";
         command.Parameters.AddWithValue("$key", key);
@@ -50,8 +50,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public DiscordSend BeginDiscordSend(string key, string? channel, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (ReadDiscordSend(connection, key) is { } before
             && (before.MessageId is not null || before.Channel == channel))
         {
@@ -74,7 +74,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The post went out as this message.</summary>
     public void SetDiscordSendMessage(string key, string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_sends SET message_id = $message WHERE send_key = $key";
         command.Parameters.AddWithValue("$key", key);
@@ -85,7 +85,7 @@ public sealed partial class WaypointDatabase
     /// <summary>What the post was for is saved, or it's no longer wanted, so the note goes.</summary>
     public void FinishDiscordSend(string key)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM discord_sends WHERE send_key = $key";
         command.Parameters.AddWithValue("$key", key);
@@ -98,7 +98,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public HashSet<string> GetTrackedMessages(string exceptKey)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT message_id FROM sent_reminders WHERE message_id IS NOT NULL
@@ -118,14 +118,14 @@ public sealed partial class WaypointDatabase
     /// <summary>The note for one post, or null.</summary>
     public DiscordSend? GetDiscordSend(string key)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadDiscordSend(connection, key);
     }
 
     /// <summary>The notes whose keys start this way, oldest first.</summary>
     public IReadOnlyList<DiscordSend> GetDiscordSends(string keyPrefix)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT send_key, nonce, channel_id, message_id, started_at FROM discord_sends WHERE substr(send_key, 1, length($prefix)) = $prefix ORDER BY rowid";
         command.Parameters.AddWithValue("$prefix", keyPrefix);

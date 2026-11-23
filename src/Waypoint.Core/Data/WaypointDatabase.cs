@@ -53,7 +53,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Total expenses in a date range. Checked-off expenses count, and canceled ones don't.</summary>
     private long GetSpentCents(DateOnly from, DateOnly through)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT COALESCE(SUM(i.amount_cents - i.reimbursed_cents), 0) FROM items i JOIN captures c ON c.id = i.capture_id
@@ -68,7 +68,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Open items, soonest first. Calendar events from past days are left out.</summary>
     public IReadOnlyList<StoredItem> GetOpenItems()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var items = new List<StoredItem>();
 
         using (var command = connection.CreateCommand())
@@ -106,7 +106,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Items finished since <paramref name="since"/>, newest first, so they can be undone.</summary>
     public IReadOnlyList<StoredItem> GetRecentlyFinished(DateTime since)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var finished = new List<(string At, StoredItem Item)>();
 
         using (var command = connection.CreateCommand())
@@ -151,7 +151,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<StoredItem> GetFinishedForList(DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var today = DateOnly.FromDateTime(now);
         var items = new List<StoredItem>();
 
@@ -195,8 +195,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Checks an item off or back on. The change and its History entry are one write.</summary>
     public void SetDone(StoredItem item, bool done)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (done)
         {
             // A dose is marked taken instead, and only once for its day.
@@ -221,7 +221,7 @@ public sealed partial class WaypointDatabase
             return false;
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT due_override IS NOT NULL FROM calendar_events WHERE id = $id";
         command.Parameters.AddWithValue("$id", item.Id);

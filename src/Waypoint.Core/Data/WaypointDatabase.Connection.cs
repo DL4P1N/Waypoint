@@ -49,7 +49,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private void UseWriteAheadLog()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA journal_mode = WAL";
         command.ExecuteScalar();
@@ -57,7 +57,7 @@ public sealed partial class WaypointDatabase
 
     private void Execute(string sql)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();

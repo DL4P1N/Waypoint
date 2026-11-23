@@ -40,7 +40,7 @@ public sealed partial class WaypointDatabase
 
     public long AddTranscriptionJob(long noteId, string originalPath, bool keepAudio, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO transcription_jobs (note_id, original_path, keep_audio, status, created_at, updated_at)
@@ -73,7 +73,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool SaveTranscriptionJob(TranscriptionJob job, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE transcription_jobs SET wav_path = $wav, kept_audio_path = $kept, status = $status, progress = $progress,
@@ -103,7 +103,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long AddTranscriptSource(long noteId, string name, string text, string? timestampsJson, DateTime now, string? filePath, string? clientId)
     {
-        lock (_sentOnce)
+        lock (_root._sentOnce)
         {
             if (clientId is not null && SourceSentAs(noteId, clientId) is { } kept)
             {
@@ -112,8 +112,8 @@ public sealed partial class WaypointDatabase
 
             // The source, its timestamps, and the id it was sent under are one write, so a failure between can't
             // leave one without its timestamps, or one the PC sends again and gets twice.
-            using var connection = Open();
-            using var transaction = connection.BeginTransaction();
+            using var lease = Connect(out var connection);
+            using var transaction = Begin(connection);
             var id = AddNoteSource(connection, noteId, NoteSourceKind.Transcript, name, text, now, filePath);
             if (id != 0 && timestampsJson is not null)
             {
@@ -140,7 +140,7 @@ public sealed partial class WaypointDatabase
 
     private long? SourceSentAs(long noteId, string clientId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id FROM note_sources WHERE client_id = $client AND note_id = $note";
         command.Parameters.AddWithValue("$client", clientId);
@@ -151,7 +151,7 @@ public sealed partial class WaypointDatabase
 
     public string? GetSourceTimestamps(long sourceId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT timestamps FROM note_sources WHERE id = $id";
         command.Parameters.AddWithValue("$id", sourceId);
@@ -160,7 +160,7 @@ public sealed partial class WaypointDatabase
 
     private List<TranscriptionJob> ReadJobs(string where, long? id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {JobColumns} FROM transcription_jobs {where}";
         if (id is { } value)

@@ -45,6 +45,11 @@ public sealed partial class WaypointDatabase
             return work();
         }
 
+        if (_write is not null)
+        {
+            throw new InvalidOperationException("A single write of the older kind was begun inside one of the newer kind.");
+        }
+
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
         var write = new OneWrite(connection, transaction);

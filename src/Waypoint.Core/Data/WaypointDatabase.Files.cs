@@ -29,8 +29,8 @@ public sealed partial class WaypointDatabase
         var waiting = GetWaitList().ToList();
 
         // The purchases and the payments are one write, so a failure partway leaves neither and the file can be imported again.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var result = ImportTransactions(connection, account, purchases, waiting);
         AddCardPayments(connection, account, payments);
         transaction.Commit();
@@ -99,8 +99,8 @@ public sealed partial class WaypointDatabase
         SavePaycheck((current ?? new ScheduledItem(MainPayLabel, amount, [], true)) with { AmountCents = amount });
         var paycheck = MainPaycheck()!;
 
-        using (var connection = Open())
-        using (var transaction = connection.BeginTransaction())
+        using (Connect(out var connection))
+        using (var transaction = Begin(connection))
         {
             using (var clear = connection.CreateCommand())
             {
@@ -149,7 +149,7 @@ public sealed partial class WaypointDatabase
 
     private Dictionary<long, List<DateOnly>> ReadPayCalendar()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT schedule_id, pay_on FROM pay_calendar ORDER BY pay_on";
 

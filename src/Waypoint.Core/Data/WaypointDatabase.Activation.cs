@@ -96,8 +96,8 @@ public sealed partial class WaypointDatabase
             return new OpReply(Activation.NothingToPick, true);
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var reply = ApplyStart(connection, plan, method, now);
         transaction.Commit();
         return reply;
@@ -111,7 +111,7 @@ public sealed partial class WaypointDatabase
     public (StoredItem Item, OpReply Reply)? StartFromReminder(string messageId, DateTime now)
     {
         StoredItem? found;
-        using (var read = Open())
+        using (Connect(out var read))
         using (var find = read.CreateCommand())
         {
             find.CommandText = "SELECT item_id, source FROM sent_reminders WHERE handled = 0 AND message_id = $message";
@@ -131,8 +131,8 @@ public sealed partial class WaypointDatabase
         }
 
         var plan = PlanStart(ItemRef.Format(item), null, null, now, null);
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
 
         // Two taps of Start at once only begin once, and an item finished meanwhile isn't started.
         if (!ClaimSentReminder(connection, messageId) || FindItem(connection, item.Source, item.Id) is not { Done: false })
@@ -255,8 +255,8 @@ public sealed partial class WaypointDatabase
 
     private void RecordNotNow(string itemRef, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         RecordNotNow(connection, itemRef, now);
         transaction.Commit();
     }
@@ -360,7 +360,7 @@ public sealed partial class WaypointDatabase
     public string DescribeSessionStats()
     {
         var sessions = new List<(string Method, bool Begun, double? Minutes)>();
-        using (var connection = Open())
+        using (Connect(out var connection))
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT method, started_at, begun_at FROM activation_sessions";
@@ -395,7 +395,7 @@ public sealed partial class WaypointDatabase
         var notes = entries ?? [];
         var links = notes.Where(entry => LinkLike().IsMatch(entry)).ToList();
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO handoffs (capture_id, project, stopped, next, links, thoughts, created_at)
@@ -430,7 +430,7 @@ public sealed partial class WaypointDatabase
             return new OpReply("");
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE handoffs SET next = $next WHERE id = $id";
         command.Parameters.AddWithValue("$next", next.Trim());
@@ -467,7 +467,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Takes a sent reminder off the list and gives back its item, so Start can begin on it.</summary>
     public StoredItem? TakeSentReminderItem(string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var find = connection.CreateCommand();
         find.CommandText = "SELECT item_id, source FROM sent_reminders WHERE handled = 0 AND message_id = $message";
         find.Parameters.AddWithValue("$message", messageId);
@@ -566,7 +566,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The latest of when it started, when the first action was done, and when anything else was done on it.</summary>
     private DateTime LastActivity(ActivationSession session)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT touched_at FROM activation_sessions WHERE id = $id";
         command.Parameters.AddWithValue("$id", session.Id);
@@ -576,19 +576,19 @@ public sealed partial class WaypointDatabase
 
     private StoredItem? FindTask(ActivationSession session)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ItemRef.TryParse(session.TaskRef, out var source, out var id) ? FindItem(connection, source, id) : null;
     }
 
     private StoredItem? FindStep(long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return FindItem(connection, ItemSource.Capture, id);
     }
 
     private string? ReadPromptKind(long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT prompt_kind FROM activation_sessions WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);
@@ -598,7 +598,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The newest session matching a fixed filter, which only ever holds this class's own values.</summary>
     private ActivationSession? ReadSession(string filter)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {SessionColumns} FROM activation_sessions WHERE {filter} ORDER BY id DESC LIMIT 1";
 
@@ -627,7 +627,7 @@ public sealed partial class WaypointDatabase
 
     private void Execute(long sessionId, string assignments, params (string Name, string? Value)[] values)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE activation_sessions SET {assignments} WHERE id = $id";
         command.Parameters.AddWithValue("$id", sessionId);
@@ -641,7 +641,7 @@ public sealed partial class WaypointDatabase
 
     private List<Handoff> GetHandoffs(string filter, params (string Name, string Value)[] values)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {HandoffColumns} FROM handoffs WHERE {filter}";
         foreach (var (name, value) in values)

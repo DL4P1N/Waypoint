@@ -35,8 +35,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long CreateNote(string title, string body, DateTime now, long? folderId = null)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var id = CreateNote(connection, title, body, now, folderId);
         transaction.Commit();
         return id;
@@ -70,11 +70,11 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long CreateNoteOnce(string clientId, string title, string body, DateTime now, long? folderId)
     {
-        lock (_sentOnce)
+        lock (_root._sentOnce)
         {
             // The note and the id it was sent under are one write, so a failure between can't make it twice.
-            using var connection = Open();
-            using var transaction = connection.BeginTransaction();
+            using var lease = Connect(out var connection);
+            using var transaction = Begin(connection);
             using (var find = connection.CreateCommand())
             {
                 find.CommandText = "SELECT id FROM items WHERE client_id = $client AND kind = 'Note' AND canceled = 0";
@@ -109,15 +109,15 @@ public sealed partial class WaypointDatabase
     /// <summary>Returns false if the note is gone, so whoever was typing can keep their text as a new one.</summary>
     public bool SaveNote(long id, string title, string body, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return WriteNote(connection, id, NoteTitle(title, body), body, now);
     }
 
     /// <summary>Counts as a cancel, so it shows in History and typing can bring it back too.</summary>
     public void DeleteNote(long id, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (FindItem(connection, ItemSource.Capture, id) is { Kind: ItemKind.Note, Done: false } note)
         {
             CancelItem(connection, note, now);
@@ -128,8 +128,8 @@ public sealed partial class WaypointDatabase
 
     public void RestoreNote(long id, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         RestoreItem(connection, id, now);
         transaction.Commit();
     }
@@ -156,7 +156,7 @@ public sealed partial class WaypointDatabase
     /// <param name="patterns">The values of $p0, $p1, and so on in <paramref name="condition"/>, if it has any.</param>
     private List<NoteDetail> ReadNotes(string condition, long id = 0, IReadOnlyList<string>? patterns = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {NoteColumns} FROM items i JOIN captures c ON c.id = i.capture_id

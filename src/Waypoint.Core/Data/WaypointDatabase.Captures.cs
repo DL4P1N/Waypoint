@@ -9,7 +9,7 @@ public sealed partial class WaypointDatabase
 {
     public long AddCapture(string text, DateTimeOffset? createdAt = null, CaptureOrigin origin = CaptureOrigin.App, string? fileName = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO captures (text, created_at, origin, file_name) VALUES ($text, $createdAt, $origin, $fileName) RETURNING id";
         command.Parameters.AddWithValue("$fileName", (object?)fileName ?? DBNull.Value);
@@ -25,7 +25,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long? AddSentCapture(string clientId, string text, DateTimeOffset? createdAt, string? fileName)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR IGNORE INTO captures (text, created_at, origin, file_name, client_id)
@@ -41,7 +41,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<PendingCapture> GetPendingCaptures()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, text, created_at, origin, file_name FROM captures WHERE sorted_at IS NULL ORDER BY id";
 
@@ -63,8 +63,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Stores a capture's items and applies its changes together, so a retry can't repeat them.</summary>
     public IReadOnlyList<AppliedChange> CompleteCapture(long captureId, IReadOnlyList<SortedItem> items, IReadOnlyList<ItemChange>? changes = null)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var applied = CompleteCapture(connection, captureId, items, changes);
         transaction.Commit();
         return applied;

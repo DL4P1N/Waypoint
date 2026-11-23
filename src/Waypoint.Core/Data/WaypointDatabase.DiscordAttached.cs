@@ -21,7 +21,7 @@ public sealed partial class WaypointDatabase
 
     public bool WasDiscordFileAttached(string attachmentId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM discord_attached_files WHERE attachment_id = $id";
         command.Parameters.AddWithValue("$id", attachmentId);
@@ -31,7 +31,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Remembers an added file, and forgets ones added long ago so the list doesn't grow forever.</summary>
     public void MarkDiscordFileAttached(string attachmentId, long noteId, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using (var prune = connection.CreateCommand())
         {
             prune.CommandText = "DELETE FROM discord_attached_files WHERE attached_at < $before";

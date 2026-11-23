@@ -10,7 +10,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Upcoming assignments that have no nudges yet, soonest first.</summary>
     public IReadOnlyList<StoredItem> GetEventsNeedingNudges(DateOnly today, DateOnly through, int limit)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {EventColumns} FROM calendar_events
@@ -34,8 +34,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Stores planned nudges. An event the user skipped in the meantime stays skipped.</summary>
     public void SaveNudges(IReadOnlyList<EventNudges> plans)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
 
         foreach (var plan in plans)
         {
@@ -65,15 +65,15 @@ public sealed partial class WaypointDatabase
     /// <summary>Ends all nudges for an assignment, and keeps them off if the feed moves its date.</summary>
     public void SkipNudges(long eventId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         SkipNudges(connection, eventId);
     }
 
     /// <summary>Matches stored events to the feed, keeping what's already checked off.</summary>
     public void ReplaceCalendarEvents(IReadOnlyList<CalendarEvent> events)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
 
         using (var markStale = connection.CreateCommand())
         {

@@ -28,7 +28,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Keeps a brokerage deposit read from email, so a scheduled transfer can be matched to it later.</summary>
     public void RecordBrokerageDeposit(long cents, DateOnly on)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         RecordBrokerageDeposit(connection, cents, on, null);
     }
 
@@ -52,7 +52,7 @@ public sealed partial class WaypointDatabase
     /// <summary>When each schedule entry was added, for the ones added since that was kept.</summary>
     private IReadOnlyDictionary<long, DateOnly> GetScheduleAddedOn()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, added_on FROM budget_schedule WHERE added_on IS NOT NULL";
 
@@ -72,7 +72,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Money leaving checking in an export, and brokerage deposits from email. A typed paycheck isn't an export.</summary>
     private IReadOnlyList<TransferSighting> GetTransferSightings(DateOnly from)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT posted_on, -cents, description, 0 FROM checking_activity
@@ -96,7 +96,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The last day an imported checking export covers, or null if none was ever imported.</summary>
     private DateOnly? CheckingExportThrough()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT MAX(posted_on) FROM checking_activity WHERE import_key NOT LIKE 'typed|%'";
         return command.ExecuteScalar() is string day ? DateOnly.Parse(day, CultureInfo.InvariantCulture) : null;
@@ -104,7 +104,7 @@ public sealed partial class WaypointDatabase
 
     private bool HasBrokerageDeposits()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT EXISTS (SELECT 1 FROM brokerage_deposits)";
         return (long)command.ExecuteScalar()! != 0;

@@ -17,7 +17,7 @@ public sealed partial class WaypointDatabase
 
     private IReadOnlyList<SettledWait> GetSettledWaits()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT description, price_cents, added_at, decision FROM wait_list WHERE decision IS NOT NULL ORDER BY added_at";
 
@@ -34,7 +34,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The day of the first capture, which is when Waypoint started being used.</summary>
     private DateOnly? GetFirstUsedOn()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT MIN(substr(created_at, 1, 10)) FROM captures";
         return command.ExecuteScalar() is string day && DateOnly.TryParse(day, CultureInfo.InvariantCulture, out var on) ? on : null;

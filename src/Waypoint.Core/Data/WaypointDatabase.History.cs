@@ -18,7 +18,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Everything closed, newest first. Undone entries and expenses are left out.</summary>
     public IReadOnlyList<HistoryEntry> GetHistory(int? limit = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {HistoryColumns} FROM item_history WHERE {HistoryIsCurrent} ORDER BY happened_at DESC, id DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", limit ?? -1);
@@ -55,7 +55,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private List<HistoryEntry> ReadHistoryHolding(string sql, string clean, int limit, Action<SqliteCommand>? parameters = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.Parameters.AddWithValue("$words", ContainsPattern(clean));
@@ -103,7 +103,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Only an item's latest close can be undone, and only while the item still exists.</summary>
     public bool CanReopen(HistoryEntry entry)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return CanReopen(connection, entry);
     }
 
@@ -120,7 +120,7 @@ public sealed partial class WaypointDatabase
             return new HashSet<long>();
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT h.id FROM item_history h
@@ -146,8 +146,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Undoes a History row. What it brings back and the row saying so are one write.</summary>
     public bool ReopenEntry(HistoryEntry entry)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var reopened = entry.Source == ItemSource.List
             ? CanReopen(connection, entry) && ReopenListEntry(connection, entry)
             : CanReopen(connection, entry) && Reopen(connection, FindItem(connection, entry.Source, entry.ItemId)!, DateTime.Now);
@@ -168,7 +168,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<StoredItem> GetFinishedMatching(string note)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return GetHistory()
             .Where(entry => SearchIndex.Mentions(entry.Title, note))
             .Select(entry => (Entry: entry, Item: FindItem(connection, entry.Source, entry.ItemId)))
@@ -187,8 +187,8 @@ public sealed partial class WaypointDatabase
         }
 
         // The rows and the flag saying they're there are one write, so a crash between can't add them twice.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var command = connection.CreateCommand())
         {
             command.CommandText = """

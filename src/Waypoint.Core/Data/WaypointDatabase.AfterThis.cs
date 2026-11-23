@@ -33,8 +33,8 @@ public sealed partial class WaypointDatabase
             return false;
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         Hold(connection, item.Source, item.Id, at, messageId);
         transaction.Commit();
         return true;
@@ -63,8 +63,8 @@ public sealed partial class WaypointDatabase
     public int HoldUnansweredReminders(DateTime now)
     {
         // Marking a card looked at and holding its item are one write, so a failure between can't lose the hold.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var unanswered = new List<(string Message, long Item, ItemSource Source, DateTime SentAt)>();
         using (var find = connection.CreateCommand())
         {
@@ -112,8 +112,8 @@ public sealed partial class WaypointDatabase
     public StoredItem? TakeAfterThis(DateTime now)
     {
         var working = GetActiveSession(now)?.TaskRef;
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var expire = connection.CreateCommand())
         {
             expire.CommandText = "DELETE FROM after_this WHERE held_at < $expired";
@@ -174,7 +174,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Forgets any hold on an item, once it was answered some other way.</summary>
     public void DropAfterThis(StoredItem item)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         ForgetAfterThis(connection, item.Source, item.Id);
     }
 
@@ -199,7 +199,7 @@ public sealed partial class WaypointDatabase
     {
         if (ItemRef.TryParse(itemRef, out var source, out var id))
         {
-            using var connection = Open();
+            using var lease = Connect(out var connection);
             ForgetAfterThis(connection, source, id);
         }
     }

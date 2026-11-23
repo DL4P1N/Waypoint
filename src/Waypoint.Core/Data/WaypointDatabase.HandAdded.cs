@@ -30,8 +30,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public HandAddResult AddByHand(HandAddedItem input, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var added = AddByHand(connection, input, now);
         transaction.Commit();
         return added;
@@ -44,11 +44,11 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public HandAddResult AddByHandOnce(string clientId, HandAddedItem input, DateTime now)
     {
-        lock (_sentOnce)
+        lock (_root._sentOnce)
         {
             // The item and the id it was sent under are one write, so a failure between can't add it twice.
-            using var connection = Open();
-            using var transaction = connection.BeginTransaction();
+            using var lease = Connect(out var connection);
+            using var transaction = Begin(connection);
             using (var find = connection.CreateCommand())
             {
                 find.CommandText = "SELECT id FROM items WHERE client_id = $client AND kind <> 'Note' AND canceled = 0";

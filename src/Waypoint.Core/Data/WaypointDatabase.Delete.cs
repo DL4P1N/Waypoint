@@ -19,8 +19,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public DeletedItem? DeleteItem(StoredItem item, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var current = FindItem(connection, item.Source, item.Id);
         if (current is null)
         {
@@ -48,7 +48,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A History row's item, deleted the same way. One whose item is gone only leaves History.</summary>
     public DeletedItem? DeleteHistoryItem(HistoryEntry entry, DateTime now)
     {
-        using (var connection = Open())
+        using (Connect(out var connection))
         {
             if (FindItem(connection, entry.Source, entry.ItemId) is null)
             {
@@ -57,14 +57,14 @@ public sealed partial class WaypointDatabase
             }
         }
 
-        using var lookup = Open();
+        using var lookupLease = Connect(out var lookup);
         return DeleteItem(FindItem(lookup, entry.Source, entry.ItemId)!, now);
     }
 
     public void UndoDelete(DeletedItem deleted, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         SetHistoryHidden(connection, deleted.Item, false, deleted.HiddenHistory);
         if (deleted.WasFinished)
         {

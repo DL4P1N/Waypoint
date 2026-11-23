@@ -40,7 +40,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Saves a new recording before any audio is written. The path is filled in by the caller from the id.</summary>
     public long AddRecording(AudioInput input, bool keepAudio, string title, DateTime startedAt)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO recordings (path, input, keep_audio, title, status, started_at)
@@ -57,7 +57,7 @@ public sealed partial class WaypointDatabase
 
     public void SetRecordingPath(long id, string path)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE recordings SET path = $path WHERE id = $id";
         command.Parameters.AddWithValue("$path", path);
@@ -67,7 +67,7 @@ public sealed partial class WaypointDatabase
 
     public void FinishRecording(long id, string status, DateTime? endedAt, double durationSeconds)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE recordings SET status = $status, ended_at = COALESCE($ended, ended_at), duration_seconds = $duration WHERE id = $id";
         command.Parameters.AddWithValue("$status", status);
@@ -79,7 +79,7 @@ public sealed partial class WaypointDatabase
 
     public void SetRecordingStatus(long id, string status)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE recordings SET status = $status WHERE id = $id";
         command.Parameters.AddWithValue("$status", status);
@@ -90,7 +90,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Links a recording to the transcription job and note made from it, which is also how its marks reach the note.</summary>
     public void HandOffRecording(long id, long jobId, long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE recordings SET status = $status, job_id = $job, note_id = $note WHERE id = $id";
         command.Parameters.AddWithValue("$status", RecordingStatus.HandedOff);
@@ -104,7 +104,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<RecordingInfo> GetRecordingsWithStatus(string status)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {RecordingColumns} FROM recordings WHERE status = $status ORDER BY id";
         command.Parameters.AddWithValue("$status", status);
@@ -113,7 +113,7 @@ public sealed partial class WaypointDatabase
 
     public long AddRecordingMark(long recordingId, TimeSpan offset, string? text, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO recording_marks (recording_id, offset_ms, text, created_at)
@@ -136,7 +136,7 @@ public sealed partial class WaypointDatabase
 
     private List<RecordingMark> ReadMarks(string where, long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT id, recording_id, offset_ms, text FROM recording_marks {where}";
         command.Parameters.AddWithValue("$id", id);
@@ -156,7 +156,7 @@ public sealed partial class WaypointDatabase
 
     private List<RecordingInfo> ReadRecordings(string where, long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {RecordingColumns} FROM recordings {where}";
         command.Parameters.AddWithValue("$id", id);

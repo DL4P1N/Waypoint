@@ -29,7 +29,13 @@ public sealed partial class WaypointDatabase
     private const string PersonalFilter = "Personal";
 
     /// <summary>Course names from the class schedule in settings, so a class has a filter before anything is due in it.</summary>
-    public IReadOnlyList<string> ScheduleCourses { get; set; } = [];
+    public IReadOnlyList<string> ScheduleCourses
+    {
+        get => _root._scheduleCourses;
+        set => _root._scheduleCourses = value;
+    }
+
+    private IReadOnlyList<string> _scheduleCourses = [];
 
     // Rows are never deleted, so a renamed class keeps its name through terms and feed gaps.
     private void CreateFilterTables()
@@ -55,8 +61,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<ToDoFilter> GetToDoFilters()
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var active = ActiveCourses(connection);
         var filters = ReadFilters(connection);
 
@@ -98,7 +104,7 @@ public sealed partial class WaypointDatabase
             return new FilterEdit(null, $"The name {clean} is already used.");
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var position = filters.Count == 0 ? 0 : filters.Max(filter => filter.Position) + 1;
         var id = InsertFilter(connection, clean, FilterSource.Custom, null, position);
         return new FilterEdit(new ToDoFilter(id, clean, FilterSource.Custom, null, position));
@@ -124,7 +130,7 @@ public sealed partial class WaypointDatabase
             return new FilterEdit(found, $"The name {clean} is already used.");
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE todo_filters SET name = $name WHERE id = $id";
         command.Parameters.AddWithValue("$name", clean);
@@ -136,8 +142,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Saves the order filters were dragged into. Ids that aren't given keep their place.</summary>
     public void SetToDoFilterOrder(IReadOnlyList<long> ids)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         for (var position = 0; position < ids.Count; position++)
         {
             using var command = connection.CreateCommand();
@@ -156,7 +162,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool RemoveToDoFilter(long id, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE todo_filters SET removed_at = $now WHERE id = $id AND source = 'Custom' AND removed_at IS NULL";
         command.Parameters.AddWithValue("$now", FormatReminder(now));
@@ -166,7 +172,7 @@ public sealed partial class WaypointDatabase
 
     public void RestoreToDoFilter(long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE todo_filters SET removed_at = NULL WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);
@@ -184,7 +190,7 @@ public sealed partial class WaypointDatabase
             return false;
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return AssignToFilter(connection, item, filterId);
     }
 
@@ -205,7 +211,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Course, filter, and end time for items that have any of them, by item id. Feed items aren't in it.</summary>
     public IReadOnlyDictionary<long, ItemPlacement> GetItemPlacements()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT i.id, i.course, CASE WHEN f.removed_at IS NULL THEN i.filter_id END, i.end_time
