@@ -85,6 +85,9 @@ public interface ISettingsData
     /// <summary>Forgets the link saved here, and says what's used now.</summary>
     string RemoveCalendarFeed();
 
+    /// <summary>Undo for Remove: the link removed last is saved again where it was kept, without being sent back.</summary>
+    string PutBackCalendarFeed();
+
     AlertEmailForm GetAlertEmail();
 
     /// <summary>Saves alert email's app ID and forwarding address and uses them straight away, or says why not.</summary>
@@ -161,6 +164,8 @@ public sealed class LocalSettingsData(WaypointDatabase database, WaypointWorker 
 
     public string RemoveCalendarFeed() => worker.RemoveCalendarFeed();
 
+    public string PutBackCalendarFeed() => worker.PutBackCalendarFeed();
+
     public AlertEmailForm GetAlertEmail() => new(worker.OutlookSettings?.ClientId, worker.OutlookSettings?.OwnAddress);
 
     public string SaveAlertEmail(AlertEmailForm form) => worker.SaveAlertEmail(form.ClientId, form.OwnAddress);
@@ -231,6 +236,8 @@ public sealed class ServerSettingsData(ServerClient server) : ISettingsData
     public string SaveCalendarFeed(string? link) => server.Send<TextValue>(Put, "api/settings/calendar", new TextValue(link)).Value ?? "";
 
     public string RemoveCalendarFeed() => server.Send<TextValue>(HttpMethod.Delete, "api/settings/calendar").Value ?? "";
+
+    public string PutBackCalendarFeed() => server.Send<TextValue>(Post, "api/settings/calendar/put-back").Value ?? "";
 
     public AlertEmailForm GetAlertEmail() => server.GetOr("api/settings/email", new AlertEmailForm(null, null));
 

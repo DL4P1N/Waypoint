@@ -230,4 +230,23 @@ public sealed class CalendarFeedSettingsTests : IDisposable
         Assert.Single(_feed.Asked);
         Assert.Contains(_database.GetOpenItems(), item => item.Title == "Quiz");
     }
+
+    [Fact]
+    public void Undo_after_remove_puts_the_same_link_back_but_never_over_a_newer_one()
+    {
+        var worker = Worker();
+        Assert.StartsWith("There's no removed link", worker.PutBackCalendarFeed());
+        worker.SaveCalendarFeed(PageLink);
+        worker.RemoveCalendarFeed();
+
+        Assert.Equal("Put the feed link back.", worker.PutBackCalendarFeed());
+        Assert.Equal(new CalendarFeedForm(true, true), worker.GetCalendarFeed());
+        Assert.NotNull(worker.Calendar);
+
+        // A link saved after the remove is the one kept.
+        worker.RemoveCalendarFeed();
+        worker.SaveCalendarFeed("https://example.test/newer.ics");
+        Assert.StartsWith("A feed link is already saved", worker.PutBackCalendarFeed());
+        Assert.Equal("https://example.test/newer.ics", CalendarFeedSetup.Saved(_database));
+    }
 }

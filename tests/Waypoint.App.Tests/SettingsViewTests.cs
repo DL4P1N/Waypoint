@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Windows;
@@ -200,9 +201,13 @@ public sealed class SettingsViewTests
 
         public bool OnServer => Remote;
 
-        public IReadOnlyList<WeeklyHours> GetWeeklyHours() => [];
+        public List<WeeklyHours> Weekly { get; } = [];
 
-        public IReadOnlyList<WorkDate> GetWorkDates(DateOnly from) => [];
+        public List<WorkDate> Dates { get; } = [];
+
+        public IReadOnlyList<WeeklyHours> GetWeeklyHours() => Weekly.ToList();
+
+        public IReadOnlyList<WorkDate> GetWorkDates(DateOnly from) => Dates.Where(date => date.Date >= from).OrderBy(date => date.Date).ToList();
 
         public int GetCommuteMinutes() => 15;
 
@@ -237,15 +242,43 @@ public sealed class SettingsViewTests
             return Waypoint.Core.Background.WaypointWorker.ClassesSaved(form.Classes.Count);
         }
 
-        public OpReply SetWeeklyHours(IReadOnlyList<string> days, string? hours) => new($"Work saved: {string.Join(", ", days)}, {hours}.");
+        public OpReply SetWeeklyHours(IReadOnlyList<string> days, string? hours)
+        {
+            if (hours is { Length: 11 } && hours[5] == '-')
+            {
+                foreach (var day in days.Select(Enum.Parse<DayOfWeek>))
+                {
+                    Weekly.RemoveAll(found => found.Day == day);
+                    Weekly.Add(new WeeklyHours(day, TimeOnly.Parse(hours[..5], CultureInfo.InvariantCulture), TimeOnly.Parse(hours[6..], CultureInfo.InvariantCulture)));
+                }
+            }
 
-        public OpReply RemoveWeeklyHours(IReadOnlyList<string> days) => new("");
+            return new($"Work saved: {string.Join(", ", days)}, {hours}.");
+        }
 
-        public OpReply AddWorkShift(DateTime? start, DateTime? end) => new("");
+        public OpReply RemoveWeeklyHours(IReadOnlyList<string> days)
+        {
+            Weekly.RemoveAll(found => days.Contains(found.Day.ToString()));
+            return new($"Removed {string.Join(", ", days)}.");
+        }
 
-        public OpReply SetDayOff(DateTime? date) => new("");
+        public OpReply AddWorkShift(DateTime? start, DateTime? end)
+        {
+            Dates.Add(new WorkDate(DateOnly.FromDateTime(start!.Value), TimeOnly.FromDateTime(start.Value), TimeOnly.FromDateTime(end!.Value)));
+            return new("Shift added.");
+        }
 
-        public OpReply RemoveWorkDate(DateOnly date) => new("");
+        public OpReply SetDayOff(DateTime? date)
+        {
+            Dates.Add(new WorkDate(DateOnly.FromDateTime(date!.Value), null, null));
+            return new("Day off saved.");
+        }
+
+        public OpReply RemoveWorkDate(DateOnly date)
+        {
+            Dates.RemoveAll(found => found.Date == date);
+            return new($"{date.ToString("dddd, MMM d", CultureInfo.InvariantCulture)} is back to the usual hours.");
+        }
 
         public OpReply SetCommute(string? minutes) => new("");
 
@@ -274,10 +307,19 @@ public sealed class SettingsViewTests
             return "Saved. Reading the feed now, then every hour.";
         }
 
+        private string? _removed;
+
         public string RemoveCalendarFeed()
         {
+            _removed = Link;
             Link = null;
             return "Removed. Nothing more is read from the feed, and what it already added stays.";
+        }
+
+        public string PutBackCalendarFeed()
+        {
+            Link = _removed;
+            return "Put the feed link back.";
         }
     }
 
@@ -556,7 +598,58 @@ public sealed class SettingsViewTests
         UiTest.Call(view, "OnCalendarFeedRemoved", view, new RoutedEventArgs());
         Assert.Null(settings.Link);
         Assert.Equal(Visibility.Collapsed, remove.Visibility);
-        Assert.StartsWith("Removed.", UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+        var bar = UiTest.Named<UndoBar>(view, "CalendarBar");
+        Assert.StartsWith("Removed.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "CalendarStatus").Visibility);
+
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal("https://example.test/feed.ics", settings.Link);
+        Assert.Equal(Visibility.Visible, remove.Visibility);
+        Assert.Equal("Put the feed link back.", UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+    });
+
+    [Fact]
+    public void Removing_regular_hours_or_a_shift_can_be_undone() => Ui.Run(ui =>
+    {
+        var settings = new MemorySettings();
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0)));
+        settings.Dates.Add(new WorkDate(today.AddDays(3), new TimeOnly(8, 0), new TimeOnly(12, 0)));
+        settings.Dates.Add(new WorkDate(today.AddDays(3), new TimeOnly(13, 0), new TimeOnly(16, 30)));
+        var view = new SettingsView();
+        view.Connect(settings, ui.Database, null, new BedtimeSettings(), () => [], () => { });
+        ui.Host(view);
+        view.Load();
+        view.ShowSection("work");
+        ui.Pump();
+        var bar = UiTest.Named<UndoBar>(view, "WorkBar");
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        Assert.Empty(settings.Weekly);
+        Assert.Equal("Removed Monday.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new WeeklyHours(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0))], settings.Weekly);
+
+        // Removing a date takes every shift it had, and Undo puts each back.
+        Remove(UiTest.Named<ItemsControl>(view, "DateRows"));
+        Assert.Empty(settings.Dates);
+        Assert.EndsWith("is back to the usual hours.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new TimeOnly(8, 0), new TimeOnly(13, 0)], settings.Dates.Select(date => date.Start!.Value).Order());
+        Assert.Equal(2, ((System.Collections.IEnumerable)UiTest.Named<ItemsControl>(view, "DateRows").ItemsSource).Cast<object>().Count());
+
+        void Remove(ItemsControl rows)
+        {
+            var row = ui.Container(rows, rows.Items[0]);
+            var button = UiTest.Descendants<Button>(row).Single(found => (string)found.Content == "×");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+            ui.Pump();
+        }
     });
 
     [Theory]

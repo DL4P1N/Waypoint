@@ -411,6 +411,11 @@ public sealed class PagesApiTests : IDisposable
         Assert.StartsWith("Removed.", settings.RemoveCalendarFeed());
         Assert.Equal(new Core.Calendar.CalendarFeedForm(false, false), settings.GetCalendarFeed());
         Assert.Null(_factory.Services.GetRequiredService<WaypointServer>().Worker.Calendar);
+
+        // Undo puts it back on the server without the link coming back to the PC.
+        Assert.Equal("Put the feed link back.", settings.PutBackCalendarFeed());
+        Assert.Equal(link, Database.GetPreference(Core.Calendar.CalendarFeedSetup.Preference));
+        Assert.NotNull(_factory.Services.GetRequiredService<WaypointServer>().Worker.Calendar);
     }
 
     [Fact]

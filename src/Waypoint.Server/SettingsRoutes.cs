@@ -48,6 +48,7 @@ public static class SettingsRoutes
         api.MapGet("/settings/calendar", (WaypointServer server) => Settings(server).GetCalendarFeed());
         api.MapPut("/settings/calendar", (TextValue link, WaypointServer server) => new TextValue(Settings(server).SaveCalendarFeed(link.Value)));
         api.MapDelete("/settings/calendar", (WaypointServer server) => new TextValue(Settings(server).RemoveCalendarFeed()));
+        api.MapPost("/settings/calendar/put-back", (WaypointServer server) => new TextValue(Settings(server).PutBackCalendarFeed()));
 
         api.MapGet("/settings/email", (WaypointServer server) => Settings(server).GetAlertEmail());
         api.MapPut("/settings/email", (AlertEmailForm form, WaypointServer server) => new TextValue(Settings(server).SaveAlertEmail(form)));

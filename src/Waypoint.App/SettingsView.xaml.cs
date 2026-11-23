@@ -331,14 +331,14 @@ public partial class SettingsView : UserControl
 
         var today = DateOnly.FromDateTime(DateTime.Now);
         var weekly = _settings.GetWeeklyHours();
-        WeeklyRows.ItemsSource = weekly.Select(hours => new WorkRow($"{hours.Day}  {Hours(hours.Start, hours.End)}", $"Remove {hours.Day}", weekly: hours.Day)).ToList();
+        WeeklyRows.ItemsSource = weekly.Select(hours => new WorkRow($"{hours.Day}  {Hours(hours.Start, hours.End)}", $"Remove {hours.Day}", weekly: hours)).ToList();
         NoWeekly.Visibility = weekly.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         var dates = _settings.GetWorkDates(today);
         DateRows.ItemsSource = dates.Select(date => new WorkRow(
             $"{date.Date.ToString("ddd, MMM d", CultureInfo.InvariantCulture)}  {(date.IsDayOff ? "off" : Hours(date.Start!.Value, date.End!.Value))}",
             $"Remove {date.Date.ToString("MMM d", CultureInfo.InvariantCulture)}",
-            date: date.Date)).ToList();
+            dates: dates.Where(other => other.Date == date.Date).ToList())).ToList();
         NoDates.Visibility = dates.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         Tonight.Text = _settings.DescribeTonight(DateTime.Now);
@@ -523,9 +523,22 @@ public partial class SettingsView : UserControl
         CalendarFeedChanged(reply);
     }
 
+    /// <summary>Removed straight away, like a class, with an Undo that saves the same link again where it was kept.</summary>
     private async void OnCalendarFeedRemoved(object sender, RoutedEventArgs e)
     {
+        CalendarBar.Changed();
         var (ok, reply) = await Change(() => _settings.RemoveCalendarFeed(), ShowCalendar);
+        if (ok)
+        {
+            ShowCalendar("");
+            CalendarBar.Show(reply, PutBackCalendarFeed);
+            CalendarFeedChanged();
+        }
+    }
+
+    private async void PutBackCalendarFeed()
+    {
+        var (ok, reply) = await Change(() => _settings.PutBackCalendarFeed(), ShowCalendar);
         if (ok)
         {
             CalendarFeedChanged(reply);
@@ -535,6 +548,11 @@ public partial class SettingsView : UserControl
     private void CalendarFeedChanged(string reply)
     {
         ShowCalendar(reply);
+        CalendarFeedChanged();
+    }
+
+    private void CalendarFeedChanged()
+    {
         Work.Peek(ShowCalendarFeed);
         ShowAfterChanges();
         _changed();
@@ -711,17 +729,59 @@ public partial class SettingsView : UserControl
         WorkSaved(reply, ShowWork);
     }
 
-    private void OnWorkRowRemoved(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Removed straight away, like a class, with an Undo that sets the same hours again: a day's regular hours, or
+    /// every shift or the day off that date had, since removing one takes the whole date back to the usual hours.
+    /// </summary>
+    private async void OnWorkRowRemoved(object sender, RoutedEventArgs e)
     {
         var row = (WorkRow)((FrameworkElement)sender).DataContext;
-        if (row.Weekly is { } day)
+        WorkBar.Changed();
+        if (row.Weekly is { } hours)
         {
-            WorkSaved(() => _settings.RemoveWeeklyHours([day.ToString()]), ShowWeekly);
+            var (ok, reply) = await Change(() => _settings.RemoveWeeklyHours([hours.Day.ToString()]), ShowWeekly);
+            if (ok)
+            {
+                WorkRemoved(reply, ShowWeekly, () => WorkSaved(() => _settings.SetWeeklyHours([hours.Day.ToString()], $"{Clock(hours.Start)}-{Clock(hours.End)}"), ShowWeekly));
+            }
         }
-        else if (row.Date is { } date)
+        else if (row.Dates is [{ Date: var date }, ..] dates)
         {
-            WorkSaved(() => _settings.RemoveWorkDate(date), ShowShift);
+            var (ok, reply) = await Change(() => _settings.RemoveWorkDate(date), ShowShift);
+            if (ok)
+            {
+                WorkRemoved(reply, ShowShift, () => WorkSaved(() => PutWorkDateBack(dates), ShowShift));
+            }
         }
+    }
+
+    /// <summary>The message goes in the Undo bar rather than under the list, so there's one place that says it.</summary>
+    private void WorkRemoved(OpReply reply, Action<string> show, Action undo)
+    {
+        if (reply.IsAnswer)
+        {
+            WorkSaved(reply, show);
+            return;
+        }
+
+        show("");
+        WorkBar.Show(reply.Text, undo);
+        ShowAfterChanges();
+        _changed();
+    }
+
+    private OpReply PutWorkDateBack(IReadOnlyList<WorkDate> dates)
+    {
+        var reply = new OpReply("");
+        foreach (var date in dates)
+        {
+            var day = date.Date.ToDateTime(TimeOnly.MinValue);
+            reply = date is { Start: { } start, End: { } end }
+                ? _settings.AddWorkShift(day.Add(start.ToTimeSpan()), day.Add(end.ToTimeSpan()))
+                : _settings.SetDayOff(day);
+        }
+
+        return reply;
     }
 
     /// <summary>Runs a work change and says how it went under the part of the section it was made in.</summary>
@@ -1232,15 +1292,16 @@ public partial class SettingsView : UserControl
     /// <summary>One entry in the Settings column. Words are what a search finds it by, besides its label.</summary>
     public sealed record SettingsSection(string Key, string Label, string Words);
 
-    private sealed class WorkRow(string label, string removeLabel, DayOfWeek? weekly = null, DateOnly? date = null)
+    private sealed class WorkRow(string label, string removeLabel, WeeklyHours? weekly = null, IReadOnlyList<WorkDate>? dates = null)
     {
         public string Label => label;
 
         public string RemoveLabel => removeLabel;
 
-        public DayOfWeek? Weekly => weekly;
+        public WeeklyHours? Weekly => weekly;
 
-        public DateOnly? Date => date;
+        /// <summary>Everything set for the row's date, since removing it takes them all away.</summary>
+        public IReadOnlyList<WorkDate>? Dates => dates;
 
         /// <summary>What a screen reader says for the row, rather than the class name.</summary>
         public override string ToString() => Label;

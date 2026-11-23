@@ -38,14 +38,40 @@ public sealed partial class WaypointWorker
         return SyncsCalendar ? "Saved. Reading the feed now, then every hour." : "Saved. The feed is read every hour while Waypoint runs.";
     }
 
+    /// <summary>The link Remove last took away, kept only in memory so Undo can put it back. It's never sent out.</summary>
+    private string? _removedCalendarFeed;
+
     /// <summary>Forgets the page's link. Anything the feed already added stays where it is.</summary>
     public string RemoveCalendarFeed()
     {
+        _removedCalendarFeed = CalendarFeedSetup.Saved(_database) ?? _removedCalendarFeed;
         _database.SetPreference(CalendarFeedSetup.Preference, "");
         StartCalendar();
         return Calendar is null
             ? "Removed. Nothing more is read from the feed, and what it already added stays."
             : "Removed. The calendar link from the setup file is used instead.";
+    }
+
+    /// <summary>
+    /// Undo for Remove: saves the link it took away again and starts reading it. A link saved since then is kept,
+    /// so Undo never replaces a newer one.
+    /// </summary>
+    public string PutBackCalendarFeed()
+    {
+        if (CalendarFeedSetup.Saved(_database) is not null)
+        {
+            return "A feed link is already saved, so it was kept.";
+        }
+
+        if (_removedCalendarFeed is not { } link)
+        {
+            return "There's no removed link to put back. Paste it again to use it.";
+        }
+
+        _removedCalendarFeed = null;
+        _database.SetPreference(CalendarFeedSetup.Preference, link);
+        StartCalendar();
+        return "Put the feed link back.";
     }
 
     /// <summary>Builds the sync for the link in use, or none when there isn't one, and reads it now if the hourly sync runs.</summary>
