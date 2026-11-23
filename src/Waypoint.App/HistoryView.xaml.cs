@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Waypoint.Core;
 using Waypoint.Core.Capture;
@@ -143,7 +145,30 @@ public partial class HistoryView : UserControl
     {
         e.Handled = true;
         var element = (FrameworkElement)sender;
-        var row = (HistoryRow)element.DataContext;
+        _menuOpen = true;
+        RowMenu.Open(element, e, MenuFor((HistoryRow)element.DataContext), () => _menuOpen = false);
+    }
+
+    /// <summary>The ⋯ on a row opens the same menu as a right-click, under the button.</summary>
+    private void OnRowMenuClicked(object sender, RoutedEventArgs e)
+    {
+        var button = (FrameworkElement)sender;
+        _menuOpen = true;
+        RowMenu.Open(button, PlacementMode.Bottom, MenuFor((HistoryRow)button.DataContext), () => _menuOpen = false);
+    }
+
+    /// <summary>Delete on a row's box or ⋯ takes it out of History, as the menu's Delete does, with Undo.</summary>
+    private void OnRowKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None && e.OriginalSource is ButtonBase)
+        {
+            e.Handled = true;
+            Delete((HistoryRow)((FrameworkElement)sender).DataContext);
+        }
+    }
+
+    private List<RowMenuEntry> MenuFor(HistoryRow row)
+    {
         var entries = new List<RowMenuEntry>();
         if (row.CanReopen)
         {
@@ -152,9 +177,7 @@ public partial class HistoryView : UserControl
 
         entries.Add(new("Delete", () => Delete(row)));
         entries.Add(new("Copy title", () => RowMenu.Copy(row.Title)));
-
-        _menuOpen = true;
-        RowMenu.Open(element, e, entries, () => _menuOpen = false);
+        return entries;
     }
 
     /// <summary>Takes the item out of History, and off the list if it's still there. Undo puts both back.</summary>
@@ -235,6 +258,9 @@ public partial class HistoryView : UserControl
 
         /// <summary>The box's name, so each one says which item it puts back.</summary>
         public string ReopenName => $"Put {entry.Title} back on the list";
+
+        /// <summary>The ⋯ button's name, so each one says whose menu it opens and what the row is.</summary>
+        public string MenuName => $"More for {entry.Title}, {Details}";
 
         public string Details => $"{entry.Label} {entry.At.ToString("MMM d", CultureInfo.InvariantCulture)}";
 

@@ -31,7 +31,34 @@
                     <ItemsControl x:Name="Entries" Margin="28,0,24,24">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <DockPanel Margin="0,0,0,10" Background="Transparent" ContextMenuOpening="OnRowMenuOpening">
+                                <DockPanel Margin="0,0,0,10" Background="Transparent" ContextMenuOpening="OnRowMenuOpening" PreviewKeyDown="OnRowKey">
+                                    <!-- The row's menu without a right-click, and a stop for the keyboard on every row, even one
+                                         that can't be put back and so has no box. Shows while the row is pointed at or has focus. -->
+                                    <Button DockPanel.Dock="Right"
+                                            Margin="8,0,0,0"
+                                            MinWidth="28"
+                                            MinHeight="24"
+                                            Padding="8,0"
+                                            VerticalAlignment="Top"
+                                            FontSize="16"
+                                            Content="&#x22EF;"
+                                            ToolTip="More for this item"
+                                            AutomationProperties.Name="{Binding MenuName}"
+                                            Click="OnRowMenuClicked">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                                <Setter Property="Opacity" Value="0" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=DockPanel}}" Value="True">
+                                                        <Setter Property="Opacity" Value="1" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=DockPanel}}" Value="True">
+                                                        <Setter Property="Opacity" Value="1" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
                                     <CheckBox DockPanel.Dock="Left"
                                               Style="{StaticResource DoneBox}"
                                               Margin="0,2,11,0"
