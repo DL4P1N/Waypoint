@@ -39,7 +39,8 @@ public sealed partial class MarkdownBoxTests
 
     /// <summary>
     /// Types through WPF's own text input, as the keyboard does, so formatting set for the next typing (such as
-    /// Ctrl+B with nothing selected) is used. Enter goes to the editor's key handling.
+    /// Ctrl+B with nothing selected) is used. Enter goes to the editor's key handling. A space is a key press, as from
+    /// the keyboard: WPF types it on KeyDown as a command, so it never comes as text input.
     /// </summary>
     private static void KeyType(UiTest ui, MarkdownBox box, string text)
     {
@@ -48,6 +49,12 @@ public sealed partial class MarkdownBoxTests
             if (ch == '\n')
             {
                 Press(box, Key.Enter);
+                continue;
+            }
+
+            if (ch == ' ')
+            {
+                ui.Press(box, Key.Space);
                 continue;
             }
 
@@ -61,6 +68,31 @@ public sealed partial class MarkdownBoxTests
             ui.Pump();
         }
     }
+
+    [Theory]
+    [InlineData("# Week 9", "# Week 9")]
+    [InlineData("- milk", "- milk")]
+    [InlineData("1. first", "1. first")]
+    [InlineData("> quoted", "> quoted")]
+    [InlineData("[] call", "- [ ] call")]
+    public void A_space_pressed_on_the_keyboard_formats_the_line_it_starts(string typed, string markdown) => Ui.Run(ui =>
+    {
+        var box = Open(ui, "");
+
+        KeyType(ui, box, typed);
+
+        Assert.Equal(markdown, Md(box));
+    });
+
+    [Fact]
+    public void A_space_pressed_in_plain_text_is_typed_as_a_space() => Ui.Run(ui =>
+    {
+        var box = Open(ui, "");
+
+        KeyType(ui, box, "two words # ok");
+
+        Assert.Equal("two words # ok", Md(box));
+    });
 
     /// <summary>The caret as a click or an arrow key can leave it at a formatting edge: at the start of the run after it.</summary>
     private static void CaretAtStartOfRunAfter(MarkdownBox box, int line, int column)

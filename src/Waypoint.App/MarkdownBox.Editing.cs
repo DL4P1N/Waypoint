@@ -223,6 +223,11 @@ public sealed partial class MarkdownBox
             case Key.Delete when modifiers == ModifierKeys.None:
                 e.Handled = DeleteForward();
                 return;
+            case Key.Space when modifiers is ModifierKeys.None or ModifierKeys.Shift:
+                // WPF types a space as a key command (EditingCommands.Space on KeyDown), so a typed space never
+                // reaches PreviewTextInput. It's offered to the Markdown typing here instead.
+                e.Handled = HandleTextInput(" ");
+                return;
             case Key.Tab when modifiers is ModifierKeys.None or ModifierKeys.Shift:
                 if (SelectedTops().Any(block => Info(block).Kind is LineKind.Item))
                 {
