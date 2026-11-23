@@ -91,13 +91,16 @@ public static class CsvImport
     /// <summary>
     /// The rewards card profile's type column is how that card's exports differ from the other card's.
     /// </summary>
-    public static bool IsTypeColumnExport(string csv) => HasTypeColumn(Headers(csv.Split('\n')[0]));
+    public static bool IsTypeColumnExport(string csv) => HasTypeColumn(Headers(csv));
 
     private static bool HasTypeColumn(List<string> headers) =>
         headers.Contains(BankProfiles.Current.RewardsCard.TypeColumn.Trim().ToLowerInvariant());
 
-    private static List<string> Headers(string line) =>
-        SplitLine(line.TrimEnd('\r')).Select(header => header.Trim().Trim('﻿').ToLowerInvariant()).ToList();
+    /// <summary>The first record's cells, trimmed and lower case.</summary>
+    private static List<string> Headers(string csv) => HeaderNames(Records(csv).FirstOrDefault() ?? []);
+
+    private static List<string> HeaderNames(List<string> cells) =>
+        cells.Select(header => header.Trim().Trim('\uFEFF').ToLowerInvariant()).ToList();
 
     /// <summary>A bank or card export, which the import reads, rather than a CSV that's just a file.</summary>
     public static bool IsStatement(string csv) => CheckingImport.IsChecking(csv) || IsCardExport(csv);
@@ -105,7 +108,7 @@ public static class CsvImport
     /// <summary>Only a real card export is imported. Any other CSV with a date and an amount is just a file.</summary>
     public static bool IsCardExport(string csv)
     {
-        var headers = Headers(csv.Split('\n')[0]);
+        var headers = Headers(csv);
         return Find(headers, "description", "name", "merchant") >= 0
             && Find(headers, "amount") >= 0
             && (HasTypeColumn(headers) || Find(headers, DateHeaders()) >= 0);
@@ -116,16 +119,20 @@ public static class CsvImport
     /// <summary>Payments and rewards credits, as positive amounts. These lower a card's balance.</summary>
     public static IReadOnlyList<ImportedTransaction> ParsePayments(string csv) => Read(csv).Payments;
 
-    private static (List<ImportedTransaction> Purchases, List<ImportedTransaction> Payments) Read(string csv)
+    /// <summary>
+    /// A card export's purchases, its payments and rewards credits, and how many rows couldn't be read (no date or
+    /// amount where the columns say), so those are counted rather than quietly left out.
+    /// </summary>
+    public static CardExport Read(string csv)
     {
-        var lines = csv.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Trim().Length > 0).ToList();
-        if (lines.Count == 0)
+        var records = Records(csv).ToList();
+        if (records.Count == 0)
         {
             // Said outright, so an empty export isn't mistaken for one whose purchases were all counted already.
             throw new FormatException("That file is empty.");
         }
 
-        var headers = Headers(lines[0]);
+        var headers = HeaderNames(records[0]);
         var date = Find(headers, [.. DateHeaders(), "date"]);
         var description = Find(headers, "description", "name", "merchant");
         var amount = Find(headers, "amount");
@@ -138,14 +145,15 @@ public static class CsvImport
         var negativeIsSpending = HasTypeColumn(headers);
         var transactions = new List<ImportedTransaction>();
         var payments = new List<ImportedTransaction>();
+        var unreadable = 0;
 
-        foreach (var line in lines.Skip(1))
+        foreach (var cells in records.Skip(1))
         {
-            var cells = SplitLine(line);
             if (cells.Count <= Math.Max(date, Math.Max(description, amount))
                 || !DateOnly.TryParse(cells[date], CultureInfo.InvariantCulture, out var day)
-                || !decimal.TryParse(cells[amount].Replace("$", "").Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out var value))
+                || !TryReadAmount(cells[amount], out var value))
             {
+                unreadable++;
                 continue;
             }
 
@@ -167,40 +175,85 @@ public static class CsvImport
             transactions.Add(new ImportedTransaction(day, text, negativeIsSpending ? -cents : cents, null, suggested, RestaurantPurchases.IsBankRestaurant(bank)));
         }
 
-        return (transactions, payments);
+        return new CardExport(transactions, payments, unreadable);
     }
 
+    /// <summary>An amount as exports write it, with or without a dollar sign and thousands commas.</summary>
+    internal static bool TryReadAmount(string cell, out decimal value) =>
+        decimal.TryParse(cell.Replace("$", "").Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+
     /// <summary>A file's data rows split into cells, without its header.</summary>
-    public static IEnumerable<List<string>> Rows(string csv) =>
-        csv.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Trim().Length > 0).Skip(1).Select(SplitLine);
+    public static IEnumerable<List<string>> Rows(string csv) => Records(csv).Skip(1);
 
     private static int Find(List<string> headers, params string[] names) =>
         names.Select(name => headers.IndexOf(name)).FirstOrDefault(index => index >= 0, -1);
 
-    private static List<string> SplitLine(string line)
+    /// <summary>
+    /// The file's records, each split into cells. A line break inside quotes stays in its cell instead of starting a
+    /// new record, and two quotes inside quotes are one quote. Records with nothing in any cell are left out.
+    /// </summary>
+    private static IEnumerable<List<string>> Records(string csv)
     {
         var cells = new List<string>();
         var cell = new StringBuilder();
         var quoted = false;
 
-        foreach (var character in line)
+        for (var index = 0; index < csv.Length; index++)
         {
-            if (character == '"')
+            var character = csv[index];
+            if (quoted)
             {
-                quoted = !quoted;
+                if (character != '"')
+                {
+                    cell.Append(character);
+                }
+                else if (index + 1 < csv.Length && csv[index + 1] == '"')
+                {
+                    cell.Append('"');
+                    index++;
+                }
+                else
+                {
+                    quoted = false;
+                }
+
+                continue;
             }
-            else if (character == ',' && !quoted)
+
+            switch (character)
             {
-                cells.Add(cell.ToString());
-                cell.Clear();
-            }
-            else
-            {
-                cell.Append(character);
+                case '"':
+                    quoted = true;
+                    break;
+                case ',':
+                    cells.Add(cell.ToString());
+                    cell.Clear();
+                    break;
+                case '\r':
+                    break;
+                case '\n':
+                    cells.Add(cell.ToString());
+                    cell.Clear();
+                    if (cells.Any(text => text.Trim().Length > 0))
+                    {
+                        yield return cells;
+                    }
+
+                    cells = [];
+                    break;
+                default:
+                    cell.Append(character);
+                    break;
             }
         }
 
         cells.Add(cell.ToString());
-        return cells;
+        if (cells.Any(text => text.Trim().Length > 0))
+        {
+            yield return cells;
+        }
     }
 }
+
+/// <summary>What a card export holds. Unreadable counts the rows with no date or amount that could be read.</summary>
+public sealed record CardExport(IReadOnlyList<ImportedTransaction> Purchases, IReadOnlyList<ImportedTransaction> Payments, int Unreadable);

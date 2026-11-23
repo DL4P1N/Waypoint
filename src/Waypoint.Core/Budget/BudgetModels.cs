@@ -139,7 +139,8 @@ public sealed record WaitItem(string Description, long PriceCents, DateTime Adde
 /// <summary>Money from something other than the main paycheck.</summary>
 public sealed record OtherIncome(DateOnly Date, string Source, long AmountCents);
 
-public sealed record ImportResult(int Added, int Skipped, int WaitsResolved = 0);
+/// <summary>What an import did. Unreadable counts the rows that had no date or amount that could be read.</summary>
+public sealed record ImportResult(int Added, int Skipped, int WaitsResolved = 0, int Unreadable = 0);
 
 public enum BudgetOpKind
 {

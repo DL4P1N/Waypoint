@@ -32,20 +32,28 @@ public static class CheckingImport
         return BankProfiles.Current.Checking.CsvHeaders.All(header => first.Contains(header, StringComparison.OrdinalIgnoreCase));
     }
 
-    public static IReadOnlyList<CheckingRow> Parse(string csv)
+    public static IReadOnlyList<CheckingRow> Parse(string csv) => Read(csv).Rows;
+
+    /// <summary>A checking export's rows, and how many couldn't be read (no date or amount), so those are counted.</summary>
+    public static (IReadOnlyList<CheckingRow> Rows, int Unreadable) Read(string csv)
     {
         var rows = new List<CheckingRow>();
+        var unreadable = 0;
         foreach (var cells in CsvImport.Rows(csv))
         {
             if (cells.Count >= 3
                 && DateOnly.TryParse(cells[0], CultureInfo.InvariantCulture, out var day)
-                && decimal.TryParse(cells[2].Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out var value))
+                && CsvImport.TryReadAmount(cells[2], out var value))
             {
                 rows.Add(Classify(day, cells[1].Trim(), (long)Math.Round(value * 100)));
             }
+            else
+            {
+                unreadable++;
+            }
         }
 
-        return rows;
+        return (rows, unreadable);
     }
 
     /// <summary>A purchase's description without the purchase wording and reference number around the merchant.</summary>

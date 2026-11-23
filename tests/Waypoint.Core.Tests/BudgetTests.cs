@@ -353,6 +353,26 @@ public sealed class BudgetTests : IDisposable
     }
 
     [Fact]
+    public void A_quoted_line_break_stays_in_its_row_and_unreadable_rows_are_counted()
+    {
+        var export = CsvImport.Read(
+            "Posted On,Purchase Date,Category,Description,Amount\r\n"
+            + "10/01/2026,10/01/2026,Shopping,\"MEGAMART\r\nONLINE \"\"SALE\"\"\",\"1,020.50\"\r\n"
+            + "10/02/2026,someday,Shopping,CORNER MART,5.00\r\n"
+            + "10/03/2026,10/03/2026,Shopping,BOOKSTORE,five\r\n"
+            + ",,,,\r\n"
+            + "10/04/2026,10/04/2026\r\n"
+            + "10/05/2026,10/05/2026,Shopping,CAFE,4.25\r\n");
+
+        Assert.Equal([("MEGAMART\r\nONLINE \"SALE\"", 102050L), ("CAFE", 425L)], export.Purchases.Select(row => (row.Description, row.AmountCents)));
+        Assert.Equal(3, export.Unreadable);
+
+        var (rows, unreadable) = CheckingImport.Read("Date,Details,Amount,Balance\n10/26/2026,\"PURCHASE\nCAFE\",-4.00,10.00\nnot a date,FEE,-1.00,9.00\n");
+        Assert.Equal("PURCHASE\nCAFE", rows.Single().Description);
+        Assert.Equal(1, unreadable);
+    }
+
+    [Fact]
     public void Type_column_csv_flips_the_sign()
     {
         var csv = """

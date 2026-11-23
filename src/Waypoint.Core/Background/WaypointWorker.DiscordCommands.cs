@@ -70,6 +70,14 @@ public sealed partial class WaypointWorker
                 ? $"Nothing new. {(skipped == 1 ? "That one was" : $"All {skipped} were")} already counted."
                 : "There was nothing to add from that file.";
         reply += waitsResolved > 0 ? $" {waitsResolved} from your wait list marked bought." : "";
+        // Rows without a date or amount that can be read are said, so a file that only partly went in doesn't look whole.
+        var unreadable = results.Sum(result => result.Unreadable);
+        reply += unreadable switch
+        {
+            0 => "",
+            1 => " 1 row couldn't be read, so it was left out.",
+            _ => $" {unreadable} rows couldn't be read, so they were left out.",
+        };
         return problems.Count == 0
             ? reply
             : $"{reply} {(problems.Count == 1 ? "1 file" : $"{problems.Count} files")} couldn't be imported. {string.Join(" ", problems.Distinct())}";
