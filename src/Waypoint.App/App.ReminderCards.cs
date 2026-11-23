@@ -27,7 +27,12 @@ public partial class App
         var finishesItem = reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task;
         var snoozeMinutes = reminder.RepeatMinutes ?? WaypointWorker.DefaultSnoozeMinutes;
 
-        SystemSounds.Asterisk.Play();
+        // The card that came back is the same reminder again, so it comes up quietly.
+        if (!cameBack && CornerCards.SoundOn(_database.GetPreference(CornerCards.SoundPreference)))
+        {
+            SystemSounds.Asterisk.Play();
+        }
+
         ReminderWindow? window = null;
         ReminderCardHold? holdLater = null;
 

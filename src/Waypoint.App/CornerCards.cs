@@ -14,7 +14,12 @@ public static class CornerCards
     public const double ScreenMargin = 16;
     public const double CardGap = 8;
 
+    /// <summary>Whether a reminder card plays a sound as it comes up. On unless turned off in Settings.</summary>
+    public const string SoundPreference = "reminder_card_sound";
+
     private static readonly List<Window> Placed = [];
+
+    public static bool SoundOn(string? preference) => preference != "no";
 
     /// <summary>Raised when a card goes up in the corner or closes.</summary>
     public static event Action? Changed;

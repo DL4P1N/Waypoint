@@ -73,6 +73,20 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
+    public void The_card_sound_is_on_until_turned_off_and_kept_on_this_pc() => Ui.Run(ui =>
+    {
+        var view = Open(ui);
+        var box = UiTest.Named<CheckBox>(view, "CardSoundOn");
+        Assert.True(box.IsChecked);
+
+        box.IsChecked = false;
+
+        Assert.False(CornerCards.SoundOn(ui.Database.GetPreference(CornerCards.SoundPreference)));
+        view.Load();
+        Assert.False(UiTest.Named<CheckBox>(view, "CardSoundOn").IsChecked);
+    });
+
+    [Fact]
     public void Work_hour_hints_fit_their_boxes_in_the_smallest_window() => Ui.Run(ui =>
     {
         var view = Open(ui);
