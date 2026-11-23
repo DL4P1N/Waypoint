@@ -431,6 +431,23 @@ public sealed class NoteFiles(INoteFileStore database, string root)
                     return;
                 }
 
+                // The file already holds the note's text, such as one written by a pass that stopped before it could
+                // remember it. Nothing changed outside, so it's remembered, or moved if the note was renamed meanwhile.
+                if (text == note.Body)
+                {
+                    if (record.Title == note.Title && record.FolderId == note.FolderId
+                        && PathComparer.Equals(DirFor(note.FolderId), Path.GetDirectoryName(record.Path) ?? ""))
+                    {
+                        Remember(note, record.Path);
+                    }
+                    else
+                    {
+                        Write(note, record);
+                    }
+
+                    return;
+                }
+
                 if (!waypointChanged)
                 {
                     // Saved only over the text read at the start of this pass, so a save from the editor meanwhile
@@ -683,11 +700,16 @@ public sealed class NoteFiles(INoteFileStore database, string root)
 
         private string DirFor(long? folderId) => folderId is { } id && _folderDirs.TryGetValue(id, out var dir) ? dir : "";
 
+        /// <summary>
+        /// Writes beside the file first and moves it over, so another app never reads half a note and a crash never
+        /// leaves one. The file beside it starts with a dot and isn't a .md file, so no sync takes it for a note.
+        /// </summary>
         private void WriteAt(NoteFileState note, string path)
         {
             var full = Full(path);
-            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-            File.WriteAllText(full, note.Body, Utf8);
+            var dir = Path.GetDirectoryName(full)!;
+            Directory.CreateDirectory(dir);
+            Platform.DurableFile.WriteAllText(full, note.Body, Utf8, Path.Combine(dir, $".{Path.GetFileName(full)}.tmp"));
             _files[path] = new FileInfo(full);
             _owners[path] = note.Id;
             Remember(note, path);
