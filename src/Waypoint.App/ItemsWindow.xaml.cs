@@ -469,6 +469,12 @@ public partial class ItemsWindow : Window
         }
 
         var page = (Page)Menu.SelectedIndex;
+        if (FindPage.IsVisible)
+        {
+            FindPage.Leave();
+            _beforeFind = null;
+        }
+
         ShowPage(page);
         _database.SetPreference(PageKey, page.ToString());
         if (page == Page.ToDo)
@@ -479,10 +485,24 @@ public partial class ItemsWindow : Window
 
     private void OnFindClicked(object sender, RoutedEventArgs e) => OpenFind();
 
-    /// <summary>Find anywhere takes the page's place until a result is picked or it's closed. Half-typed text is saved first.</summary>
+    /// <summary>Where the keyboard was before Find anywhere opened, to go back to when it's closed.</summary>
+    private IInputElement? _beforeFind;
+
+    /// <summary>
+    /// Find anywhere takes the page's place until a result is picked or it's closed. Half-typed text is saved first.
+    /// No page is picked in the side menu meanwhile, so picking any one, the one Find covers too, goes back to it.
+    /// </summary>
     private void OpenFind()
     {
+        if (!FindPage.IsVisible)
+        {
+            _beforeFind = Keyboard.FocusedElement is DependencyObject focused && !FindPage.IsAncestorOf(focused) ? Keyboard.FocusedElement : null;
+        }
+
         SaveDrafts();
+        _choosingPage = true;
+        Menu.SelectedIndex = -1;
+        _choosingPage = false;
         foreach (var page in new FrameworkElement[] { TodayPage, NotesPage, MoneyPage, HistoryPage, SettingsPage })
         {
             page.Visibility = Visibility.Collapsed;
@@ -493,16 +513,43 @@ public partial class ItemsWindow : Window
         FindPage.FocusSearch();
     }
 
-    /// <summary>Back to the page that was open.</summary>
-    private void CloseFind()
+    /// <summary>Back to the page that was open, with the keyboard where it was before Find opened.</summary>
+    private void CloseFind() => CloseFind(restoreFocus: true);
+
+    /// <param name="restoreFocus">False when what comes next puts the keyboard somewhere itself, as Ctrl+N does.</param>
+    private void CloseFind(bool restoreFocus)
     {
         FindPage.Leave();
         ShowPage(_page);
+        var before = _beforeFind;
+        _beforeFind = null;
+        if (!restoreFocus)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (FindPage.IsVisible || !IsVisible)
+            {
+                return;
+            }
+
+            if (before is UIElement { IsVisible: true, IsEnabled: true, Focusable: true } element && IsAncestorOf(element))
+            {
+                element.Focus();
+            }
+            else if (Menu.ItemContainerGenerator.ContainerFromIndex(Menu.SelectedIndex) is ListBoxItem current)
+            {
+                current.Focus();
+            }
+        }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
     /// <summary>Opens the page a result is on and shows it there.</summary>
     private void ShowFound(FoundThing thing)
     {
+        _beforeFind = null;
         switch (thing)
         {
             case { Item: { } item }:
@@ -574,7 +621,7 @@ public partial class ItemsWindow : Window
         {
             if (FindPage.IsVisible)
             {
-                CloseFind();
+                CloseFind(restoreFocus: false);
             }
 
             if (_page == Page.ToDo)
