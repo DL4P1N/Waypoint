@@ -34,8 +34,8 @@ public sealed partial class WaypointDatabase
         var food = FoodCategories();
 
         // Kept and settled in one write, so a failure between can't leave it counted on the purchase but still waiting.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var insert = connection.CreateCommand())
         {
             insert.CommandText = """
@@ -75,7 +75,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Oldest first, so they're answered in the order they came.</summary>
     public IReadOnlyList<PaymentAppRepayment> GetWaitingRepayments()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT message_id, payer, cents, note, received_on FROM repayments WHERE status = $status ORDER BY received_on, rowid";
         command.Parameters.AddWithValue("$status", RepaymentPending);
@@ -93,7 +93,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Keeps which Discord card asks about a payment, so a reply to it or a button on it is about that payment, even after a restart.</summary>
     public void SetRepaymentCard(string messageId, string cardMessageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE repayments SET card_message_id = $card WHERE message_id = $id";
         command.Parameters.AddWithValue("$card", cardMessageId);
@@ -108,7 +108,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public RepaymentCard? FindRepaymentForCard(string cardMessageId, string? cardText = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT message_id, payer, cents, note, received_on, status FROM repayments WHERE card_message_id = $card";
@@ -151,8 +151,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public RepaymentCard? FindRepaymentByKey(string key, string cardMessageId)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         RepaymentCard? found = null;
         string? card = null;
         using (var command = connection.CreateCommand())
@@ -219,8 +219,8 @@ public sealed partial class WaypointDatabase
             return new OpReply($"Which purchase was {repayment.Payer}'s {Briefing.Money(repayment.Cents)} for?", true);
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var from = today.AddDays(-TypedMatchLookBackDays);
         var named = Squash(purchase);
 
@@ -290,7 +290,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<RepaymentCandidate> GetRepaymentCandidates(PaymentAppRepayment repayment, int limit = 5)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return Purchases(connection, repayment.ReceivedOn.AddDays(-RepaymentLookBackDays), repayment.ReceivedOn)
             .OrderByDescending(row => row.LeftCents >= repayment.Cents)
             .Take(limit)
@@ -306,8 +306,8 @@ public sealed partial class WaypointDatabase
             return new OpReply("That repayment is already settled");
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var match = Purchases(connection, DateOnly.MinValue, DateOnly.MaxValue).FirstOrDefault(row => row.Id == itemId);
         if (match.Title is null)
         {
@@ -340,7 +340,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Only a payment still waiting is cleared, so one matched meanwhile, from another card or the Budget page, stays matched.</summary>
     private OpReply Clear(PaymentAppRepayment repayment)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE repayments SET status = $status, item_id = NULL WHERE message_id = $id AND status = $pending";
         command.Parameters.AddWithValue("$status", RepaymentCleared);

@@ -444,11 +444,10 @@ public sealed partial class WaypointWorker
 
             // After an earlier try, Discord may hand back the message that try made, with older words, so it's drawn again next time.
             parts.Add(new DiscordThreadPart(sent, send.Fresh ? hash : ""));
-            _database.InOneWrite(() =>
+            _database.InOneWrite(write =>
             {
-                _database.SetDiscordThreadParts(row.Thread, parts);
-                _database.FinishDiscordSend(sendKey);
-                return 0;
+                write.SetDiscordThreadParts(row.Thread, parts);
+                write.FinishDiscordSend(sendKey);
             });
         }
 

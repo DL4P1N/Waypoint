@@ -31,7 +31,7 @@ public sealed partial class WaypointDatabase
         }
 
         var snapshot = NetWorthSnapshot.From(day, accounts);
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO net_worth_snapshots (day, assets_cents, owed_cents, parts) VALUES ($day, $assets, $owed, $parts)
@@ -47,7 +47,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<NetWorthSnapshot> GetNetWorthSnapshots(DateOnly from, DateOnly through)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT day, assets_cents, owed_cents, parts FROM net_worth_snapshots WHERE day BETWEEN $from AND $through ORDER BY day";
         command.Parameters.AddWithValue("$from", from.ToString("O", CultureInfo.InvariantCulture));

@@ -164,13 +164,13 @@ public sealed class CaptureService(
                 // Getting going can't wait for a retry, so these fall back to the fixed actions.
                 if (wantsSmaller && result?.Ops?.Any(op => op.Kind == AssistantOpKind.ActivationSmaller) != true)
                 {
-                    Act(capture, () => database.MakeSmaller(null, Now));
+                    Act(capture, write => write.MakeSmaller(null, Now));
                     continue;
                 }
 
                 if (wantsStart && !Responds(result))
                 {
-                    Act(capture, () => database.StartActivation(null, null, null, Activation.TypedMethod, Now, capture.Text));
+                    Act(capture, write => write.StartActivation(null, null, null, Activation.TypedMethod, Now, capture.Text));
                     continue;
                 }
 
@@ -290,9 +290,9 @@ public sealed class CaptureService(
     /// capture should go on to the sorter. An action that fails, such as on a busy database, saves nothing, and the
     /// capture is tried again as usual.
     /// </summary>
-    private bool Act(PendingCapture capture, Func<OpReply?> action)
+    private bool Act(PendingCapture capture, Func<WaypointDatabase, OpReply?> action)
     {
-        if (database.InOneWrite(() => action() is { } reply ? Finish(capture, reply) : null) is not { } outcome)
+        if (database.InOneWrite(write => action(write) is { } reply ? Finish(write, capture, reply) : null) is not { } outcome)
         {
             return false;
         }
@@ -342,12 +342,12 @@ public sealed class CaptureService(
                 try
                 {
                     var current = step;
-                    var (budgetReply, opReply) = database.InOneWrite(() =>
+                    var (budgetReply, opReply) = database.InOneWrite(write =>
                     {
                         var replies = op is null
-                            ? (database.ApplyBudgetOp(budgetOps[current], DateOnly.FromDateTime(Now)), (OpReply?)null)
-                            : ((string?)null, AssistantOps.Apply(op, database, capture.Id, Now, capture.Text, bedtime));
-                        database.SetCaptureProgress(capture.Id, (progress with
+                            ? (write.ApplyBudgetOp(budgetOps[current], DateOnly.FromDateTime(Now)), (OpReply?)null)
+                            : ((string?)null, AssistantOps.Apply(op, write, capture.Id, Now, capture.Text, bedtime));
+                        write.SetCaptureProgress(capture.Id, (progress with
                         {
                             Next = current + 1,
                             Started = false,
@@ -388,11 +388,11 @@ public sealed class CaptureService(
         var focus = FocusOf(progress.FocusRef, answer, Shown(context));
 
         // Finished and kept together, so a crash between can't leave the reply kept for a capture that comes round again.
-        var outcome = database.InOneWrite(() =>
+        var outcome = database.InOneWrite(write =>
         {
             if (total > 0)
             {
-                database.CompleteCapture(capture.Id, []);
+                write.CompleteCapture(capture.Id, []);
             }
 
             var finished = new CaptureOutcome(
@@ -403,8 +403,8 @@ public sealed class CaptureService(
                 capture.Origin,
                 budgetReplies,
                 opReplies.Where(reply => !reply.IsAnswer).Select(reply => reply.Text).ToList(),
-                ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? database.GetActiveSession(Now) : null);
-            Keep(capture, finished, focus);
+                ops.Any(op => AssistantOps.IsActivation(op.Kind)) ? write.GetActiveSession(Now) : null);
+            Keep(write, capture, finished, focus);
             return finished;
         });
 
@@ -473,11 +473,10 @@ public sealed class CaptureService(
     {
         var added = items.Count(item => item.Kind != ItemKind.Note);
         var outcome = new CaptureOutcome(items.Where(item => item.Kind != ItemKind.Note).ToList(), [], answer.Length > 0 ? answer : null, Origin: capture.Origin);
-        database.InOneWrite(() =>
+        database.InOneWrite(write =>
         {
-            database.CompleteCapture(capture.Id, items);
-            Keep(capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
-            return 0;
+            write.CompleteCapture(capture.Id, items);
+            Keep(write, capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
         });
         Announce(capture, outcome);
     }
@@ -496,7 +495,7 @@ public sealed class CaptureService(
             return false;
         }
 
-        return Act(capture, () => yes ? database.ApplyPayProposal(now) : database.CancelPayProposal());
+        return Act(capture, write => yes ? write.ApplyPayProposal(now) : write.CancelPayProposal());
     }
 
     /// <summary>Short replies to a running session need no sorter, so they work offline and straight away.</summary>
@@ -507,7 +506,7 @@ public sealed class CaptureService(
             return false;
         }
 
-        return Act(capture, () => database.ApplySessionWord(word, Now));
+        return Act(capture, write => write.ApplySessionWord(word, Now));
     }
 
     /// <summary>A yes starts the trial only while it's on offer and the last reply here was the offer.</summary>
@@ -527,7 +526,7 @@ public sealed class CaptureService(
 
         if (BedtimeRoutine.IsSnoozeWord(capture.Text))
         {
-            return Act(capture, () => BedtimeRoutine.Snooze(database, bedtime, now));
+            return Act(capture, write => BedtimeRoutine.Snooze(write, bedtime, now));
         }
 
         if (BedtimeRoutine.ParseDoneWord(capture.Text, bedtime.Settings) is not { } step || bedtime.GetWindDown(now) is null)
@@ -535,7 +534,7 @@ public sealed class CaptureService(
             return false;
         }
 
-        return Act(capture, () => BedtimeRoutine.Mark(database, bedtime, step, true, now));
+        return Act(capture, write => BedtimeRoutine.Mark(write, bedtime, step, true, now));
     }
 
     /// <summary>
@@ -558,9 +557,9 @@ public sealed class CaptureService(
             return true;
         }
 
-        return Act(capture, () =>
+        return Act(capture, write =>
         {
-            var started = database.StartActivation(ItemRef.Format(pick.Item), null, null, Activation.EnergyMethod, now);
+            var started = write.StartActivation(ItemRef.Format(pick.Item), null, null, Activation.EnergyMethod, now);
             return new OpReply($"{EnergyPicks.Heading(level)}: {pick.Item.Title}. {pick.Reason} {started.Text}", true);
         });
     }
@@ -583,19 +582,19 @@ public sealed class CaptureService(
     /// <summary>"still waiting" and "draft follow up" answer the last follow-up nudge, with no sorter. Anything else goes on.</summary>
     private bool TryApplyWaitingWord(PendingCapture capture)
     {
-        return WaitingOn.ParseWord(capture.Text) is { } word && Act(capture, () => database.ApplyWaitingWord(word, DateTime.Now));
+        return WaitingOn.ParseWord(capture.Text) is { } word && Act(capture, write => write.ApplyWaitingWord(word, DateTime.Now));
     }
 
     /// <summary>A reply with nothing to do but answer, saved with the finished capture as one write.</summary>
     private void Reply(PendingCapture capture, OpReply reply) =>
-        Announce(capture, database.InOneWrite(() => Finish(capture, reply)));
+        Announce(capture, database.InOneWrite(write => Finish(write, capture, reply)));
 
     /// <summary>Finishes a short reply's capture and keeps the exchange, inside the caller's one write.</summary>
-    private CaptureOutcome Finish(PendingCapture capture, OpReply reply)
+    private CaptureOutcome Finish(WaypointDatabase write, PendingCapture capture, OpReply reply)
     {
-        database.CompleteCapture(capture.Id, []);
-        var outcome = new CaptureOutcome([], [], reply.Text, Origin: capture.Origin, Activation: database.GetActiveSession(Now));
-        Keep(capture, outcome);
+        write.CompleteCapture(capture.Id, []);
+        var outcome = new CaptureOutcome([], [], reply.Text, Origin: capture.Origin, Activation: write.GetActiveSession(Now));
+        Keep(write, capture, outcome);
         return outcome;
     }
 
@@ -607,7 +606,7 @@ public sealed class CaptureService(
     }
 
     /// <summary>Keeps the exchange, in the same write that finishes the capture, so the next note can follow on from this one.</summary>
-    private void Keep(PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
+    private void Keep(WaypointDatabase write, PendingCapture capture, CaptureOutcome outcome, string? focus = null, string? kept = null)
     {
         var acted = outcome.Changes.Where(change => change.Applied).Select(change => ItemRef.Format(change.Change.Source, change.Change.ItemId));
         var session = outcome.Activation?.TaskRef;
@@ -615,7 +614,7 @@ public sealed class CaptureService(
         var reply = string.Join("\n", new[] { ItemGroups.OutcomeSummary(outcome), outcome.Answer }.Where(text => !string.IsNullOrWhiteSpace(text)));
 
         // A file's text stays out, since it would go back to the sorter on every note after it.
-        database.AddExchange(capture.Origin, capture.FileName is { } file ? FileNote.Title(file) : capture.Text, kept ?? reply, refs, Now);
+        write.AddExchange(capture.Origin, capture.FileName is { } file ? FileNote.Title(file) : capture.Text, kept ?? reply, refs, Now);
     }
 
     /// <summary>What an answer was about: the sorter's ref if it was shown that item, or the item the answer names.</summary>

@@ -13,8 +13,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Brings the reminder back once, ten minutes from now. A follow-up is never moved again here.</summary>
     public void FollowUpReminder(DueReminder reminder, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         ForgetAfterThis(connection, reminder.Item.Source, reminder.Item.Id);
         using var command = connection.CreateCommand();
         command.CommandText = $"UPDATE {ReminderTable(reminder.Item)} SET remind_at = $until, follow_up = 1 WHERE id = $id";
@@ -42,8 +42,8 @@ public sealed partial class WaypointDatabase
         }
 
         // Claiming the card and doing what it says are one write, so a failure between can't use up the press.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         long itemId;
         ItemSource source;
         DateOnly? dueOn;

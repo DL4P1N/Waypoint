@@ -14,7 +14,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public string? LatestSentReminderMessage(string? before = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return LatestSentReminder(connection, before);
     }
 

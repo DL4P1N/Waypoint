@@ -14,7 +14,7 @@ public sealed partial class WaypointDatabase
     /// <summary>In the order they were put in on the Lists page. Lists never moved, such as new ones, come after, by name.</summary>
     public IReadOnlyList<string> GetListNames()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name FROM lists WHERE archived_at IS NULL ORDER BY position IS NULL, position, name";
 
@@ -30,7 +30,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<ListEntry> GetListEntries(string name)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return IsShopping(name) ? ReadShopping(connection) : ReadEntries(connection, CleanName(name));
     }
 
@@ -47,7 +47,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The newest notes. The rest are found by searching.</summary>
     public IReadOnlyList<RecentNote> GetRecentNotes(int limit)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT i.title, i.about, COALESCE(i.body, c.text), c.created_at FROM items i JOIN captures c ON c.id = i.capture_id
@@ -79,8 +79,8 @@ public sealed partial class WaypointDatabase
             return "Which list?";
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var reply = AddToList(connection, name, entries, captureId, now);
         transaction.Commit();
         return reply;
@@ -146,8 +146,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Checks or unchecks one entry. Without a list name it looks everywhere, and asks if that finds more than one.</summary>
     public string SetEntryDone(string? name, string text, bool done, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var candidates = FindEntries(connection, name, text).Where(entry => entry.Done != done).ToList();
         if (Pick(candidates, text) is not { } entry)
         {
@@ -162,8 +162,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Checks or unchecks the exact entry that was clicked, so there's nothing to ask about.</summary>
     public void SetEntryDone(ListEntry entry, bool done, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         SetEntryDone(connection, entry, done, now);
         transaction.Commit();
     }
@@ -245,8 +245,8 @@ public sealed partial class WaypointDatabase
 
     public string RemoveEntry(string? name, string text, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var candidates = FindEntries(connection, name, text);
         if (Pick(candidates, text) is not { } entry)
         {
@@ -261,16 +261,16 @@ public sealed partial class WaypointDatabase
     /// <summary>Takes off the exact entry shown. It can come back with <see cref="RestoreEntry"/>.</summary>
     public void DeleteEntry(ListEntry entry, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         RemoveEntry(connection, entry, now);
         transaction.Commit();
     }
 
     public void RestoreEntry(ListEntry entry, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (entry.List == ShoppingList)
         {
             RestoreItem(connection, entry.Id, now);
@@ -302,8 +302,8 @@ public sealed partial class WaypointDatabase
         }
 
         // A shopping entry is an item, and an item has to belong to a capture, which is made in the same write.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         AddToList(connection, name, [clean], null, now);
         transaction.Commit();
     }
@@ -316,7 +316,7 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = entry.List == ShoppingList
             ? "UPDATE items SET title = $text WHERE id = $id AND kind = 'Shopping'"
@@ -329,8 +329,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Saves the order the lists were dragged or moved into. Shopping always stays first, so it's skipped.</summary>
     public void OrderLists(IReadOnlyList<string> names)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var position = 0;
         foreach (var name in names.Where(name => !IsShopping(name)))
         {
@@ -358,7 +358,7 @@ public sealed partial class WaypointDatabase
             return new ListEdit(ShoppingList);
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         EnsureList(connection, clean, now);
         return new ListEdit(clean);
     }
@@ -377,8 +377,8 @@ public sealed partial class WaypointDatabase
         }
 
         // The list and the Discord posts that show it are renamed together.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using var taken = connection.CreateCommand();
         taken.CommandText = "SELECT COUNT(*) FROM lists WHERE name = $name COLLATE NOCASE AND id <> (SELECT id FROM lists WHERE name = $old COLLATE NOCASE)";
         taken.Parameters.AddWithValue("$name", clean);
@@ -436,7 +436,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Items need a capture, so things typed straight into a page get one that's already sorted.</summary>
     private long AddHandTyped(string text, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return InsertHandTyped(connection, text, now);
     }
 
@@ -460,7 +460,7 @@ public sealed partial class WaypointDatabase
             return $"There's no list called {clean}.";
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE list_entries SET done = 0, done_at = NULL WHERE list_id = (SELECT id FROM lists WHERE name = $name COLLATE NOCASE)";
         command.Parameters.AddWithValue("$name", found);
@@ -481,8 +481,8 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var id in checkedIds)
         {
             using var command = connection.CreateCommand();
@@ -499,7 +499,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Hides a list. Its entries stay stored, and naming it again brings it back.</summary>
     public string DeleteList(string? name, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE lists SET archived_at = $now WHERE name = $name COLLATE NOCASE AND archived_at IS NULL";
         command.Parameters.AddWithValue("$now", FormatReminder(now));

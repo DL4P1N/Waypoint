@@ -96,7 +96,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Feed events that came and went without being checked off.</summary>
     private IEnumerable<SearchDoc> PastEventDocs(DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {EventColumns} FROM calendar_events WHERE done = 0 AND {EventDueDate} < $today";
         command.Parameters.AddWithValue("$today", DateOnly.FromDateTime(now).ToString("O", CultureInfo.InvariantCulture));
@@ -118,7 +118,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private IEnumerable<SearchDoc> NoteDocs(DateTime now, IReadOnlyList<string> words)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         var patterns = Prefilter(words);
         command.CommandText = $"""
@@ -154,7 +154,7 @@ public sealed partial class WaypointDatabase
 
     private IEnumerable<SearchDoc> ListDocs(DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadEntries(connection, null).Select(entry => new SearchDoc(SearchIndex.List, entry.List, entry.Text, entry.AddedAt));
     }
 

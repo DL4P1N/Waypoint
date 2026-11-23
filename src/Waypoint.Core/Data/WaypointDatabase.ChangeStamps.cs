@@ -62,7 +62,7 @@ public sealed partial class WaypointDatabase
             System.Text.Encoding.UTF8.GetBytes(string.Join("\n", bodies.Select(body => $"{body.Name}\n{body.Sql}")))))[..8].ToLowerInvariant();
         var triggers = bodies.Select(body => (Name: $"{StampTriggerPrefix}{version}_{body.Name}", body.Sql)).ToList();
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using (var create = connection.CreateCommand())
         {
             create.CommandText = $"""
@@ -96,10 +96,9 @@ public sealed partial class WaypointDatabase
         }
 
         // Swapped in one write, so the count never goes unmoved by a change made between the old going and the new coming.
-        using var transaction = connection.BeginTransaction();
+        using var transaction = Begin(connection);
         using (var swap = connection.CreateCommand())
         {
-            swap.Transaction = transaction;
             swap.CommandText = string.Concat(stale.Select(name => $"DROP TRIGGER IF EXISTS \"{name}\";\n"))
                 + string.Concat(missing.Select(trigger => $"CREATE TRIGGER IF NOT EXISTS {trigger.Name} {trigger.Sql};\n"));
             swap.ExecuteNonQuery();
@@ -120,10 +119,10 @@ public sealed partial class WaypointDatabase
     {
         try
         {
-            using var connection = Open();
+            using var lease = Connect(out var connection);
             using var command = connection.CreateCommand();
             command.CommandText = $"SELECT stamp FROM change_stamps WHERE name = '{NotesStampName}'";
-            return command.ExecuteScalar() is long stamp ? $"{_stampEpoch}:{stamp.ToString(CultureInfo.InvariantCulture)}" : null;
+            return command.ExecuteScalar() is long stamp ? $"{_root._stampEpoch}:{stamp.ToString(CultureInfo.InvariantCulture)}" : null;
         }
         catch (SqliteException)
         {
@@ -132,5 +131,5 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>After a restore the data is another copy's, so no count read before it can match one read after.</summary>
-    private void ForgetChangeStamps() => _stampEpoch = Guid.NewGuid().ToString("N");
+    private void ForgetChangeStamps() => _root._stampEpoch = Guid.NewGuid().ToString("N");
 }

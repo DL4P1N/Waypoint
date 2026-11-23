@@ -11,7 +11,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A post is about to be made with this name.</summary>
     public void SetDiscordSendTriedName(string key, string name)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_sends SET tried_name = $name WHERE send_key = $key";
         command.Parameters.AddWithValue("$key", key);
@@ -22,7 +22,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The name the last try made its post with, or null when none was noted.</summary>
     public string? GetDiscordSendTriedName(string key)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT tried_name FROM discord_sends WHERE send_key = $key";
         command.Parameters.AddWithValue("$key", key);

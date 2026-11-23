@@ -42,8 +42,8 @@ public sealed partial class WaypointDatabase
         }
 
         // The task, the wait, and its nudge are one write, so a failure partway can't leave a task that waits on no one.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var item = ItemRef.TryParse(itemRef, out var source, out var id) && source == ItemSource.Capture
             ? FindItem(connection, ItemSource.Capture, id)
             : null;
@@ -120,8 +120,8 @@ public sealed partial class WaypointDatabase
         }
 
         var day = WaitingOn.FollowUpOr(until, today);
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "UPDATE waiting_on SET follow_up_on = $day, replied_at = NULL, reply_from = NULL, reply_subject = NULL WHERE item_id = $id";
@@ -138,8 +138,8 @@ public sealed partial class WaypointDatabase
     /// <summary>No longer waiting, but still something to do. The task stays and its nudge goes.</summary>
     public bool StopWaiting(long itemId)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (ReadReminderId(connection, itemId) is { } reminder)
         {
             DeleteReminder(connection, itemId, reminder);
@@ -156,7 +156,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Every open item that's waiting, soonest follow-up first. Finished ones are left in the table for a reopen.</summary>
     public IReadOnlyList<WaitingItem> GetWaiting()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {WaitingColumns} FROM waiting_on w JOIN items i ON i.id = w.item_id
@@ -204,8 +204,8 @@ public sealed partial class WaypointDatabase
             return [];
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var who = string.IsNullOrWhiteSpace(name) ? address : name.Trim();
         foreach (var waiting in answered)
         {

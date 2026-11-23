@@ -16,8 +16,8 @@ public sealed partial class WaypointDatabase
     public void AddExchange(CaptureOrigin origin, string note, string reply, IReadOnlyList<string> refs, DateTime now)
     {
         // Saving and trimming land together, so a trim that fails doesn't leave one more exchange than is kept.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO conversation (origin, at, note, reply, refs) VALUES ($origin, $at, $note, $reply, $refs);
@@ -36,7 +36,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The last few exchanges typed in one place, oldest first. Older talk has gone cold, so it's left out.</summary>
     public IReadOnlyList<Exchange> GetRecentExchanges(CaptureOrigin origin, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT at, note, reply, refs FROM conversation
@@ -69,7 +69,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<StoredItem> GetItemsFromCapture(long captureId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {ItemColumns} FROM items WHERE capture_id = $id AND done = 0 AND canceled = 0 AND parent_item_id IS NULL AND parent_event_id IS NULL ORDER BY id";
         command.Parameters.AddWithValue("$id", captureId);
@@ -85,7 +85,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<StoredItem> FindItems(IEnumerable<string> refs)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var items = new List<StoredItem>();
         foreach (var text in refs)
         {

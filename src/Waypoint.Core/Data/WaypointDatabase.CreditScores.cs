@@ -42,7 +42,7 @@ public sealed partial class WaypointDatabase
 
         var earlier = GetCreditScores(50).FirstOrDefault(entry => entry.On <= on);
         var from = Trimmed(source);
-        using (var connection = Open())
+        using (Connect(out var connection))
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "INSERT INTO credit_scores (on_date, score, source, note, added_at) VALUES ($on, $score, $source, $note, $now)";
@@ -62,7 +62,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The most recent scores, newest first.</summary>
     public IReadOnlyList<CreditScoreNote> GetCreditScores(int limit = CreditScoresShown)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, on_date, score, source, note FROM credit_scores ORDER BY on_date DESC, id DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", limit);

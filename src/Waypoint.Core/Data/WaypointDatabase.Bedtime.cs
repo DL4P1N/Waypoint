@@ -17,7 +17,13 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     private const string WorkQuestion = "What days and hours do you work? For example, Mondays 9 to 5.";
 
     /// <summary>Used until a commute has been typed. Comes from settings.</summary>
-    public int DefaultCommuteMinutes { get; set; } = WorkShift.DefaultCommuteMinutes;
+    public int DefaultCommuteMinutes
+    {
+        get => _root._defaultCommuteMinutes;
+        set => _root._defaultCommuteMinutes = value;
+    }
+
+    private int _defaultCommuteMinutes = WorkShift.DefaultCommuteMinutes;
 
     public DateTime? BedtimeSnoozedUntil
     {
@@ -72,7 +78,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
         var settings = GetBedtimeChoices().ApplyTo(file);
         var stages = Enum.GetNames<BedtimeTask>().ToHashSet(StringComparer.Ordinal);
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var earlier = new List<string>();
         using (var select = connection.CreateCommand())
         {
@@ -104,7 +110,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     public bool WasSent(DateOnly morning, BedtimeTask task)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM bedtime_sent WHERE morning = $morning AND task = $task";
         command.Parameters.AddWithValue("$morning", Day(morning));
@@ -114,7 +120,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     public void MarkSent(DateOnly morning, BedtimeTask task)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR IGNORE INTO bedtime_sent (morning, task) VALUES ($morning, $task);
@@ -129,7 +135,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     public IReadOnlySet<string> GetRoutineMarks(DateOnly morning)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT step FROM bedtime_marks WHERE morning = $morning";
         command.Parameters.AddWithValue("$morning", Day(morning));
@@ -146,7 +152,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     public void SetRoutineMark(DateOnly morning, string step, bool done)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = done
             ? "INSERT OR IGNORE INTO bedtime_marks (morning, step) VALUES ($morning, $step)"
@@ -162,7 +168,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     /// <summary>Keeps a notice that can wait until the quiet part of the night is over.</summary>
     public void HoldNotice(string title, string text, CardTone tone, bool toBudget)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO held_notices (title, text, tone, to_budget) VALUES ($title, $text, $tone, $toBudget)";
         command.Parameters.AddWithValue("$title", title);
@@ -175,7 +181,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     /// <summary>What's held, oldest first, each kept until it's gone out (see <see cref="DropHeldNotice"/>).</summary>
     public IReadOnlyList<HeldNotice> GetHeldNotices()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var read = connection.CreateCommand();
         read.CommandText = "SELECT id, title, text, tone, to_budget FROM held_notices ORDER BY id";
         using var reader = read.ExecuteReader();
@@ -191,7 +197,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     /// <summary>A held notice has gone out, so it's forgotten.</summary>
     public void DropHeldNotice(long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM held_notices WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);
@@ -201,8 +207,8 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     /// <summary>Hands back what was held and forgets it, so nothing goes out twice.</summary>
     public IReadOnlyList<(string Title, string Text, CardTone Tone, bool ToBudget)> TakeHeldNotices()
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var notices = new List<(string, string, CardTone, bool)>();
 
         using (var read = connection.CreateCommand())
@@ -234,8 +240,8 @@ public sealed partial class WaypointDatabase : IBedtimeLog
             return new OpReply(WorkQuestion, true);
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var day in days)
         {
             using var command = connection.CreateCommand();
@@ -260,7 +266,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
             return new OpReply("Which day should I take off your work hours?", true);
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         foreach (var day in days)
         {
             using var command = connection.CreateCommand();
@@ -312,7 +318,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     {
         var commute = GetCommuteMinutes();
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var dated = new List<(string? Start, string? End)>();
         using (var command = connection.CreateCommand())
         {
@@ -359,7 +365,7 @@ public sealed partial class WaypointDatabase : IBedtimeLog
 
     public string DescribeWork(DateOnly today)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var lines = new List<string>();
 
         using (var command = connection.CreateCommand())
@@ -397,8 +403,8 @@ public sealed partial class WaypointDatabase : IBedtimeLog
     private void SetWorkDate(DateOnly date, TimeOnly? start, TimeOnly? end)
     {
         // The old day and the new one change in one write, so a failure between can't drop the day's hours.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             DELETE FROM work_dates WHERE work_date = $date;

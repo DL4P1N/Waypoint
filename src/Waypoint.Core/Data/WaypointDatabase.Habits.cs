@@ -23,8 +23,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Keeps how a startable reminder was answered, for the suggestion's sense of which times work.</summary>
     public void RecordReminderAnswer(StoredItem item, ReminderAnswer answer, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         RecordReminderAnswer(connection, item, answer, now);
         transaction.Commit();
     }
@@ -48,7 +48,7 @@ public sealed partial class WaypointDatabase
     public SuggestionHabits GetSuggestionHabits(DateTime now)
     {
         var since = FormatReminder(now.AddDays(-SuggestionHabits.LookBackDays));
-        using var connection = Open();
+        using var lease = Connect(out var connection);
 
         // A session keeps only its task's ref, so the kind comes from the item itself, which stays after it's done.
         // Both kinds of item are joined in the one query rather than looked up one session at a time.

@@ -194,17 +194,16 @@ public sealed partial class WaypointWorker
 
             // The card's record, the reminder moving on, and the note going are one write, so a crash leaves the note
             // with the card in it and the next try saves that card instead of sending another.
-            _database.InOneWrite(() =>
+            _database.InOneWrite(write =>
             {
                 // A waiting nudge's buttons carry its item, so there's nothing to look up later.
                 if (waiting is null && (canFinish || canStart) && messageId is not null)
                 {
-                    _database.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock(), dueOn: dose ? reminder.Item.DueDate : null);
+                    write.TrackSentReminder(messageId, reminder.Item.Id, reminder.Item.Source, startOnly: !canFinish, sentAt: _clock(), dueOn: dose ? reminder.Item.DueDate : null);
                 }
 
-                _database.SettleSentReminder(reminder, _clock());
-                _database.FinishDiscordSend(key);
-                return 0;
+                write.SettleSentReminder(reminder, _clock());
+                write.FinishDiscordSend(key);
             });
         }
         finally

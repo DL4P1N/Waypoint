@@ -16,8 +16,8 @@ public sealed partial class WaypointDatabase
             return new AppliedChange(change, "that item", false);
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var applied = ApplyChange(connection, 0, change, now);
         transaction.Commit();
         return applied;
@@ -29,8 +29,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public AppliedChange RescheduleItem(StoredItem item, DateOnly date, TimeOnly? time, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
 
         if (item.Recurs is not null && item.DueDate is { } usual)
         {

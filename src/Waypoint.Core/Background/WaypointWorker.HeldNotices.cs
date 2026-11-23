@@ -66,11 +66,10 @@ public sealed partial class WaypointWorker
                 return;
             }
 
-            _database.InOneWrite(() =>
+            _database.InOneWrite(write =>
             {
-                _database.DropHeldNotice(notice.Id);
-                _database.FinishDiscordSend(key);
-                return 0;
+                write.DropHeldNotice(notice.Id);
+                write.FinishDiscordSend(key);
             });
         }
         catch (Exception exception) when (exception is not OutOfMemoryException && !Stopping(exception))

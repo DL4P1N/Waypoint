@@ -100,7 +100,10 @@ public sealed class WriteAheadLogTests : IDisposable
         Assert.Equal(0L, Scalar(_path, "PRAGMA wal_checkpoint(PASSIVE)"));
         database.CreateNote("Made up short note", "Made up body", Now);
 
-        Assert.True(new FileInfo(_path + "-wal").Length <= WaypointDatabase.LogKeptBytes);
+        // Another test clearing the connection pools meanwhile can close the last connection, which folds the log in
+        // and deletes it, and a log that's gone is within the cap too.
+        var log = new FileInfo(_path + "-wal");
+        Assert.True(!log.Exists || log.Length <= WaypointDatabase.LogKeptBytes);
         Assert.Equal(51, database.GetNotes().Count);
     }
 

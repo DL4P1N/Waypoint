@@ -146,8 +146,8 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var rows = new List<(string Account, ImportedTransaction Row, string Key, long Id)>();
         using (var command = connection.CreateCommand())
         {
@@ -203,7 +203,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Takes back the matches the startup upgrade found, so every row counts as it did before. It won't run again.</summary>
     public int UndoMatchUpgrade()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM import_matches WHERE backfilled = 1";
         return command.ExecuteNonQuery();

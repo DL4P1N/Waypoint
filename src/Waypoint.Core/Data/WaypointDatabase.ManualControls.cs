@@ -42,7 +42,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The regular week, Monday first.</summary>
     public IReadOnlyList<WeeklyHours> GetWeeklyHours()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT day, start_time, end_time FROM work_hours";
         using var reader = command.ExecuteReader();
@@ -58,7 +58,7 @@ public sealed partial class WaypointDatabase
     /// <summary>One-off shifts and days off from this day on, soonest first.</summary>
     public IReadOnlyList<WorkDate> GetWorkDates(DateOnly from)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT work_date, start_time, end_time FROM work_dates WHERE work_date >= $from ORDER BY work_date, start_time";
         command.Parameters.AddWithValue("$from", Day(from));
@@ -78,7 +78,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Takes a one-off shift or day off away, so that day goes back to its usual hours.</summary>
     public OpReply RemoveWorkDate(DateOnly date)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM work_dates WHERE work_date = $date";
         command.Parameters.AddWithValue("$date", Day(date));

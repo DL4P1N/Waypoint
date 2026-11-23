@@ -20,7 +20,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<PayDeposit> GetPayDeposits()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT label, due_on, received_on, cents, typed_key FROM pay_deposits ORDER BY received_on";
 
@@ -109,8 +109,8 @@ public sealed partial class WaypointDatabase
 
         var item = new ScheduledItem(current?.Label ?? MainPayLabel, amount, dayNumbers, current?.EarlierOnWeekend ?? true, kind, anchor, current?.Id ?? 0);
         // The new schedule and clearing the old one's pay dates land together, so neither is kept without the other.
-        using (var connection = Open())
-        using (var transaction = connection.BeginTransaction())
+        using (Connect(out var connection))
+        using (var transaction = Begin(connection))
         {
             SavePaycheck(connection, item);
             ClearPayCalendar(connection, item.Id);
@@ -182,8 +182,8 @@ public sealed partial class WaypointDatabase
         var amount = cents ?? item.AmountOn(due);
         var key = $"typed|{item.Label}|{due:O}";
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var activity = connection.CreateCommand())
         {
             activity.CommandText = "INSERT OR IGNORE INTO checking_activity (import_key, posted_on, description, cents) VALUES ($key, $date, $description, $cents)";
@@ -347,7 +347,7 @@ public sealed partial class WaypointDatabase
         }
 
         var unchecked_ = new List<WaitItem>();
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         foreach (var item in ready)
         {
             using var command = connection.CreateCommand();
@@ -417,7 +417,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Changes the main paycheck in place, so there's never a second one.</summary>
     private void SavePaycheck(ScheduledItem item)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         SavePaycheck(connection, item);
     }
 
@@ -541,7 +541,7 @@ public sealed partial class WaypointDatabase
 
     private DateOnly LastCheckingSeen(BudgetAccount checking)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT MAX(posted_on) FROM checking_activity WHERE import_key NOT LIKE 'typed|%'";
         return command.ExecuteScalar() is string posted && DateOnly.Parse(posted, CultureInfo.InvariantCulture) is var last && last > checking.UpdatedOn

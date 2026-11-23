@@ -191,11 +191,10 @@ public sealed class PinnedViews(WaypointDatabase database)
             shown = "";
         }
 
-        database.InOneWrite(() =>
+        database.InOneWrite(write =>
         {
-            Store(view.Key, new Placed(view.Channel, message, shown));
-            database.FinishDiscordSend(key);
-            return 0;
+            Store(write, view.Key, new Placed(view.Channel, message, shown));
+            write.FinishDiscordSend(key);
         });
         return message;
     }
@@ -204,12 +203,15 @@ public sealed class PinnedViews(WaypointDatabase database)
     private static string Hash(DiscordCard card) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(card))))[..16];
 
-    private void Store(string key, Placed placed)
+    private void Store(string key, Placed placed) => Store(database, key, placed);
+
+    /// <summary>Keeps where a view is placed, saved on <paramref name="on"/>, which may be a single write's database.</summary>
+    private void Store(WaypointDatabase on, string key, Placed placed)
     {
         lock (_lock)
         {
-            Load()[key] = placed;
-            Save();
+            Load(on)[key] = placed;
+            Save(on);
         }
     }
 
@@ -233,7 +235,9 @@ public sealed class PinnedViews(WaypointDatabase database)
         }
     }
 
-    private Dictionary<string, Placed> Load()
+    private Dictionary<string, Placed> Load() => Load(database);
+
+    private Dictionary<string, Placed> Load(WaypointDatabase on)
     {
         if (_placed is not null)
         {
@@ -242,7 +246,7 @@ public sealed class PinnedViews(WaypointDatabase database)
 
         try
         {
-            _placed = database.GetPreference(StateKey) is { Length: > 0 } json
+            _placed = on.GetPreference(StateKey) is { Length: > 0 } json
                 ? JsonSerializer.Deserialize<Dictionary<string, Placed>>(json) ?? []
                 : [];
         }
@@ -254,5 +258,7 @@ public sealed class PinnedViews(WaypointDatabase database)
         return _placed;
     }
 
-    private void Save() => database.SetPreference(StateKey, JsonSerializer.Serialize(_placed));
+    private void Save() => Save(database);
+
+    private void Save(WaypointDatabase on) => on.SetPreference(StateKey, JsonSerializer.Serialize(_placed));
 }

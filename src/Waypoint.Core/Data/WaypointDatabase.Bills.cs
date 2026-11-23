@@ -109,7 +109,7 @@ public sealed partial class WaypointDatabase
             return new OpReply(bills.Count > 0 ? $"Which bill: {string.Join(", ", bills.Select(bill => bill.Label))}?" : "There are no bills to remove.", true);
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM budget_schedule WHERE id = $id AND amount_cents < 0";
         command.Parameters.AddWithValue("$id", match.Id);
@@ -141,7 +141,7 @@ public sealed partial class WaypointDatabase
 
     private void UpdateBill(ScheduledItem item)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE budget_schedule SET amount_cents = $amount, days = $days, pattern = $pattern, anchor = $anchor, account = $account WHERE id = $id";
         command.Parameters.AddWithValue("$amount", item.AmountCents);

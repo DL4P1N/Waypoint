@@ -51,7 +51,7 @@ public sealed partial class WaypointDatabase
 
     public void AddNoteJob(string id, NoteJobKind kind, long? noteId, DateTime startedAt)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO note_jobs (id, kind, note_id, started_at, outcome)
@@ -72,7 +72,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool FinishNoteJob(string id, NoteJobOutcome outcome, DateTime finishedAt, string? problem, string? result, long? noteId = null, bool interrupted = false)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE note_jobs
@@ -97,7 +97,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public int InterruptRunningNoteJobs(DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE note_jobs
@@ -112,7 +112,7 @@ public sealed partial class WaypointDatabase
 
     public NoteJobRecord? GetNoteJob(string id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, kind, note_id, started_at, finished_at, outcome, problem, result, interrupted
@@ -126,7 +126,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Forgets jobs that ended before <paramref name="before"/>. Running ones are kept. Returns how many went.</summary>
     public int PruneNoteJobs(DateTime before)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM note_jobs WHERE finished_at IS NOT NULL AND finished_at < $before";
         command.Parameters.AddWithValue("$before", JobTime(before));

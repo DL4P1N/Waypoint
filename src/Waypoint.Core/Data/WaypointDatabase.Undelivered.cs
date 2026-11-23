@@ -22,7 +22,7 @@ public sealed partial class WaypointDatabase
 
     public void AddUndeliveredNotice(string title, string text, DateTime at)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO undelivered_notices (title, text, at) VALUES ($title, $text, $at)";
         command.Parameters.AddWithValue("$title", title);
@@ -34,7 +34,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Oldest first, the order they were meant to arrive in.</summary>
     public IReadOnlyList<UndeliveredNotice> GetUndeliveredNotices()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, title, text, at FROM undelivered_notices ORDER BY id";
         var notices = new List<UndeliveredNotice>();
@@ -53,7 +53,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void RestoreUndeliveredNotice(UndeliveredNotice notice)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT OR IGNORE INTO undelivered_notices (id, title, text, at) VALUES ($id, $title, $text, $at)";
         command.Parameters.AddWithValue("$id", notice.Id);
@@ -70,7 +70,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Forgets a notice once it's been delivered. Only the first to ask gets true, so it's never shown twice.</summary>
     public bool MarkNoticeDelivered(long id)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM undelivered_notices WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);

@@ -45,8 +45,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool ClaimDiscordMessage(string messageId, string channelId, DateTime now, TimeSpan unfinishedAfter)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (OldSeen(connection, messageId))
         {
             return false;
@@ -83,7 +83,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Messages handed over that weren't finished in time, oldest first, with the channel each came from.</summary>
     public IReadOnlyList<(string MessageId, string ChannelId)> GetUnfinishedDiscordMessages(DateTime now, TimeSpan unfinishedAfter)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT message_id, channel_id FROM discord_inbox
@@ -105,7 +105,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Keeps a claim fresh while its work is still running, without counting a try.</summary>
     public void KeepDiscordClaim(string messageId, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_inbox SET claimed_at = $at WHERE message_id = $id AND done_at IS NULL";
         command.Parameters.AddWithValue("$id", messageId);
@@ -116,7 +116,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Counts a try at a message that couldn't be read back, so one that never can is let go in the end.</summary>
     public void CountDiscordTry(string messageId, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_inbox SET tries = tries + 1, claimed_at = $at WHERE message_id = $id AND done_at IS NULL";
         command.Parameters.AddWithValue("$id", messageId);
@@ -130,8 +130,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<(string MessageId, string ChannelId)> GetGivenUpDiscordMessages(DateTime now, TimeSpan unfinishedAfter)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var give = connection.CreateCommand())
         {
             give.CommandText = """
@@ -178,7 +178,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void FinishGivenUpDiscordMessage(string messageId, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE discord_inbox SET done_at = $at WHERE message_id = $id AND done_at IS NULL AND given_up_at IS NOT NULL";
         command.Parameters.AddWithValue("$id", messageId);
@@ -189,7 +189,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Whether a message was given up on, told or not, rather than its work being done.</summary>
     internal bool IsDiscordMessageGivenUp(string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM discord_inbox WHERE message_id = $id AND given_up_at IS NOT NULL";
         command.Parameters.AddWithValue("$id", messageId);
@@ -198,7 +198,7 @@ public sealed partial class WaypointDatabase
 
     public bool IsDiscordMessageFinished(string messageId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return IsFinished(connection, messageId);
     }
 
@@ -208,8 +208,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void FinishDiscordMessage(string messageId, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         FinishDiscordMessage(connection, messageId, now);
         transaction.Commit();
     }
@@ -238,7 +238,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Whether one part of a message, such as one of its files, was already dealt with.</summary>
     public bool IsDiscordPartDone(string messageId, string part)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return IsFinished(connection, messageId) || Parts(connection, messageId).Contains(part);
     }
 
@@ -248,8 +248,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public bool FinishDiscordPart(string messageId, string part, IReadOnlyCollection<string> all, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var parts = Parts(connection, messageId);
         parts.Add(part);
         using (var save = connection.CreateCommand())
@@ -280,7 +280,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long? AddCaptureOnce(string clientId, string text, DateTimeOffset? createdAt, CaptureOrigin origin, string? fileName = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR IGNORE INTO captures (text, created_at, origin, file_name, client_id)
@@ -297,7 +297,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Whether a capture was already saved under this ID.</summary>
     public bool HasCaptureClientId(string clientId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM captures WHERE client_id = $clientId";
         command.Parameters.AddWithValue("$clientId", clientId);
@@ -307,7 +307,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The ID a capture was saved under, if it had one.</summary>
     public string? GetCaptureClientId(long captureId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT client_id FROM captures WHERE id = $id";
         command.Parameters.AddWithValue("$id", captureId);

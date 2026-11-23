@@ -112,11 +112,10 @@ public sealed partial class WaypointWorker
             long? folder = post.Tags.Count > 0 && tags!.FirstOrDefault(pair => pair.Value == post.Tags[0]) is { Value: not null } picked ? picked.Key : null;
             // Made under the post's own id, so a try cut off before the post is saved gives back this note, not a second.
             var id = NoteStore.CreateNoteOnce("discord-post:" + post.Id, post.Name, text, _clock(), folder);
-            _database.InOneWrite(() =>
+            _database.InOneWrite(write =>
             {
-                _database.SetDiscordThreadKey(post.Id, id.ToString(CultureInfo.InvariantCulture), WaypointDatabase.PostLive);
-                _database.SetDiscordThreadMeta(post.Id, Meta(DiscordBridge.ThreadName(post.Name), post.Tags.Take(1).ToList()));
-                return 0;
+                write.SetDiscordThreadKey(post.Id, id.ToString(CultureInfo.InvariantCulture), WaypointDatabase.PostLive);
+                write.SetDiscordThreadMeta(post.Id, Meta(DiscordBridge.ThreadName(post.Name), post.Tags.Take(1).ToList()));
             });
             return (long?)id;
         });

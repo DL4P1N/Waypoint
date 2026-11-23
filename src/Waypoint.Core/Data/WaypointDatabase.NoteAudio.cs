@@ -8,7 +8,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Points a source at its kept file, or at none. The source's text is never changed.</summary>
     public bool SetNoteSourceFile(long sourceId, string? filePath)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE note_sources SET file_path = $path WHERE id = $id";
         command.Parameters.AddWithValue("$path", (object?)filePath ?? DBNull.Value);
@@ -22,7 +22,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Records whether a job's audio is kept, and where.</summary>
     public bool SetJobKeptAudio(long jobId, string? keptPath)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE transcription_jobs SET keep_audio = $keep, kept_audio_path = $path WHERE id = $id";
         command.Parameters.AddWithValue("$keep", keptPath is null ? 0 : 1);

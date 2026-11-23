@@ -28,8 +28,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Took it from a To do row, /took, or typing: it counts for the dose's day, and only once.</summary>
     public DoseReply TakeDose(StoredItem item, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var reply = TakeDose(connection, item, null, now) ?? new DoseReply($"{item.Title} isn't a dose.", false);
         transaction.Commit();
         return reply;
@@ -41,8 +41,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public string AnswerDose(long itemId, DateOnly dueOn, DoseAnswer answer, DateTime now, DueReminder? reminder = null)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (reminder is not null)
         {
             using var clear = connection.CreateCommand();
@@ -67,7 +67,7 @@ public sealed partial class WaypointDatabase
             return false;
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE items SET dose = $dose, repeat_minutes = CASE WHEN $dose = 1 THEN NULL ELSE repeat_minutes END WHERE id = $id AND recurrence IS NOT NULL";
         command.Parameters.AddWithValue("$dose", dose ? 1 : 0);
@@ -78,7 +78,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Every dose reminder still kept, with its taken times from the last month, newest first.</summary>
     public IReadOnlyList<DoseRecord> GetDoses()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         var items = new List<StoredItem>();
         using (var command = connection.CreateCommand())
         {
@@ -99,8 +99,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void MoveOnPastDoses(DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var past = new List<StoredItem>();
         using (var command = connection.CreateCommand())
         {

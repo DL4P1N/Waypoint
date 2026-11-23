@@ -20,7 +20,7 @@ public sealed partial class WaypointDatabase
 
     public string? GetCaptureProgress(long captureId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT progress FROM capture_progress WHERE capture_id = $id";
         command.Parameters.AddWithValue("$id", captureId);
@@ -29,13 +29,13 @@ public sealed partial class WaypointDatabase
 
     public void SetCaptureProgress(long captureId, string progress)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         WriteProgress(connection, captureId, progress);
     }
 
     public void ClearCaptureProgress(long captureId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM capture_progress WHERE capture_id = $id";
         command.Parameters.AddWithValue("$id", captureId);
@@ -48,8 +48,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public IReadOnlyList<AppliedChange> StoreSortedCapture(long captureId, IReadOnlyList<SortedItem> items, IReadOnlyList<ItemChange>? changes, long? monthlyBudgetCents, Func<IReadOnlyList<AppliedChange>, string>? progress)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var applied = CompleteCapture(connection, captureId, items, changes, finish: progress is null);
         if (monthlyBudgetCents is { } budget)
         {

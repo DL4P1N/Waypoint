@@ -68,7 +68,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds a source to a note. Returns its id, or 0 if the note is gone.</summary>
     public long AddNoteSource(long noteId, string kind, string name, string text, DateTime now, string? filePath = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return AddNoteSource(connection, noteId, kind, name, text, now, filePath);
     }
 
@@ -97,7 +97,7 @@ public sealed partial class WaypointDatabase
     /// <summary>How many sources each note has, for every note with any, counted in one read.</summary>
     public IReadOnlyDictionary<long, int> CountNoteSources()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT note_id, COUNT(*) FROM note_sources GROUP BY note_id";
 
@@ -114,7 +114,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A note's sources in the order they were added.</summary>
     public IReadOnlyList<NoteSource> GetNoteSources(long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, note_id, kind, name, text, file_path, created_at FROM note_sources WHERE note_id = $note ORDER BY id";
         command.Parameters.AddWithValue("$note", noteId);
@@ -139,7 +139,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Whether the note's text came from its sources and has been changed since. Null if the note is gone.</summary>
     public NoteGeneration? GetNoteGeneration(long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         if (ReadBodyState(connection, noteId) is not { } state)
         {
             return null;
@@ -161,8 +161,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public GeneratedSave SaveGeneratedNotes(long noteId, string markdown, string expectedBody, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         if (ReadBodyState(connection, noteId) is not { } before)
         {
             return new GeneratedSave(GeneratedSaveResult.Gone);
@@ -181,14 +181,14 @@ public sealed partial class WaypointDatabase
     /// <summary>Puts back the text written notes replaced, as undo.</summary>
     public void RestoreNoteBody(long noteId, NoteBodyState state, DateTime now)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         WriteBody(connection, noteId, state.Body, now, state.GeneratedAt, state.GeneratedHash);
     }
 
     /// <summary>The class a note is for: the course of the class folder it's in, if it's in one.</summary>
     public string? GetNoteCourse(long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT f.course FROM items i JOIN note_folders f ON f.id = i.folder_id WHERE i.id = $id";
         command.Parameters.AddWithValue("$id", noteId);
@@ -201,8 +201,8 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public void ReplaceNoteSuggestions(long noteId, IEnumerable<SuggestedItem> items, DateTime now)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         using (var clear = connection.CreateCommand())
         {
             clear.CommandText = "DELETE FROM note_suggestions WHERE note_id = $note AND status = $open";
@@ -235,7 +235,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Suggestions still waiting on a yes or no, soonest first.</summary>
     public IReadOnlyList<NoteSuggestion> GetNoteSuggestions(long noteId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadSuggestions(connection, noteId, OpenSuggestion)
             .OrderBy(found => found.Item.Date ?? DateOnly.MaxValue)
             .ThenBy(found => found.Id)
@@ -249,7 +249,7 @@ public sealed partial class WaypointDatabase
     public HandAddResult AcceptNoteSuggestion(long suggestionId, DateTime now)
     {
         NoteSuggestion? found;
-        using (var connection = Open())
+        using (Connect(out var connection))
         {
             found = ReadSuggestions(connection, null, OpenSuggestion, suggestionId).FirstOrDefault();
         }
@@ -262,8 +262,8 @@ public sealed partial class WaypointDatabase
         var course = GetNoteCourse(found.NoteId);
 
         // The item and the suggestion's mark are one write, so a failure between can't leave it to be added twice.
-        using var write = Open();
-        using var transaction = write.BeginTransaction();
+        using var lease = Connect(out var write);
+        using var transaction = Begin(write);
         if (ReadSuggestions(write, null, OpenSuggestion, suggestionId).Count == 0)
         {
             return new HandAddResult(null, "That suggestion is gone.");
@@ -288,7 +288,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Says no to a suggestion, so it isn't shown or suggested again for this note.</summary>
     public bool SkipNoteSuggestion(long suggestionId)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE note_suggestions SET status = $skipped WHERE id = $id AND status = $open";
         command.Parameters.AddWithValue("$skipped", SkippedSuggestion);
@@ -332,7 +332,7 @@ public sealed partial class WaypointDatabase
 
     private Dictionary<long, string> ReadSourceText(IEnumerable<long> only)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadSourceText(connection, only);
     }
 

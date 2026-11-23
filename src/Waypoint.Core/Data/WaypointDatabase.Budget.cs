@@ -20,7 +20,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<BudgetCategory> GetCategories()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, monthly_cents, period FROM budget_categories ORDER BY position, name";
 
@@ -36,7 +36,7 @@ public sealed partial class WaypointDatabase
 
     public void SaveCategory(BudgetCategory category)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO budget_categories (name, monthly_cents, position, period)
@@ -60,8 +60,8 @@ public sealed partial class WaypointDatabase
             return;
         }
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
 
         using (var weekly = connection.CreateCommand())
         {
@@ -122,8 +122,8 @@ public sealed partial class WaypointDatabase
 
     private string RenameCategory(string from, string to)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         MoveCategory(connection, from, FindCategoryName(connection, to) ?? to.Trim());
         transaction.Commit();
         return $"{from} is now {to.Trim()}";
@@ -131,7 +131,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<BudgetAccount> GetBudgetAccounts()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadBudgetAccounts(connection);
     }
 
@@ -161,7 +161,7 @@ public sealed partial class WaypointDatabase
 
     public void SaveBudgetAccount(BudgetAccount account)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         SaveBudgetAccount(connection, account);
     }
 
@@ -201,8 +201,8 @@ public sealed partial class WaypointDatabase
         var waiting = GetWaitList().ToList();
         var deposits = PlanDeposits(rows);
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var repeats = new Dictionary<string, int>();
         foreach (var row in rows)
         {
@@ -232,8 +232,8 @@ public sealed partial class WaypointDatabase
     /// <summary>Records card payments. The same payment seen twice, even from two exports a few days apart, adds nothing.</summary>
     public void AddCardPayments(string account, IReadOnlyList<ImportedTransaction> payments)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         AddCardPayments(connection, account, payments);
         transaction.Commit();
     }
@@ -301,7 +301,7 @@ public sealed partial class WaypointDatabase
             return 0;
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT COALESCE(SUM(i.amount_cents), 0) FROM items i JOIN captures c ON c.id = i.capture_id
@@ -342,7 +342,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The net of checking activity after one day, through another.</summary>
     private long CheckingActivity(DateOnly after, DateOnly through)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COALESCE(SUM(cents), 0) FROM checking_activity WHERE posted_on > $after AND posted_on <= $through";
         command.Parameters.AddWithValue("$after", after.ToString("O", CultureInfo.InvariantCulture));
@@ -356,7 +356,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private long CardActivity(string account, DateOnly after, DateOnly through)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT COALESCE((SELECT SUM(i.amount_cents) FROM items i JOIN captures c ON c.id = i.capture_id
@@ -374,7 +374,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<ScheduledItem> GetSchedule()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT label, amount_cents, days, earlier_on_weekend, pattern, anchor, id, account FROM budget_schedule ORDER BY id";
 
@@ -405,7 +405,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds to the schedule. AddedOn is kept so a transfer isn't checked for dates before it was added.</summary>
     public void AddScheduledItem(ScheduledItem item, DateOnly? addedOn = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         AddScheduledItem(connection, item, addedOn);
     }
 
@@ -448,8 +448,8 @@ public sealed partial class WaypointDatabase
     public bool AddToCushion(long cents, DateOnly today, string? messageId = null)
     {
         // The balance is read inside the write, so one saved from the Budget page meanwhile is added to, not replaced.
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var cushion = ReadBudgetAccounts(connection).FirstOrDefault(account => account.Kind == AccountKind.Cushion);
         if (!RecordBrokerageDeposit(connection, cents, today, string.IsNullOrWhiteSpace(messageId) ? null : messageId))
         {
@@ -472,7 +472,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     private long CushionActivity(DateOnly after, DateOnly through)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return CushionActivity(connection, after, through);
     }
 
@@ -534,7 +534,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Teaches which category a merchant belongs to, by text found in its name.</summary>
     public void SaveMerchantRule(string match, string category)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         SaveMerchantRule(connection, match, category);
     }
 
@@ -555,7 +555,7 @@ public sealed partial class WaypointDatabase
     /// <summary>The purchases in a date range, oldest first or newest first, read one at a time as they're asked for.</summary>
     private IEnumerable<SpendingRow> ReadSpending(DateOnly from, DateOnly through, bool newestFirst)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {SpendDay}, i.title, i.amount_cents, CASE WHEN i.category = $none THEN $uncategorized ELSE COALESCE(i.category, $default) END, i.one_off, i.reimbursed_cents, c.text, c.created_at, i.id
@@ -592,7 +592,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<WaitItem> GetWaitList()
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT description, price_cents, added_at, hours, reason, id FROM wait_list WHERE decision IS NULL ORDER BY added_at";
 
@@ -614,7 +614,7 @@ public sealed partial class WaypointDatabase
 
     public void AddWaitItem(string description, long priceCents, DateTime now, int hours = BudgetMath.WaitHours, string? reason = null)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO wait_list (description, price_cents, added_at, hours, reason) VALUES ($description, $price, $added, $hours, $reason)";
         command.Parameters.AddWithValue("$hours", hours);
@@ -627,7 +627,7 @@ public sealed partial class WaypointDatabase
 
     public IReadOnlyList<OtherIncome> GetOtherIncome(int year)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT received_on, source, amount_cents FROM other_income WHERE substr(received_on, 1, 4) = $year ORDER BY received_on";
         command.Parameters.AddWithValue("$year", year.ToString(CultureInfo.InvariantCulture));
@@ -701,8 +701,8 @@ public sealed partial class WaypointDatabase
     public ImportResult ImportTransactions(string account, IReadOnlyList<ImportedTransaction> transactions)
     {
         var waiting = GetWaitList().ToList();
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var result = ImportTransactions(connection, account, transactions, waiting);
         transaction.Commit();
         return result;
@@ -878,7 +878,7 @@ public sealed partial class WaypointDatabase
 
     private string Reimburse(string merchant, long cents, DateOnly today)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return RecentCharge(connection, merchant, today.AddDays(-60), onlyCounted: false) is { } id && AddRepaid(connection, id, cents) is { } title
             ? $"Marked {Briefing.Money(cents)} repaid on {MerchantName.Clean(title)}"
             : $"Couldn't find a recent {merchant} charge";
@@ -886,7 +886,7 @@ public sealed partial class WaypointDatabase
 
     private string MarkOneOff(string merchant, DateOnly today)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return RecentCharge(connection, merchant, today.AddDays(-90), onlyCounted: true) is { } id && SetOneOff(connection, id, true) is { } title
             ? $"{MerchantName.Clean(title)} won't count against your budgets"
             : $"Couldn't find a recent {merchant} charge";
@@ -947,7 +947,7 @@ public sealed partial class WaypointDatabase
             return new OpReply("How much was paid back?", true);
         }
 
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return AddRepaid(connection, itemId, cents.Value) is { } title
             ? new OpReply($"Marked {Briefing.Money(cents.Value)} repaid on {MerchantName.Clean(title)}")
             : new OpReply("Couldn't find that purchase");
@@ -956,7 +956,7 @@ public sealed partial class WaypointDatabase
     /// <summary>A one-off doesn't count against the caps. Turning it off counts it again.</summary>
     public OpReply MarkPurchaseOneOff(long itemId, bool oneOff = true)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         if (SetOneOff(connection, itemId, oneOff) is not { } title)
         {
             return new OpReply("Couldn't find that purchase");
@@ -974,7 +974,7 @@ public sealed partial class WaypointDatabase
     public DeletedItem? DeletePurchase(long itemId, DateTime now)
     {
         StoredItem? purchase;
-        using (var connection = Open())
+        using (Connect(out var connection))
         {
             purchase = FindItem(connection, ItemSource.Capture, itemId);
             if (purchase is not { Kind: ItemKind.Expense } || IsCanceled(connection, purchase))
@@ -999,7 +999,7 @@ public sealed partial class WaypointDatabase
         }
 
         string? title;
-        using (var connection = Open())
+        using (Connect(out var connection))
         using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT title FROM items WHERE id = $id AND kind = 'Expense'";
@@ -1016,8 +1016,8 @@ public sealed partial class WaypointDatabase
         var match = title.Contains(clean, StringComparison.OrdinalIgnoreCase) ? clean : title;
 
         // The rule and the purchases it moves are one write, so a failure between can't leave a rule nothing follows.
-        using (var connection = Open())
-        using (var transaction = connection.BeginTransaction())
+        using (Connect(out var connection))
+        using (var transaction = Begin(connection))
         {
             Categorize(connection, match, target.Name);
             using (var command = connection.CreateCommand())
@@ -1053,8 +1053,8 @@ public sealed partial class WaypointDatabase
 
         var chosen = string.IsNullOrWhiteSpace(category) ? null : GetCategories().FirstOrDefault(found => Same(found.Name, category))?.Name;
 
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var captureId = InsertHandTyped(connection, clean, now);
         CompleteCapture(connection, captureId, [new SortedItem(ItemKind.Expense, clean, date, cents, Category: chosen)], null);
         if (chosen is not null)
@@ -1096,7 +1096,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Takes one purchase off the wait list, from its right-click menu, with what was decided.</summary>
     public OpReply ResolveWaitItem(long id, string decision)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE wait_list SET decision = $decision WHERE id = $id AND decision IS NULL RETURNING description";
         command.Parameters.AddWithValue("$decision", decision);
@@ -1108,7 +1108,7 @@ public sealed partial class WaypointDatabase
 
     private string ResolveWait(string name, string decision)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE wait_list SET decision = $decision
@@ -1121,7 +1121,7 @@ public sealed partial class WaypointDatabase
 
     private void AddIncome(string source, long cents, DateOnly today)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO other_income (received_on, source, amount_cents) VALUES ($date, $source, $amount)";
         command.Parameters.AddWithValue("$date", today.ToString("O", CultureInfo.InvariantCulture));
@@ -1132,8 +1132,8 @@ public sealed partial class WaypointDatabase
 
     private string Categorize(string merchant, string category)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         var reply = Categorize(connection, merchant, category);
         transaction.Commit();
         return reply;

@@ -8,21 +8,21 @@ public sealed partial class WaypointDatabase : IPreferences
 {
     public string? GetPreference(string key)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         return ReadPreference(connection, key);
     }
 
     public void SetPreference(string key, string value)
     {
-        using var connection = Open();
+        using var lease = Connect(out var connection);
         WritePreference(connection, key, value);
     }
 
     /// <summary>Sets several preferences in one write, for values that only make sense together.</summary>
     public void SetPreferences(params (string Key, string Value)[] values)
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
         foreach (var (key, value) in values)
         {
             WritePreference(connection, key, value);
