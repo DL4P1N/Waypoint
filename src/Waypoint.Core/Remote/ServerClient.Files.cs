@@ -13,6 +13,9 @@ public enum FileSendResult
 
     /// <summary>The server couldn't be reached, or didn't accept this PC. The file stays where it was.</summary>
     Away,
+
+    /// <summary>The file here couldn't be opened, such as one gone or in use. The server wasn't asked.</summary>
+    NotRead,
 }
 
 /// <summary>
@@ -33,10 +36,21 @@ public sealed partial class ServerClient
             return FileSendResult.Away;
         }
 
+        // A file here that can't be opened is a problem here, not the server being away.
+        FileStream file;
+        try
+        {
+            file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return FileSendResult.NotRead;
+        }
+
+        await using var opened = file;
         using var change = Changing();
         try
         {
-            await using var file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true);
             using var request = FileRequest(HttpMethod.Put, path);
             request.Content = new StreamContent(file, 1 << 20);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -56,7 +70,10 @@ public sealed partial class ServerClient
         }
     }
 
-    /// <summary>Saves the file at <paramref name="path"/> to <paramref name="target"/>. False if there's none or the server is away.</summary>
+    /// <summary>
+    /// Saves the file at <paramref name="path"/> to <paramref name="target"/>. False if there's none, the server is
+    /// away, or it couldn't be saved here, such as on a full disk. Only the server not answering counts as it being away.
+    /// </summary>
     public async Task<bool> DownloadAsync(string path, string target, CancellationToken cancellationToken = default)
     {
         if (!IsOnline)
@@ -80,14 +97,35 @@ public sealed partial class ServerClient
                 return false;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
-            await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            await using var from = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var to = Here(() =>
             {
-                await response.Content.CopyToAsync(to, cancellationToken);
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+                return new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true);
+            });
+            await using (to)
+            {
+                // Read from the server and written here in turn, so a problem writing here is told apart from the server.
+                var buffer = new byte[1 << 16];
+                int read;
+                while ((read = await from.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await HereAsync(() => to.WriteAsync(buffer.AsMemory(0, read), cancellationToken).AsTask());
+                }
+
+                await HereAsync(() => to.FlushAsync(cancellationToken));
             }
 
-            File.Move(part, target, overwrite: true);
+            Here(() =>
+            {
+                File.Move(part, target, overwrite: true);
+                return true;
+            });
             return true;
+        }
+        catch (LocalFileProblem)
+        {
+            return false;
         }
         catch (Exception exception) when (IsConnectionProblem(exception, cancellationToken))
         {
@@ -96,10 +134,44 @@ public sealed partial class ServerClient
         }
         finally
         {
-            if (File.Exists(part))
+            try
             {
-                File.Delete(part);
+                if (File.Exists(part))
+                {
+                    File.Delete(part);
+                }
             }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Left for the next fetch of the same file, which writes over it.
+            }
+        }
+    }
+
+    /// <summary>A file here that couldn't be written, as opposed to the server not answering.</summary>
+    private sealed class LocalFileProblem(Exception inner) : Exception(inner.Message, inner);
+
+    private static T Here<T>(Func<T> work)
+    {
+        try
+        {
+            return work();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new LocalFileProblem(exception);
+        }
+    }
+
+    private static async Task HereAsync(Func<Task> work)
+    {
+        try
+        {
+            await work();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new LocalFileProblem(exception);
         }
     }
 
