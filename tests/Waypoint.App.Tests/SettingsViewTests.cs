@@ -611,6 +611,57 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
+    public void Typing_left_unsaved_is_kept_when_the_page_is_filled_again_and_says_it_isnt_saved() => Ui.Run(ui =>
+    {
+        var settings = new MemorySettings();
+        var view = new SettingsView();
+        view.Connect(settings, ui.Database, null, new BedtimeSettings(), () => [], () => { });
+        ui.Host(view);
+        view.Load();
+        ui.Pump();
+        var rate = UiTest.Named<TextBox>(view, "HourlyRate");
+        var commute = UiTest.Named<TextBox>(view, "Commute");
+        var sleep = UiTest.Named<TextBox>(view, "SleepHours");
+        var feed = UiTest.Named<TextBox>(view, "CalendarFeed");
+        var className = UiTest.Named<TextBox>(view, "ClassName");
+        var workStatus = UiTest.Named<TextBlock>(view, "WorkStatus");
+        Assert.Equal("20.00", rate.Text);
+
+        rate.Text = "31.25";
+        sleep.Text = "6";
+        feed.Text = "https://example.test/half-pasted";
+        className.Text = "Made Up 101";
+        commute.Text = "15";
+
+        // Another page and back fills the page again.
+        view.Load();
+        Assert.Equal("31.25", rate.Text);
+        Assert.Equal("6", sleep.Text);
+        Assert.Equal("https://example.test/half-pasted", feed.Text);
+        Assert.Equal("Made Up 101", className.Text);
+        Assert.Equal(SettingsView.NotSavedYet, workStatus.Text);
+        Assert.Equal(Visibility.Visible, workStatus.Visibility);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "BedtimeNote").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "ClassesStatus").Text);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "EmailNote").Visibility);
+
+        // Typed back to what was saved is nothing unsaved.
+        sleep.Text = new BedtimeSettings().SleepHours.ToString(System.Globalization.CultureInfo.CurrentCulture);
+        className.Text = "";
+        feed.Text = "";
+
+        // Once saved, filling again shows what's saved.
+        UiTest.Call(view, "OnHourlyRateSaved", view, new RoutedEventArgs());
+        view.Load();
+        Assert.Equal("20.00", rate.Text);
+        Assert.Equal(Visibility.Collapsed, workStatus.Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "BedtimeNote").Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "CalendarStatus").Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "ClassesStatus").Visibility);
+    });
+
+    [Fact]
     public void Removing_regular_hours_or_a_shift_can_be_undone() => Ui.Run(ui =>
     {
         var settings = new MemorySettings();

@@ -72,12 +72,32 @@ public partial class SettingsView : UserControl
     private DateOnly? _termEnd;
     private bool _loading;
 
+    /// <summary>Said by a section's Save when what's typed there was kept over what's saved, since it isn't saved yet.</summary>
+    public const string NotSavedYet = "Not saved yet. Press Save to keep what's typed here.";
+
+    private readonly Unsaved _commuteEdits;
+    private readonly Unsaved _rateEdits;
+    private readonly Unsaved _bedtimeEdits;
+    private readonly Unsaved _classEdits;
+    private readonly Unsaved _discordEdits;
+    private readonly Unsaved _feedEdits;
+    private readonly Unsaved _emailEdits;
+
     public SettingsView()
     {
         InitializeComponent();
         Days.ItemsSource = Week.Select(day => day.ToString()).ToList();
         ClassDays.ItemsSource = Week.Select(day => day.ToString()).ToList();
         ShowShiftDate();
+        _commuteEdits = new(WorkStatus, () => Commute.Text);
+        _rateEdits = new(WorkStatus, () => HourlyRate.Text);
+        _bedtimeEdits = new(BedtimeNote, () => Unsaved.Join(SleepHours.Text, ReadyMinutes.Text, LatestBedtime.Text, RoutineSteps.Text, EveningStepName.Text, WindDownStepName.Text));
+        _classEdits = new(ClassesStatus, () => Unsaved.Join(
+            [ClassName.Text, ClassStart.Text, ClassEnd.Text, ClassPlace.Text, ClassTravel.Text, _editingClass?.ToString(CultureInfo.InvariantCulture) ?? "", .. ClassDays.SelectedItems.Cast<string>()]));
+        _discordEdits = new(DiscordNote, () => Unsaved.Join(
+            DiscordOwner.Text, DiscordCapture.Text, DiscordAlerts.Text, DiscordBudget.Text, DiscordNotesForum.Text, DiscordListsForum.Text, DiscordToken.Password));
+        _feedEdits = new(CalendarStatus, () => CalendarFeed.Text);
+        _emailEdits = new(EmailNote, () => Unsaved.Join(EmailClientId.Text, EmailOwnAddress.Text));
         Column.SelectionChanged += entry => ShowSection(entry.Key);
         Column.SearchChanged += OnSearched;
 
@@ -177,6 +197,13 @@ public partial class SettingsView : UserControl
     private void LoadDiscord()
     {
         var form = _settings.GetDiscord();
+        DiscordTokenNote.Visibility = form.HasToken ? Visibility.Visible : Visibility.Collapsed;
+        DiscordNote.Visibility = Visibility.Collapsed;
+        if (_discordEdits.Edited)
+        {
+            return;
+        }
+
         DiscordOwner.Text = form.OwnerUserId ?? "";
         DiscordCapture.Text = form.CaptureChannelId ?? "";
         DiscordAlerts.Text = form.AlertsChannelId ?? "";
@@ -184,8 +211,7 @@ public partial class SettingsView : UserControl
         DiscordNotesForum.Text = form.NotesForumChannelId ?? "";
         DiscordListsForum.Text = form.ListsForumChannelId ?? "";
         DiscordToken.Clear();
-        DiscordTokenNote.Visibility = form.HasToken ? Visibility.Visible : Visibility.Collapsed;
-        DiscordNote.Visibility = Visibility.Collapsed;
+        _discordEdits.Filled();
     }
 
     /// <summary>Saving starts Discord again, which on the server can take a while, so the window isn't held up waiting.</summary>
@@ -214,6 +240,10 @@ public partial class SettingsView : UserControl
 
         ShowDiscord(reply);
         DiscordToken.Clear();
+        if (reply.StartsWith("Saved", StringComparison.Ordinal))
+        {
+            _discordEdits.Filled();
+        }
 
         // Whether a token is kept now is read in the page's order, so the window isn't held for it in server mode.
         var hasToken = await Work.Read(() => settings.GetDiscord().HasToken);
@@ -249,9 +279,13 @@ public partial class SettingsView : UserControl
     private void LoadAlertEmail()
     {
         var form = _settings.GetAlertEmail();
-        EmailClientId.Text = form.ClientId ?? "";
-        EmailOwnAddress.Text = form.OwnAddress ?? "";
         EmailNote.Visibility = Visibility.Collapsed;
+        if (!_emailEdits.Edited)
+        {
+            EmailClientId.Text = form.ClientId ?? "";
+            EmailOwnAddress.Text = form.OwnAddress ?? "";
+            _emailEdits.Filled();
+        }
     }
 
     /// <summary>Saved where email is read: on this PC in local mode, on the server in server mode. Neither value is a secret.</summary>
@@ -265,6 +299,11 @@ public partial class SettingsView : UserControl
         }
 
         ShowNote(EmailNote, reply);
+        if (reply.StartsWith("Saved", StringComparison.Ordinal))
+        {
+            _emailEdits.Filled();
+        }
+
         ShowAfterChanges();
     }
 
@@ -449,7 +488,10 @@ public partial class SettingsView : UserControl
         }
     }
 
-    /// <summary>Fills the boxes from what's saved, for when the page is opened.</summary>
+    /// <summary>
+    /// Fills the boxes from what's saved, for when the page is opened. A section with something typed and not saved
+    /// keeps it, and says by its Save that it isn't saved yet, rather than having it quietly replaced.
+    /// </summary>
     public void Load()
     {
         if (_settings is null)
@@ -457,21 +499,45 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        ShowCommute();
-        HourlyRate.Text = _settings.GetHourlyRate().ToString("0.00", CultureInfo.InvariantCulture);
+        var kept = new[] { _commuteEdits, _rateEdits, _bedtimeEdits, _classEdits, _discordEdits, _feedEdits, _emailEdits }.Where(part => part.Edited).ToList();
+        if (_commuteEdits.Edited)
+        {
+            WorkRemote.IsChecked = _settings.GetCommuteMinutes() == 0;
+        }
+        else
+        {
+            ShowCommute();
+        }
+
+        if (!_rateEdits.Edited)
+        {
+            HourlyRate.Text = _settings.GetHourlyRate().ToString("0.00", CultureInfo.InvariantCulture);
+            _rateEdits.Filled();
+        }
+
         var settings = _settings.GetBedtime();
-        SleepHours.Text = settings.SleepHours.ToString(CultureInfo.CurrentCulture);
-        ReadyMinutes.Text = settings.ReadyMinutes.ToString(CultureInfo.CurrentCulture);
-        LatestBedtime.Text = settings.LatestBedtime is { } latest ? latest.ToString("h:mm tt", CultureInfo.InvariantCulture) : "";
+        var keepBedtime = _bedtimeEdits.Edited;
+        if (!keepBedtime)
+        {
+            SleepHours.Text = settings.SleepHours.ToString(CultureInfo.CurrentCulture);
+            ReadyMinutes.Text = settings.ReadyMinutes.ToString(CultureInfo.CurrentCulture);
+            LatestBedtime.Text = settings.LatestBedtime is { } latest ? latest.ToString("h:mm tt", CultureInfo.InvariantCulture) : "";
+        }
+
         _loading = true;
         EveningStepOn.IsChecked = settings.EveningStepMinutes is not null;
         WindDownStepOn.IsChecked = settings.WindDownStepMinutes is not null;
         QuietOn.IsChecked = settings.QuietAfterWrapUp;
         LateCheckInsOn.IsChecked = settings.LateCheckIns;
         _loading = false;
-        RoutineSteps.Text = string.Join(Environment.NewLine, settings.RoutineSteps ?? []);
-        EveningStepName.Text = settings.EveningStepLabel();
-        WindDownStepName.Text = settings.WindDownStepLabel();
+        if (!keepBedtime)
+        {
+            RoutineSteps.Text = string.Join(Environment.NewLine, settings.RoutineSteps ?? []);
+            EveningStepName.Text = settings.EveningStepLabel();
+            WindDownStepName.Text = settings.WindDownStepLabel();
+            _bedtimeEdits.Filled();
+        }
+
         WeeklyStatus.Visibility = Visibility.Collapsed;
         ShiftStatus.Visibility = Visibility.Collapsed;
         WorkStatus.Visibility = Visibility.Collapsed;
@@ -481,11 +547,21 @@ public partial class SettingsView : UserControl
         _loading = false;
         LoadClasses();
         LoadDiscord();
-        CalendarFeed.Clear();
+        if (!_feedEdits.Edited)
+        {
+            CalendarFeed.Clear();
+            _feedEdits.Filled();
+        }
+
         CalendarStatus.Visibility = Visibility.Collapsed;
         ShowCalendarFeed();
         LoadAlertEmail();
         Refresh();
+        foreach (var part in kept)
+        {
+            part.Note.Text = NotSavedYet;
+            part.Note.Visibility = Visibility.Visible;
+        }
     }
 
     /// <summary>
@@ -518,6 +594,7 @@ public partial class SettingsView : UserControl
         if (reply.StartsWith("Saved", StringComparison.Ordinal))
         {
             CalendarFeed.Clear();
+            _feedEdits.Filled();
         }
 
         CalendarFeedChanged(reply);
@@ -680,7 +757,7 @@ public partial class SettingsView : UserControl
     private async void OnCommuteSaved(object sender, RoutedEventArgs e)
     {
         var commute = Commute.Text;
-        await FieldSaved(() => _settings.SetCommute(commute), CommuteHint, "Try a number of minutes, like 15.");
+        await FieldSaved(() => _settings.SetCommute(commute), CommuteHint, "Try a number of minutes, like 15.", _commuteEdits);
         WorkRemote.IsChecked = Work.Peek(() => _settings.GetCommuteMinutes()) == 0;
     }
 
@@ -688,7 +765,7 @@ public partial class SettingsView : UserControl
     private async void OnWorkRemoteClicked(object sender, RoutedEventArgs e)
     {
         var minutes = WorkRemote.IsChecked == true ? 0 : WorkShift.DefaultCommuteMinutes;
-        await FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.");
+        await FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.", _commuteEdits);
         Work.Peek(ShowCommute);
     }
 
@@ -697,19 +774,20 @@ public partial class SettingsView : UserControl
         var minutes = _settings.GetCommuteMinutes();
         Commute.Text = minutes.ToString(CultureInfo.CurrentCulture);
         WorkRemote.IsChecked = minutes == 0;
+        _commuteEdits.Filled();
     }
 
     private async void OnHourlyRateSaved(object sender, RoutedEventArgs e)
     {
         var rate = BudgetFormWindow.ParseCents(HourlyRate.Text) is { } cents ? cents / 100m : (decimal?)null;
-        await FieldSaved(() => _settings.SetHourlyRate(rate), HourlyRateHint, "Try an amount like 20.00.");
+        await FieldSaved(() => _settings.SetHourlyRate(rate), HourlyRateHint, "Try an amount like 20.00.", _rateEdits);
     }
 
     /// <summary>
     /// Something the field can't use is answered under it with an example, the way the other forms do, rather than
     /// with the question the chat would ask.
     /// </summary>
-    private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis)
+    private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis, Unsaved part)
     {
         hint.Visibility = Visibility.Collapsed;
         var (ok, reply) = await Change(change, ShowWork);
@@ -726,6 +804,7 @@ public partial class SettingsView : UserControl
             return;
         }
 
+        part.Filled();
         WorkSaved(reply, ShowWork);
     }
 
@@ -859,6 +938,7 @@ public partial class SettingsView : UserControl
 
         if (await SaveBedtime(choices))
         {
+            _bedtimeEdits.Filled();
             ShowBedtime("Bedtime saved.");
         }
     }
@@ -929,8 +1009,24 @@ public partial class SettingsView : UserControl
         _savedClasses = _classes.ToList();
         _termStart = form.TermStart;
         _termEnd = form.TermEnd;
-        ClearClassForm();
-        ClassesStatus.Visibility = Visibility.Collapsed;
+        if (_classEdits.Edited)
+        {
+            // A class being changed that's no longer there is added as a new one instead.
+            if (_editingClass >= _classes.Count)
+            {
+                _editingClass = null;
+                ClassFormTitle.Text = "Add a class";
+                ClassEditCancel.Visibility = Visibility.Collapsed;
+                _classEdits.Filled();
+            }
+        }
+        else
+        {
+            ClearClassForm();
+            _classEdits.Filled();
+            ClassesStatus.Visibility = Visibility.Collapsed;
+        }
+
         ShowClasses();
     }
 
@@ -991,7 +1087,7 @@ public partial class SettingsView : UserControl
             }
         }
 
-        SaveClasses(classes);
+        SaveClasses(classes, fromForm: true);
     }
 
     /// <summary>The class in the form, or null after saying what to fix.</summary>
@@ -1033,7 +1129,8 @@ public partial class SettingsView : UserControl
     /// from the classes before it, and a read that comes back while a later change is still on its way is left
     /// unshown, so it can't bring back what that change took out.
     /// </summary>
-    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null)
+    /// <param name="fromForm">Saved from the class form, so what's typed there is saved and the form can be emptied.</param>
+    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null, bool fromForm = false)
     {
         ClassesBar.Changed();
         var form = new ClassesForm(_termStart, _termEnd, classes);
@@ -1056,6 +1153,10 @@ public partial class SettingsView : UserControl
             }
 
             _savedClasses = classes.ToList();
+            if (fromForm)
+            {
+                _classEdits.Filled();
+            }
 
             // The classes as the server saved them, read off the window's thread, then shown from that.
             var saved = await Work.Read(() => _settings.GetClasses());
@@ -1291,6 +1392,24 @@ public partial class SettingsView : UserControl
 
     /// <summary>One entry in the Settings column. Words are what a search finds it by, besides its label.</summary>
     public sealed record SettingsSection(string Key, string Label, string Words);
+
+    /// <summary>
+    /// What a part of the page with its own Save showed when last filled from what's saved, or just saved. When it
+    /// shows something else now, something was typed there and not saved, and filling the page again leaves it.
+    /// </summary>
+    private sealed class Unsaved(TextBlock note, Func<string> state)
+    {
+        private string? _filled;
+
+        /// <summary>Where the section says how saving went, which is where "Not saved yet" goes.</summary>
+        public TextBlock Note => note;
+
+        public bool Edited => _filled is not null && state() != _filled;
+
+        public void Filled() => _filled = state();
+
+        public static string Join(params IEnumerable<string> parts) => string.Join('\u001f', parts);
+    }
 
     private sealed class WorkRow(string label, string removeLabel, WeeklyHours? weekly = null, IReadOnlyList<WorkDate>? dates = null)
     {
