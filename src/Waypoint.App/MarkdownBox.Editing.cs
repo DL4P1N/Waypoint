@@ -1118,6 +1118,7 @@ public sealed partial class MarkdownBox
 
         var form = new RenameWindow(owner, current, current.Length > 0 ? "Save" : "Add link", "A web address. Leave it empty to remove the link.", "Link");
         System.Windows.Automation.AutomationProperties.SetName(form.NameBox, "Link address");
+        form.EmptyProblem = current.Length > 0 ? null : "Type a web address first.";
         var removing = false;
         form.DoneButton.Click += (_, _) =>
         {
