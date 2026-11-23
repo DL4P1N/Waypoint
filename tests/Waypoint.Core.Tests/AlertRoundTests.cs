@@ -89,6 +89,50 @@ public sealed class AlertRoundTests : IDisposable
         Assert.Single(_database.GetBackups());
     }
 
+    [Fact]
+    public async Task Stopping_waits_for_a_round_still_running_within_its_limit_and_finishes_once_it_ends()
+    {
+        var caller = Environment.CurrentManagedThreadId;
+        var armed = false;
+        var entered = 0;
+        using var inside = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        DateTime Clock()
+        {
+            if (Volatile.Read(ref armed) && Environment.CurrentManagedThreadId != caller && Interlocked.Increment(ref entered) == 1)
+            {
+                inside.Set();
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+
+            return Now;
+        }
+
+        var worker = new WaypointWorker(_database, new WaypointSettings(), _folder, new Host(), exception => throw exception, new WorkerParts(
+            _ => new NoTokens(),
+            Clock: Clock,
+            CaptureSorter: new NullSorter(),
+            ConnectGateway: false));
+        Volatile.Write(ref armed, true);
+        var round = worker.StartAlertRound();
+        Assert.True(inside.Wait(TimeSpan.FromSeconds(30)));
+
+        // Held, so a short limit runs out and says so, without waiting for the round.
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        Assert.False(await worker.StopWorkAsync(TimeSpan.FromMilliseconds(200)));
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.False(round.IsCompleted);
+
+        // A longer limit waits for it and finishes once it's let go.
+        var stopping = worker.StopWorkAsync(TimeSpan.FromMinutes(1));
+        await Task.Delay(200);
+        Assert.False(stopping.IsCompleted);
+
+        release.Set();
+        Assert.True(await stopping.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(round.IsCompleted);
+    }
+
     private sealed class Host : IWorkerHost
     {
         public void ShowNotice(string title, string text)

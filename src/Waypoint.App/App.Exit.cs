@@ -104,18 +104,6 @@ public partial class App
     }
 
     /// <summary>
-    /// Waits here for <paramref name="work"/> while the window thread keeps running, since work started from it
-    /// carries on there and would otherwise never get the chance to end.
-    /// </summary>
-    private void WaitWhileRunning(System.Threading.Tasks.Task work)
-    {
-        var frame = new System.Windows.Threading.DispatcherFrame();
-        var dispatcher = Dispatcher;
-        work.ContinueWith(_ => dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Send, () => frame.Continue = false), System.Threading.Tasks.TaskScheduler.Default);
-        System.Windows.Threading.Dispatcher.PushFrame(frame);
-    }
-
-    /// <summary>
     /// Starts the next copy, then closes the usual way. Used after a restore, whether or not it went in, since what was
     /// stopped for it isn't started again in this run. The next copy waits for this one to let go of the lock, then says
     /// <paramref name="said"/>. If it can't be started, carrying on here isn't safe either, so this says to open
@@ -178,62 +166,28 @@ public partial class App
 
     protected override void OnExit(ExitEventArgs e)
     {
-        // A second copy exits before any of this is set up, so each part is checked before it's used. Changes still on
-        // their way to the server go first, within a time limit, and any left are noted in the log.
-        // Each part is done on its own, so a problem with one is logged and the rest still happen.
-        static void Step(Action step)
+        // A second copy exits before any of this is set up, so each part is checked before it's used.
+        Closing().Run(Dispatcher);
+        base.OnExit(e);
+    }
+
+    /// <summary>What closing goes through, from what this copy set up.</summary>
+    private AppClosing Closing() => new()
+    {
+        Closing = _closing,
+        FinishPageWork = _itemsWindow is { } pages ? pages.FinishWork : null,
+        PageWorkLimit = PageWorkLimit,
+        SaveDrafts = _itemsWindow is { } drafts ? drafts.SaveDrafts : null,
+        SavePlace = _itemsWindow is { } place ? place.SavePlace : null,
+        FinishNoteSync = _noteSync is { } sync ? sync.Finish : null,
+        FlushSavedReads = _server is { } server ? server.Client.FlushSavedReads : null,
+        FinishRecording = _recorder is { } recorder ? recorder.Dispose : null,
+        Worker = _worker,
+        RunPosted = _posted is { } posted ? posted.RunLeft : null,
+        StopIntake = () =>
         {
-            try
-            {
-                step();
-            }
-            catch (Exception exception)
-            {
-                LogError(exception);
-            }
-        }
-
-        // Said first, so install.ps1 waits for the rest rather than stopping this copy partway through saving.
-        Step(() => _closing?.Set());
-
-        Step(() =>
-        {
-            if (_itemsWindow?.FinishWork(PageWorkLimit) is { Count: > 0 } left)
-            {
-                LogText($"Closed with {left.Count} {(left.Count == 1 ? "change" : "changes")} still on the way to the server: {string.Join(", ", left)}");
-            }
-        });
-
-        Step(() => _itemsWindow?.SaveDrafts());
-        Step(() => _itemsWindow?.SavePlace());
-        Step(() => _noteSync?.Finish());
-
-        // The pages' saved view waits a moment after each change before it's written, so what's left is written now.
-        Step(() => _server?.Client.FlushSavedReads());
-
-        // Finishes the file, so what was recorded is offered as notes next start.
-        Step(() => _recorder?.Dispose());
-
-        // A capture or press read just before closing is still saved, within a few seconds. Off this thread, so
-        // nothing it finishes can wait on the window thread being free.
-        if (_worker is { } worker)
-        {
-            Step(() => System.Threading.Tasks.Task.Run(() => worker.StopDiscordAsync(DiscordGateway.EventDrainLimit)).Wait());
-        }
-
-        // What those events handed to this thread runs now, since the dispatcher stops once closing is done. A typed
-        // capture is one: it's marked as read in Discord before it's handed over, so skipping it would lose it. Files
-        // sent with it or for notes need Discord to download them, which has stopped by now. The rest only refreshes
-        // the window or reads Discord again.
-        Step(() => _posted?.RunLeft());
-
-        // Work started without being waited for, such as a notice going out, is given a few seconds to end. Nothing
-        // new is started meanwhile: no timer runs, and the tray is hidden with its menu off, so no dialog opens from
-        // it while this waits.
-        _restoring = true;
-        Step(StopTimers);
-        Step(() =>
-        {
+            _restoring = true;
+            StopTimers();
             if (_tray is { } tray)
             {
                 if (tray.ContextMenuStrip is { } menu)
@@ -243,23 +197,26 @@ public partial class App
 
                 tray.Visible = false;
             }
-        });
-        Step(() => WaitWhileRunning(StopWorkerWorkAsync(DiscordGateway.EventDrainLimit)));
-
-        // Outside a night's check-in window, nothing about the last check-in is left saved.
-        Step(() => _worker?.ForgetLateNight());
-        Step(() => _transcription?.Dispose());
-        Step(() => _tray?.Dispose());
-        Step(() =>
+        },
+        DisposeTranscription = _transcription is { } transcription ? transcription.Dispose : null,
+        Release = () =>
         {
-            // Released, not just dropped, so a copy started after a restore takes it over cleanly.
-            if (_holdsInstance)
+            try
             {
-                _singleInstance?.ReleaseMutex();
+                _tray?.Dispose();
             }
+            finally
+            {
+                // Released, not just dropped, so a copy started after a restore takes it over cleanly.
+                if (_holdsInstance)
+                {
+                    _singleInstance?.ReleaseMutex();
+                }
 
-            _singleInstance?.Dispose();
-        });
-        base.OnExit(e);
-    }
+                _singleInstance?.Dispose();
+            }
+        },
+        LogError = LogError,
+        LogText = LogText,
+    };
 }
