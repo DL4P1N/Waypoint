@@ -182,6 +182,9 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
     /// <summary>How long a new connection waits for Discord's hello before it's dropped and tried again. Tests shorten it.</summary>
     internal TimeSpan HelloWait { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>The clock <see cref="HelloWait"/> is timed by. Tests swap it so the wait runs out when they say.</summary>
+    internal TimeProvider Time { get; init; } = TimeProvider.System;
+
     /// <summary>Where to connect instead of Discord, for tests.</summary>
     internal string? Address { get; init; }
 
@@ -219,8 +222,8 @@ public sealed class DiscordGateway(string token, Func<string, JsonElement, Task>
             var welcomed = false;
 
             // Connecting and Discord's hello have a time limit, so a connection that never answers is tried again.
-            using var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            hello.CancelAfter(HelloWait);
+            using var late = new CancellationTokenSource(HelloWait, Time);
+            using var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, late.Token);
             try
             {
                 await socket.ConnectAsync(new Uri(Address ?? _session.Url), hello.Token);
