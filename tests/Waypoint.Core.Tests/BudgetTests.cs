@@ -331,6 +331,28 @@ public sealed class BudgetTests : IDisposable
     }
 
     [Fact]
+    public void Payment_wording_on_a_purchase_is_still_a_purchase()
+    {
+        const string plain = """
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Payments,ONLINE PAYMENT THANK YOU,-300.00
+            10/02/2026,10/02/2026,Shopping,QUICKPAYMENT KIOSK,25.00
+            10/03/2026,10/03/2026,Entertainment,STREAMCO AUTOPAY,12.99
+            """;
+        Assert.Equal([30000L], CsvImport.ParsePayments(plain).Select(row => row.AmountCents));
+        Assert.Equal([2500L, 1299L], CsvImport.Parse(plain).Select(row => row.AmountCents));
+
+        // A type column file shows purchases as negative, so its payments are the positive rows.
+        const string typed = """
+            Date,Type,Description,Amount
+            2026-10-04,CREDIT,PAYMENT RECEIVED,100.00
+            2026-10-05,DEBIT,GYM AUTOPAY,-40.00
+            """;
+        Assert.Equal([10000L], CsvImport.ParsePayments(typed).Select(row => row.AmountCents));
+        Assert.Equal([4000L], CsvImport.Parse(typed).Select(row => row.AmountCents));
+    }
+
+    [Fact]
     public void Type_column_csv_flips_the_sign()
     {
         var csv = """

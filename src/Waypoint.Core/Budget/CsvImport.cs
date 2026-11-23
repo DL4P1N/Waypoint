@@ -151,7 +151,12 @@ public static class CsvImport
 
             var text = cells[description].Trim();
             var cents = (long)Math.Round(value * 100);
-            if (IsNotSpending(text))
+
+            // Payment wording only counts on money coming in, in the file's own sign convention: a type column file
+            // shows purchases as negative and the others show them as positive. A purchase whose name happens to say
+            // PAYMENT is still a purchase.
+            var isCredit = negativeIsSpending ? cents > 0 : cents < 0;
+            if (isCredit && IsNotSpending(text))
             {
                 payments.Add(new ImportedTransaction(day, text, Math.Abs(cents)));
                 continue;
