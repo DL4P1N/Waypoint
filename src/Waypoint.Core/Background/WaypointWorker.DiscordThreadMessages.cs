@@ -174,7 +174,7 @@ public sealed partial class WaypointWorker
         if (message.Attachments.Count > 0)
         {
             var files = await ReadThreadFilesAsync(discord, message);
-            allFiles = await AttachThreadFilesAsync(discord, row.Thread, noteId, files);
+            allFiles = await AttachThreadFilesAsync(discord, row.Thread, noteId, files, triedBefore: _database.DiscordMessageTries(row.Thread, message.Id) > 1);
         }
 
         if (message.Text.Trim().Length > 0)
@@ -224,12 +224,26 @@ public sealed partial class WaypointWorker
         return new ThreadFiles(files, problems);
     }
 
-    /// <summary>Each file joins the note's Sources, the same as dropping it on that note on the PC. False, after saying why, when any couldn't.</summary>
-    private async Task<bool> AttachThreadFilesAsync(DiscordBridge discord, string thread, long noteId, ThreadFiles read)
+    /// <summary>
+    /// Each file joins the note's Sources, the same as dropping it on that note on the PC. False, after saying why, when
+    /// any couldn't. When the message was <paramref name="triedBefore"/>, a try may have added a file and stopped
+    /// before remembering it, so a file the note already has, with the same name and words, is remembered instead of
+    /// added again. When the note's sources can't be read, each file is added as before.
+    /// </summary>
+    private async Task<bool> AttachThreadFilesAsync(DiscordBridge discord, string thread, long noteId, ThreadFiles read, bool triedBefore)
     {
         var problems = read.Problems.ToList();
+        var already = triedBefore && read.Files.Count > 0 ? SourcesOf(noteId) : [];
         foreach (var (attachmentId, file) in read.Files)
         {
+            var name = file.Name.Trim();
+            if (already.FindIndex(source => source.Name == name && source.Text == file.Text) is var found and >= 0)
+            {
+                already.RemoveAt(found);
+                _database.MarkDiscordFileAttached(attachmentId, noteId, _clock());
+                continue;
+            }
+
             var attached = NoteFiles is { CanMakeNotes: true } notes
                 ? notes.AttachFile(noteId, file, _clock())
                 : new StartedNote(noteId, "", null, null, "Files can't be added to notes right now.");
@@ -252,6 +266,19 @@ public sealed partial class WaypointWorker
 
         await NoticeAsync(discord, thread, "Not every file was added", string.Join("\n", problems), CardTone.Attention);
         return false;
+    }
+
+    /// <summary>A note's sources from where its files are added, or none when they can't be read.</summary>
+    private List<NoteSource> SourcesOf(long noteId)
+    {
+        try
+        {
+            return NoteFiles is { } notes ? notes.GetNoteSources(noteId).ToList() : [];
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return [];
+        }
     }
 
     private sealed record ThreadFile(FileText? File, string? Problem);

@@ -130,7 +130,8 @@ public sealed partial class WaypointWorker
         }
 
         // The files are kept before the first message goes, since Discord takes a deleted message's files with it.
-        var all = await AttachThreadFilesAsync(discord, post.Id, noteId, files);
+        // The post is live by now, so its first message's files are only ever added this once.
+        var all = await AttachThreadFilesAsync(discord, post.Id, noteId, files, triedBefore: false);
         if (text.Length == 0 && NoteFiles is { CanMakeNotes: true } notes && _database.GetNoteSources(noteId).Count > 0)
         {
             var written = await NoteJobText.GuardNotes(() => notes.WriteNotesAsync(noteId, null, false, _clock()));
