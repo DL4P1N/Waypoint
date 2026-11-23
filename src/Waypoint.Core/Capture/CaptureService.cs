@@ -133,75 +133,32 @@ public sealed class CaptureService(
             }
 
             LastError = null;
+            var round = new SortRound();
             foreach (var capture in database.GetPendingCaptures())
             {
-                // One cut off partway picks up where it stopped, without sorting again or repeating a step.
-                if (database.GetCaptureProgress(capture.Id) is { } saved)
+                // One that kept failing is let go as a note, so it can't hold up the ones after it round after round.
+                if (_failures.GetValueOrDefault(capture.Id) >= MaxFailures)
                 {
-                    await ResumeAsync(capture, saved, cancellationToken);
+                    TryPark(capture);
                     continue;
                 }
 
-                if (capture.FileName is { } fileName)
+                // Each capture is its own try, so one that throws doesn't stop the ones after it, such as a done
+                // or snooze word, from being handled this round.
+                try
                 {
-                    await ProcessFileAsync(capture, fileName, cancellationToken);
-                    continue;
+                    await ProcessOneAsync(capture, round, cancellationToken);
                 }
-
-                if (TryApplyPayWord(capture) || TryApplySessionWord(capture) || TryApplyRoutineWord(capture) || TryApplyWaitingWord(capture) || TryApplyEnergyWord(capture) || TryApplyDoseQuestion(capture))
+                catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    continue;
+                    RecordError(exception.Message);
+                    CountFailure(capture.Id);
                 }
+            }
 
-                // Built fresh each time, since the capture before this one may have changed things.
-                var context = BuildContext(Now, capture.Text, capture.Origin);
-                var wantsSmaller = context.Activation is not null && Activation.ParseWord(capture.Text) == SessionWord.Smaller;
-                var wantsStart = !wantsSmaller && Activation.AsksToStart(capture.Text);
-                var result = wantsSmaller || wantsStart
-                    ? await SortWithLimitAsync(capture, context, cancellationToken)
-                    : sorter is null ? null : await sorter.SortAsync(capture.Text, capture.CreatedAt.ToLocalTime().DateTime, context, cancellationToken);
-
-                // Getting going can't wait for a retry, so these fall back to the fixed actions.
-                if (wantsSmaller && result?.Ops?.Any(op => op.Kind == AssistantOpKind.ActivationSmaller) != true)
-                {
-                    Act(capture, write => write.MakeSmaller(null, Now));
-                    continue;
-                }
-
-                if (wantsStart && !Responds(result))
-                {
-                    Act(capture, write => write.StartActivation(null, null, null, Activation.TypedMethod, Now, capture.Text));
-                    continue;
-                }
-
-                if (result is null)
-                {
-                    continue;
-                }
-
-                result = result with { Ops = KnownOps(result, context) };
-                var changes = KnownChanges(result, context);
-                var hasContent = result.Items.Count > 0 || changes.Count > 0 || !string.IsNullOrWhiteSpace(result.Answer) || result.MonthlyBudgetCents is not null || result.BudgetOps is { Count: > 0 } || result.Ops is { Count: > 0 };
-                // A capture sorted late plans from now, so no study session lands on a day that's already gone.
-                var writtenAt = capture.CreatedAt.ToLocalTime().DateTime;
-                var planFrom = writtenAt > Now ? writtenAt : Now;
-                IReadOnlyList<SortedItem> stored = hasContent
-                    ? result.Items.Select(item => ReminderPlan.WithStudySessions(item, planFrom)).ToList()
-                    : [new SortedItem(ItemKind.Note, capture.Text, null, null)];
-
-                // The items, changes, and budget are saved together. Budget changes and actions run after, one at a
-                // time, each noted as it's done, so a crash partway never repeats one or loses the ones after it.
-                var progress = new StepProgress(
-                    StepProgress.Sorted,
-                    Stored: [.. stored],
-                    Answer: result.Answer,
-                    MonthlyBudget: result.MonthlyBudgetCents,
-                    BudgetOps: [.. result.BudgetOps ?? []],
-                    Ops: [.. result.Ops ?? []],
-                    FocusRef: result.FocusRef);
-                var steps = progress.BudgetOps!.Count + progress.Ops!.Count;
-                var applied = database.StoreSortedCapture(capture.Id, stored, changes, result.MonthlyBudgetCents, steps == 0 ? null : changed => (progress with { Applied = [.. changed] }).Save());
-                await RunStepsAsync(capture, progress with { Applied = [.. applied] }, context, cancellationToken);
+            if (LastError is not null)
+            {
+                Changed?.Invoke();
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -218,6 +175,176 @@ public sealed class CaptureService(
         {
             _processing.Release();
         }
+    }
+
+    /// <summary>How many times a capture can fail before it's kept as a note instead of being tried again.</summary>
+    public const int MaxFailures = 3;
+
+    /// <summary>Said when a capture that kept failing is kept as a note just as it was written.</summary>
+    public const string Parked = "I couldn't sort this after a few tries, so I kept it as a note just as you wrote it.";
+
+    /// <summary>Said when a capture whose steps had begun kept failing to finish.</summary>
+    public const string ParkedPartway = "This kept stopping partway, so I stopped trying. Check that it went through.";
+
+    /// <summary>How many times each capture has failed in this run, kept until it's sorted or let go.</summary>
+    private readonly Dictionary<long, int> _failures = [];
+
+    /// <summary>
+    /// One round's view of the sorter. A sort that throws is held as a suspect until another capture sorts, which
+    /// shows the failure was that capture's own. Two in a row means the sorter itself is down, so the rest of the
+    /// round leaves sorting alone, and those captures stay pending without counting against them.
+    /// </summary>
+    private sealed class SortRound
+    {
+        public bool SorterDown { get; set; }
+
+        public long? Suspect { get; set; }
+    }
+
+    private void RecordError(string message)
+    {
+        LastError = message;
+        Failed?.Invoke(message);
+    }
+
+    private void CountFailure(long captureId) => _failures[captureId] = _failures.GetValueOrDefault(captureId) + 1;
+
+    /// <summary>Asks the sorter, keeping a throw to this capture and this round.</summary>
+    private async Task<CaptureResult?> SortAsync(PendingCapture capture, string text, AssistantContext context, SortRound round, CancellationToken cancellationToken)
+    {
+        if (sorter is null || round.SorterDown)
+        {
+            return null;
+        }
+
+        try
+        {
+            var result = await sorter.SortAsync(text, capture.CreatedAt.ToLocalTime().DateTime, context, cancellationToken);
+            if (round.Suspect is { } suspect)
+            {
+                CountFailure(suspect);
+                round.Suspect = null;
+            }
+
+            return result;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordError(exception.Message);
+            if (round.Suspect is null)
+            {
+                round.Suspect = capture.Id;
+            }
+            else
+            {
+                round.SorterDown = true;
+                round.Suspect = null;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Lets go of a capture that kept failing. One not yet sorted is kept as a note of its text, or of its file's
+    /// name, and one whose steps had begun is finished as it stands. Either way the reply says so plainly. If even
+    /// that can't be saved, it stays pending and is tried again next round.
+    /// </summary>
+    private void TryPark(PendingCapture capture)
+    {
+        try
+        {
+            var begun = database.GetCaptureProgress(capture.Id) is not null;
+            IReadOnlyList<SortedItem> items = begun
+                ? []
+                : [new SortedItem(ItemKind.Note, capture.FileName is { } file ? FileNote.Title(file) : capture.Text, null, null)];
+            var outcome = new CaptureOutcome(items, [], begun ? ParkedPartway : Parked, Origin: capture.Origin);
+            database.InOneWrite(write =>
+            {
+                write.CompleteCapture(capture.Id, items);
+                Keep(write, capture, outcome);
+            });
+            _failures.Remove(capture.Id);
+            Announce(capture, outcome);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordError(exception.Message);
+        }
+    }
+
+    private async Task ProcessOneAsync(PendingCapture capture, SortRound round, CancellationToken cancellationToken)
+    {
+        // One cut off partway picks up where it stopped, without sorting again or repeating a step.
+        if (database.GetCaptureProgress(capture.Id) is { } saved)
+        {
+            await ResumeAsync(capture, saved, cancellationToken);
+            _failures.Remove(capture.Id);
+            return;
+        }
+
+        if (capture.FileName is { } fileName)
+        {
+            await ProcessFileAsync(capture, fileName, round, cancellationToken);
+            return;
+        }
+
+        if (TryApplyPayWord(capture) || TryApplySessionWord(capture) || TryApplyRoutineWord(capture) || TryApplyWaitingWord(capture) || TryApplyEnergyWord(capture) || TryApplyDoseQuestion(capture))
+        {
+            _failures.Remove(capture.Id);
+            return;
+        }
+
+        // Built fresh each time, since the capture before this one may have changed things.
+        var context = BuildContext(Now, capture.Text, capture.Origin);
+        var wantsSmaller = context.Activation is not null && Activation.ParseWord(capture.Text) == SessionWord.Smaller;
+        var wantsStart = !wantsSmaller && Activation.AsksToStart(capture.Text);
+        var result = wantsSmaller || wantsStart
+            ? await SortWithLimitAsync(capture, context, cancellationToken)
+            : await SortAsync(capture, capture.Text, context, round, cancellationToken);
+
+        // Getting going can't wait for a retry, so these fall back to the fixed actions.
+        if (wantsSmaller && result?.Ops?.Any(op => op.Kind == AssistantOpKind.ActivationSmaller) != true)
+        {
+            Act(capture, write => write.MakeSmaller(null, Now));
+            return;
+        }
+
+        if (wantsStart && !Responds(result))
+        {
+            Act(capture, write => write.StartActivation(null, null, null, Activation.TypedMethod, Now, capture.Text));
+            return;
+        }
+
+        if (result is null)
+        {
+            return;
+        }
+
+        result = result with { Ops = KnownOps(result, context) };
+        var changes = KnownChanges(result, context);
+        var hasContent = result.Items.Count > 0 || changes.Count > 0 || !string.IsNullOrWhiteSpace(result.Answer) || result.MonthlyBudgetCents is not null || result.BudgetOps is { Count: > 0 } || result.Ops is { Count: > 0 };
+        // A capture sorted late plans from now, so no study session lands on a day that's already gone.
+        var writtenAt = capture.CreatedAt.ToLocalTime().DateTime;
+        var planFrom = writtenAt > Now ? writtenAt : Now;
+        IReadOnlyList<SortedItem> stored = hasContent
+            ? result.Items.Select(item => ReminderPlan.WithStudySessions(item, planFrom)).ToList()
+            : [new SortedItem(ItemKind.Note, capture.Text, null, null)];
+
+        // The items, changes, and budget are saved together. Budget changes and actions run after, one at a
+        // time, each noted as it's done, so a crash partway never repeats one or loses the ones after it.
+        var progress = new StepProgress(
+            StepProgress.Sorted,
+            Stored: [.. stored],
+            Answer: result.Answer,
+            MonthlyBudget: result.MonthlyBudgetCents,
+            BudgetOps: [.. result.BudgetOps ?? []],
+            Ops: [.. result.Ops ?? []],
+            FocusRef: result.FocusRef);
+        var steps = progress.BudgetOps!.Count + progress.Ops!.Count;
+        var applied = database.StoreSortedCapture(capture.Id, stored, changes, result.MonthlyBudgetCents, steps == 0 ? null : changed => (progress with { Applied = [.. changed] }).Save());
+        await RunStepsAsync(capture, progress with { Applied = [.. applied] }, context, cancellationToken);
+        _failures.Remove(capture.Id);
     }
 
     /// <summary>
@@ -438,7 +565,7 @@ public sealed class CaptureService(
     /// A file can add items and suggest pay dates, and nothing else, so text inside one can't finish,
     /// cancel, or change what's already here. Its spending stays out too, or a statement would count twice.
     /// </summary>
-    private async Task ProcessFileAsync(PendingCapture capture, string fileName, CancellationToken cancellationToken)
+    private async Task ProcessFileAsync(PendingCapture capture, string fileName, SortRound round, CancellationToken cancellationToken)
     {
         var now = Now;
         var note = new SortedItem(ItemKind.Note, FileNote.Title(fileName), null, null);
@@ -454,7 +581,7 @@ public sealed class CaptureService(
             return;
         }
 
-        var result = await sorter.SortAsync(FileNote.Wrap(fileName, capture.Text), capture.CreatedAt.ToLocalTime().DateTime, BuildContext(now, fileName), cancellationToken);
+        var result = await SortAsync(capture, FileNote.Wrap(fileName, capture.Text), BuildContext(now, fileName), round, cancellationToken);
         if (result is null)
         {
             return;
@@ -478,6 +605,7 @@ public sealed class CaptureService(
             write.CompleteCapture(capture.Id, items);
             Keep(write, capture, outcome, kept: asked ? PayCalendar.AskedNote : $"Read the file and added {added}.");
         });
+        _failures.Remove(capture.Id);
         Announce(capture, outcome);
     }
 
