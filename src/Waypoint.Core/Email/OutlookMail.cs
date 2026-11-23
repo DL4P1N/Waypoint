@@ -265,7 +265,7 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
             var on = DateOnly.FromDateTime(received.DateTime);
             if (AlertParser.ReadAvailableBalance(body) is { } balance)
             {
-                database.SetCheckingFromAlert(balance, on);
+                database.SetCheckingFromAlert(balance, received);
             }
 
             foreach (var (account, payment) in AlertParser.ReadCardPayments(body, on))

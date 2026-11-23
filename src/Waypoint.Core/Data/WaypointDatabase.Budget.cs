@@ -425,17 +425,25 @@ public sealed partial class WaypointDatabase
     }
 
     /// <summary>
-    /// Sets checking from a bank alert that says its balance. One older than the balance already kept, such as one
-    /// typed in later, is left alone.
+    /// Sets checking from a bank alert that says its balance, sent at <paramref name="alertAt"/>. One older than the
+    /// balance already kept is left alone: from an earlier day, or from earlier the same day than a balance typed in
+    /// or another alert already read. The alert's time is kept with the balance, so alerts read out of order still
+    /// end on the newest. Read and saved in one write, so a balance saved from the Budget page meanwhile isn't lost.
     /// </summary>
-    public bool SetCheckingFromAlert(long cents, DateOnly on)
+    public bool SetCheckingFromAlert(long cents, DateTimeOffset alertAt)
     {
-        if (GetBudgetAccounts().FirstOrDefault(account => account.Kind == AccountKind.Checking) is not { } checking || on < checking.UpdatedOn)
+        var on = DateOnly.FromDateTime(alertAt.LocalDateTime);
+        using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
+        if (ReadBudgetAccounts(connection).FirstOrDefault(account => account.Kind == AccountKind.Checking) is not { } checking
+            || on < checking.UpdatedOn
+            || (on == checking.UpdatedOn && checking.SetAt is { } setAt && alertAt <= setAt))
         {
             return false;
         }
 
-        SaveBudgetAccount(checking with { BalanceCents = cents, UpdatedOn = on });
+        SaveBudgetAccount(connection, checking with { BalanceCents = cents, UpdatedOn = on, SetAt = alertAt });
+        transaction.Commit();
         return true;
     }
 
