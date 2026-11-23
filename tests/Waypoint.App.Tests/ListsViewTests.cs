@@ -268,6 +268,21 @@ public sealed class ListsViewTests
     });
 
     [Fact]
+    public void An_entry_says_how_to_change_its_words_to_the_pointer_and_to_a_screen_reader() => Ui.Run(ui =>
+    {
+        ui.Database.AddListEntry(Shopping, "bread", DateTime.Now);
+        var page = Make(ui);
+        var bread = ((IList)page.Entries.ItemsSource).Cast<object>().Single(row => UiTest.Prop<string>(row, "Text") == "bread");
+        var container = ui.Container(page.Entries, bread);
+
+        var label = UiTest.Descendants<TextBlock>(container).First(block => block.Text == "bread");
+        Assert.Equal("Double-click to change it", label.ToolTip);
+        Assert.Equal(Cursors.IBeam, label.Cursor);
+        var box = UiTest.Descendants<CheckBox>(container).Single();
+        Assert.Contains("Enter changes its words", System.Windows.Automation.AutomationProperties.GetHelpText(box), StringComparison.Ordinal);
+    });
+
+    [Fact]
     public void An_edited_entry_changes_in_place_and_a_refresh_waits_while_editing() => Ui.Run(ui =>
     {
         ui.Database.AddListEntry(Shopping, "bread", DateTime.Now);

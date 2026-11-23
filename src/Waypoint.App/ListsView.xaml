@@ -71,7 +71,9 @@
                                 <CheckBox VerticalAlignment="Top"
                                           IsChecked="{Binding Done, Mode=OneWay}"
                                           AutomationProperties.Name="{Binding Text}"
+                                          AutomationProperties.HelpText="Space checks it off, Enter changes its words, Delete takes it off the list"
                                           Checked="OnEntryClicked" Unchecked="OnEntryClicked" />
+                                <!-- Double-click changes the words. The pointer and the tip say so, since nothing else does. -->
                                 <TextBlock Grid.Column="1"
                                            Margin="10,1,8,0"
                                            FontSize="14"
@@ -81,6 +83,8 @@
                                            TextDecorations="{Binding Strike}"
                                            Foreground="{Binding TextBrush}"
                                            Visibility="{Binding TextVisibility}"
+                                           Cursor="IBeam"
+                                           ToolTip="Double-click to change it"
                                            MouseLeftButtonDown="OnEntryTextPressed" />
                                 <TextBox Grid.Column="1"
                                          Margin="8,0,8,0"
