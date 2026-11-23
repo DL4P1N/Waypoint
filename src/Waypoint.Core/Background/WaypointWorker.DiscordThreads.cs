@@ -256,6 +256,7 @@ public sealed partial class WaypointWorker
             await RetirePostAsync(discord, row, "This note was deleted on the PC");
         }
 
+        ForgetPartsOfRetiredPosts();
         _notePostsSettled = settled ? stamp : null;
     }
 
@@ -477,7 +478,9 @@ public sealed partial class WaypointWorker
     /// <summary>
     /// A part sent just before a crash, before it was kept, whose note then got shorter, is past the parts the post has
     /// now, so it's never reached above. It's taken away, being the bot's own, and its note goes. One whose message
-    /// isn't known is looked for by its Edit button, and while the post can't be read it waits for a later round.
+    /// isn't known is looked for by its Edit button after the post's last part, the newest such message being the one
+    /// taken, and while the post can't be read it waits for a later round. One that still can't be taken away after a
+    /// day is let go, so it never keeps the rounds coming for good.
     /// </summary>
     private async Task ClearStrayPartsAsync(DiscordBridge discord, DiscordThreadRow row, int count, List<DiscordThreadPart> parts)
     {
@@ -489,14 +492,19 @@ public sealed partial class WaypointWorker
                 continue;
             }
 
+            if (_clock() - send.StartedAt >= NoticeGiveUp || row.Kind != WaypointDatabase.ThreadNote)
+            {
+                _database.FinishDiscordSend(send.Key);
+                continue;
+            }
+
             var stray = send.MessageId;
             if (stray is null && long.TryParse(row.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var noteId))
             {
-                var known = parts.Select(part => part.Message)
-                    .Concat(_database.GetDiscordNotices(row.Thread).Select(notice => notice.Message))
-                    .Append(row.Thread)
-                    .ToHashSet(StringComparer.Ordinal);
-                var search = await discord.FindSentWithButtonAfterAsync(row.Thread, row.Thread, send.Nonce, PartEditPrefix(noteId, index), known);
+                var kept = parts.Select(part => part.Message).Append(row.Thread).ToList();
+                var after = kept.MaxBy(id => ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)!;
+                var known = kept.Concat(_database.GetDiscordNotices(row.Thread).Select(notice => notice.Message)).ToHashSet(StringComparer.Ordinal);
+                var search = await discord.FindSentWithButtonAfterAsync(row.Thread, after, send.Nonce, PartEditPrefix(noteId, index), known);
                 if (search.Result == SentLookup.Unknown)
                 {
                     continue;
@@ -506,12 +514,28 @@ public sealed partial class WaypointWorker
             }
 
             // A message already gone counts as taken away.
-            if (stray is not null && !parts.Any(part => part.Message == stray) && !await discord.DeleteAsync(row.Thread, stray))
+            if (stray is not null && !parts.Any(part => part.Message == stray) && !await discord.DeleteInThreadAsync(row.Thread, stray))
             {
                 continue;
             }
 
             _database.FinishDiscordSend(send.Key);
+        }
+    }
+
+    /// <summary>
+    /// A part noted for a post that's no longer live, such as one retired or made again, is let go, since that post is
+    /// never brought up to date again. What's in it stays as it is.
+    /// </summary>
+    private void ForgetPartsOfRetiredPosts()
+    {
+        foreach (var send in _database.GetDiscordSends("part:"))
+        {
+            var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
+            if (thread is not null && _database.FindDiscordThread(thread) is not { Live: true })
+            {
+                _database.FinishDiscordSend(send.Key);
+            }
         }
     }
 

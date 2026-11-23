@@ -63,14 +63,18 @@ public sealed partial class DiscordBridge
 
     /// <summary>
     /// The same, for a message whose words aren't known any more, found by this nonce or by a button whose action
-    /// starts with <paramref name="actionPrefix"/>.
+    /// starts with <paramref name="actionPrefix"/>. The newest such message is the one given back.
     /// </summary>
     public Task<SentSearch> FindSentWithButtonAfterAsync(string channel, string after, string nonce, string actionPrefix, IReadOnlySet<string> known) =>
-        FindOwnAfterAsync(channel, after, message => NonceOf(message) == nonce || HasButton(message, ActionPrefix + actionPrefix), known);
+        FindOwnAfterAsync(channel, after, message => NonceOf(message) == nonce || HasButton(message, ActionPrefix + actionPrefix), known, newest: true);
 
-    /// <summary>This bot's first message after <paramref name="after"/> that matches, leaving out any already <paramref name="known"/>.</summary>
-    private async Task<SentSearch> FindOwnAfterAsync(string channel, string after, Func<JsonElement, bool> matches, IReadOnlySet<string> known)
+    /// <summary>
+    /// This bot's first message after <paramref name="after"/> that matches, leaving out any already
+    /// <paramref name="known"/>, or with <paramref name="newest"/> its last among those read.
+    /// </summary>
+    private async Task<SentSearch> FindOwnAfterAsync(string channel, string after, Func<JsonElement, bool> matches, IReadOnlySet<string> known, bool newest = false)
     {
+        string? last = null;
         try
         {
             // Only this bot's own posts count, so one from another bot that looks the same is never taken.
@@ -98,19 +102,21 @@ public sealed partial class DiscordBridge
                     .Where(message => Text(message, "id") is not null)
                     .OrderBy(message => SnowflakeOf(message) ?? 0)
                     .ToList();
-                var found = messages
+                var matching = messages
                     .Where(message => IsFrom(message, self) && matches(message))
                     .Select(message => Text(message, "id")!)
-                    .FirstOrDefault(id => !known.Contains(id));
-                if (found is not null)
+                    .Where(id => !known.Contains(id))
+                    .ToList();
+                if (matching.Count > 0 && !newest)
                 {
-                    return new SentSearch(SentLookup.Found, found);
+                    return new SentSearch(SentLookup.Found, matching[0]);
                 }
 
-                var next = messages.Select(SnowflakeOf).Max() is { } newest ? newest.ToString(CultureInfo.InvariantCulture) : after;
+                last = matching.LastOrDefault() ?? last;
+                var next = messages.Select(SnowflakeOf).Max() is { } latest ? latest.ToString(CultureInfo.InvariantCulture) : after;
                 if (document.RootElement.GetArrayLength() < SentPageSize || next == after)
                 {
-                    return new SentSearch(SentLookup.NotFound, null);
+                    return Settled(last);
                 }
 
                 after = next;
@@ -118,7 +124,7 @@ public sealed partial class DiscordBridge
 
             // Read oldest first from when it was noted, so a post that went through is among the first. One not found
             // in this many isn't there, and a busy channel never keeps it from going out.
-            return new SentSearch(SentLookup.NotFound, null);
+            return Settled(last);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException)
         {
@@ -126,6 +132,9 @@ public sealed partial class DiscordBridge
             return SentSearch.NotKnown;
         }
     }
+
+    private static SentSearch Settled(string? found) =>
+        found is null ? new SentSearch(SentLookup.NotFound, null) : new SentSearch(SentLookup.Found, found);
 
     /// <summary>Messages read in one page when looking for a post, the most Discord gives.</summary>
     private const int SentPageSize = 100;

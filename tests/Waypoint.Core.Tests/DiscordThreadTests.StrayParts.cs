@@ -104,6 +104,85 @@ public sealed partial class DiscordThreadTests
     }
 
     [Fact]
+    public async Task A_stray_part_after_many_messages_in_the_post_is_still_found_by_reading_from_the_last_part()
+    {
+        var id = _database.CreateNote("Made up long reading", "Made up first words", _now);
+        await Started(lists: null);
+        var post = PostFor(id);
+
+        // Far more than one look reads, typed before the note grew, and left in the post.
+        lock (_discord.Posts)
+        {
+            for (var line = 0; line < 600; line++)
+            {
+                post.Messages.Add(new Message { Id = _discord.NextId(), Author = "made-up-friend", Content = $"Made up chat {line}" });
+            }
+        }
+
+        // The note grows to three parts. The second is kept, and the third goes out unheard before Waypoint stops.
+        var longer = string.Join("\n\n", Enumerable.Range(1, 200).Select(line => $"Made up line {line} about a made up topic that runs on for a while."));
+        Assert.True(_database.SaveNote(id, "Made up long reading", longer, _now));
+        FailPartway("BEFORE UPDATE OF message_id ON discord_sends WHEN NEW.send_key LIKE 'part:%:2'");
+        var first = MakeWorker(lists: null);
+        first.StartDiscord();
+        await Record.ExceptionAsync(() => first.SyncDiscordThreadsAsync());
+        first.StopDiscord();
+        StopFailingPartway();
+        Assert.Equal(3, post.Messages.Count(message => message.Bot));
+        Assert.Equal(2, _database.FindDiscordThread(post.Id)!.Parts.Count);
+
+        // Then it gets shorter again, to two parts.
+        Assert.True(_database.SaveNote(id, "Made up long reading", LongReading, _now));
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.Discord!.HandleEventAsync("READY", Json("""{"user":{"id":"bot"}}"""));
+        await second.SyncDiscordThreadsAsync();
+
+        Assert.Equal(_database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message), post.Messages.Where(message => message.Bot).Select(message => message.Id));
+        Assert.Equal(2, post.Messages.Count(message => message.Bot));
+        Assert.Empty(_database.GetDiscordSends("part:"));
+    }
+
+    [Fact]
+    public async Task A_stray_part_that_cant_be_taken_away_is_let_go_after_a_day_so_the_rounds_settle()
+    {
+        var id = _database.CreateNote("Made up long reading", LongReading, _now);
+        var post = await SecondPartSentButNotKept(id, "BEFORE UPDATE OF parts ON discord_posts");
+        var stray = Assert.Single(_database.GetDiscordSends("part:")).MessageId!;
+        _discord.FailingDeletes.Add(stray);
+
+        Assert.True(_database.SaveNote(id, "Made up long reading", "Made up short words", _now));
+        var second = MakeWorker(lists: null);
+        second.StartDiscord();
+        await second.SyncDiscordThreadsAsync();
+        Assert.Single(_database.GetDiscordSends("part:"));
+        Assert.False(second.NotePostsSettled);
+
+        _now = _now.AddDays(1).AddMinutes(1);
+        await second.SyncDiscordThreadsAsync();
+        Assert.Empty(_database.GetDiscordSends("part:"));
+        Assert.Contains(post.Messages, message => message.Id == stray);
+        await second.SyncDiscordThreadsAsync();
+        Assert.True(second.NotePostsSettled);
+    }
+
+    [Fact]
+    public async Task A_part_noted_for_a_post_that_was_retired_is_let_go()
+    {
+        var id = _database.CreateNote("Made up long reading", LongReading, _now);
+        var worker = await Started(lists: null);
+        var post = PostFor(id);
+        _database.BeginDiscordSend($"part:{post.Id}:5", post.Id, _now);
+
+        _database.DeleteNote(id, _now);
+        await worker.SyncDiscordThreadsAsync();
+        await worker.SyncDiscordThreadsAsync();
+
+        Assert.False(_database.FindDiscordThread(post.Id)!.Live);
+        Assert.Empty(_database.GetDiscordSends("part:"));
+    }
+
+    [Fact]
     public async Task A_stray_part_already_taken_away_by_hand_is_let_go()
     {
         var id = _database.CreateNote("Made up long reading", LongReading, _now);
