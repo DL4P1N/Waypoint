@@ -54,6 +54,7 @@ public sealed class ServerNoteAudio(ServerNotesData notes, WaypointDatabase loca
         var sources = notes.GetNoteSources(noteId);
         var kept = 0;
         var notSent = 0;
+        var notRead = 0;
         foreach (var recording in recordings.Where(recording => recording.CanKeep))
         {
             var source = sources.First(found => found.Id == recording.SourceId);
@@ -75,7 +76,12 @@ public sealed class ServerNoteAudio(ServerNotesData notes, WaypointDatabase loca
                 local.SetJobKeptAudio(job.Id, target);
             }
 
-            if (await SendAsync(noteId, source.Id, target, cancellationToken) != FileSendResult.Sent)
+            var result = await SendAsync(noteId, source.Id, target, cancellationToken);
+            if (result == FileSendResult.NotRead)
+            {
+                notRead++;
+            }
+            else if (result != FileSendResult.Sent)
             {
                 notSent++;
             }
@@ -86,6 +92,11 @@ public sealed class ServerNoteAudio(ServerNotesData notes, WaypointDatabase loca
         if (kept == 0)
         {
             return new NoteAudioResult(false, "The original recording isn't on this PC anymore, and the server doesn't have it, so its audio can't be kept. The transcript and notes are still here.");
+        }
+
+        if (notRead > 0)
+        {
+            return new NoteAudioResult(true, "Kept this note's audio on this PC. It couldn't go to the server, because the copy here couldn't be read, such as while another program has it open.");
         }
 
         if (notSent > 0)
