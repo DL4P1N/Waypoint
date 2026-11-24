@@ -32,6 +32,11 @@
             </Setter>
         </Style>
 
+        <!-- Every window's font, so corner cards and Ask Waypoint read the same as the main window. -->
+        <Style x:Key="AppWindow" TargetType="Window">
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        </Style>
+
         <Style x:Key="ColumnTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="20" />
             <Setter Property="FontWeight" Value="Light" />
@@ -83,6 +88,14 @@
                                 <Setter Property="Background" Value="{DynamicResource PrimaryText}" />
                                 <Setter Property="BorderBrush" Value="{DynamicResource PrimaryText}" />
                             </MultiTrigger>
+                            <!-- Last, so a button that can't be pressed yet reads as resting even when it's the one Enter
+                                 would press: quiet text, a faint rule and no fill, like NoteToolbar's. -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource Rule}" />
+                                <Setter Property="Foreground" Value="{DynamicResource QuietMark}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -153,6 +166,27 @@
                                 <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Accent}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Words that read like a TextBlock but can be selected and copied, such as Ask's replies. Not a Tab stop. -->
+        <Style x:Key="SelectableText" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="Cursor" Value="IBeam" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <!-- A plain host, not a ScrollViewer, so the mouse wheel over the words still scrolls what they're in.
+                             Typed text keeps 2px of its own inset, taken back so the words line up as a TextBlock's would. -->
+                        <Decorator x:Name="PART_ContentHost" Margin="-2,0,-2,0" />
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -328,9 +362,13 @@
                                       SnapsToDevicePixels="True"
                                       Visibility="Collapsed" />
                             </Border>
-                            <ContentPresenter Grid.Column="1" />
+                            <!-- The gap between the box and its words is here, so no box needs its own. -->
+                            <ContentPresenter x:Name="Words" Grid.Column="1" Margin="10,0,0,0" />
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="HasContent" Value="False">
+                                <Setter TargetName="Words" Property="Margin" Value="0" />
+                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
                             </Trigger>
@@ -371,14 +409,55 @@
                                       SnapsToDevicePixels="True"
                                       Visibility="Collapsed" />
                             </Border>
-                            <ContentPresenter Grid.Column="1" />
+                            <!-- The gap between the box and its words is here, so no box needs its own. -->
+                            <ContentPresenter x:Name="Words" Grid.Column="1" Margin="10,0,0,0" />
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="HasContent" Value="False">
+                                <Setter TargetName="Words" Property="Margin" Value="0" />
+                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Cross" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- One of a few choices, such as where Record a lecture listens: a ring like the check box's frame, with a
+             dot that reads as picked without any color. -->
+        <Style TargetType="RadioButton">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid Width="15" Height="15" Margin="0,3,0,0" VerticalAlignment="Top">
+                                <Ellipse x:Name="Ring" Stroke="#8A8A8A" StrokeThickness="1" Fill="Transparent" />
+                                <Ellipse x:Name="Dot" Width="7" Height="7" Fill="{DynamicResource Accent}" Visibility="Collapsed" />
+                            </Grid>
+                            <ContentPresenter x:Name="Words" Grid.Column="1" Margin="10,0,0,0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="HasContent" Value="False">
+                                <Setter TargetName="Words" Property="Margin" Value="0" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Accent}" />
+                                <Setter TargetName="Dot" Property="Visibility" Value="Visible" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -474,6 +553,12 @@
             </Setter>
         </Style>
 
+        <!-- A plain list of rows or buttons is never a Tab stop itself, so Tab goes straight to what's in it rather
+             than stopping on the list with a dotted box. Lists you pick from are ListBoxes, and keep theirs. -->
+        <Style TargetType="ItemsControl">
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+
         <Style TargetType="ListBoxItem">
             <Setter Property="Template">
                 <Setter.Value>
@@ -566,9 +651,10 @@
             </Setter>
         </Style>
 
+        <!-- A thin thumb that grows to 8 px under the mouse or while dragged, so it's easy to catch. -->
         <Style TargetType="ScrollBar">
-            <Setter Property="Width" Value="4" />
-            <Setter Property="MinWidth" Value="4" />
+            <Setter Property="Width" Value="8" />
+            <Setter Property="MinWidth" Value="8" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -578,7 +664,17 @@
                                 <Thumb>
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Border Background="#3AFFFFFF" />
+                                            <Border x:Name="Bar" Width="4" HorizontalAlignment="Right" Background="#3AFFFFFF" />
+                                            <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                                                    <Setter TargetName="Bar" Property="Width" Value="8" />
+                                                    <Setter TargetName="Bar" Property="Background" Value="#5AFFFFFF" />
+                                                </DataTrigger>
+                                                <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="Bar" Property="Width" Value="8" />
+                                                    <Setter TargetName="Bar" Property="Background" Value="#5AFFFFFF" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>

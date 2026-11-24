@@ -185,7 +185,7 @@ public sealed class ServerFindClickTests
 
         server.Release.Set();
         ServerToDoClickTests.PumpUntil(ui, () => results.Items.Count == 1, "the results");
-        Assert.Equal(Visibility.Collapsed, hint.Visibility);
+        Assert.Equal(FindView.FoundCount(1), hint.Text);
         Assert.False(UiTest.Field<System.Windows.Threading.DispatcherTimer>(view, "_searching")!.IsEnabled);
     });
 

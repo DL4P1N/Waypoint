@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:capture="clr-namespace:Waypoint.Core.Capture;assembly=Waypoint.Core"
         xmlns:local="clr-namespace:Waypoint.App"
+        Style="{StaticResource AppWindow}"
         Title="Waypoint reminder"
         Width="440"
         SizeToContent="Height"

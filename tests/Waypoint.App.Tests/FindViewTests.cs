@@ -43,7 +43,8 @@ public sealed class FindViewTests
         ui.Pump();
 
         Assert.Equal(["Call the dentist", "dentist forms"], results.Items.Cast<FoundThing>().Select(thing => thing.Title));
-        Assert.Equal(Visibility.Collapsed, hint.Visibility);
+        Assert.Equal("2 found", hint.Text);
+        Assert.Equal(System.Windows.Automation.AutomationLiveSetting.Polite, System.Windows.Automation.AutomationProperties.GetLiveSetting(hint));
 
         ui.Focus(box);
         Assert.True(ui.Press(box, Key.Enter));

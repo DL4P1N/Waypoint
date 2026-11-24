@@ -11,7 +11,7 @@
         Background="{StaticResource WindowBackground}"
         BorderBrush="{DynamicResource Rule}"
         BorderThickness="1"
-        FontFamily="Segoe UI Variable Text, Segoe UI">
+        Style="{StaticResource AppWindow}">
     <StackPanel Margin="18">
         <TextBlock x:Name="Question"
                    FontSize="14"
@@ -31,7 +31,7 @@
                   Margin="0,12,0,0"
                   Content="Keep the audio"
                   Foreground="{DynamicResource PrimaryText}" />
-        <TextBlock Margin="22,2,0,0"
+        <TextBlock Margin="25,2,0,0"
                    FontSize="13"
                    TextWrapping="Wrap"
                    Foreground="{DynamicResource SecondaryText}"

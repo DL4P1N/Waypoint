@@ -53,6 +53,51 @@ public partial class App
         return directory;
     }
 
+    private Forms.ToolStripMenuItem? _askItem;
+
+    /// <summary>The keys that open Ask Waypoint from anywhere, shown beside it on the tray menu once they work.</summary>
+    public const string AskKeys = "Ctrl+Alt+Space";
+
+    /// <summary>
+    /// Ctrl+Alt+Space opens Ask Waypoint. When another app already has those keys, that's said once in Ask, and Ask
+    /// Waypoint still opens from the tray menu.
+    /// </summary>
+    private void RegisterAskKey()
+    {
+        try
+        {
+            _askKey = new GlobalHotkey(
+                () =>
+                {
+                    if (!_restoring)
+                    {
+                        _captureWindow.ShowForCapture();
+                    }
+                },
+                GlobalHotkey.VkSpace);
+            if (_askKey.Register())
+            {
+                if (_askItem is not null)
+                {
+                    _askItem.ShortcutKeyDisplayString = AskKeys;
+                }
+
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+        }
+
+        _askKey?.Dispose();
+        _askKey = null;
+        _itemsWindow.ShowNotice(AskKeysTaken);
+    }
+
+    /// <summary>Said once when Ctrl+Alt+Space can't be had.</summary>
+    public const string AskKeysTaken = "Another app already uses " + AskKeys + ", so Ask Waypoint opens from the tray menu instead.";
+
     private Forms.NotifyIcon CreateTray()
     {
         var startWithWindows = new Forms.ToolStripMenuItem("Start with Windows") { Checked = StartupSetting.IsEnabled, CheckOnClick = true };
@@ -65,7 +110,8 @@ public partial class App
             ForeColor = Color.White,
         };
         menu.HandleCreated += (_, _) => WindowStyling.Apply(menu.Handle);
-        menu.Items.Add("Ask Waypoint...", null, (_, _) => _captureWindow.ShowForCapture());
+        _askItem = new Forms.ToolStripMenuItem("Ask Waypoint...", null, (_, _) => _captureWindow.ShowForCapture());
+        menu.Items.Add(_askItem);
         menu.Items.Add("Open Waypoint", null, (_, _) => _itemsWindow.ShowList());
         menu.Items.Add(NextStepQuestion, null, (_, _) => OnCaptureSubmitted(NextStepQuestion));
         // The same form as To do's Save my spot, so it works without sorting. Opened once the menu has closed, like Pair.

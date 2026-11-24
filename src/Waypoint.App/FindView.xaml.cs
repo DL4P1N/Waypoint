@@ -211,14 +211,22 @@ public partial class FindView : UserControl
             : result.Partial && result.Answered.Count == 0 ? NoneReachedHint
             : result.Partial ? PartialHint
             : found.Count == 0 ? $"Nothing on any page matches \"{text}\"."
-            : "";
-        ShowHint(_hint);
+            : FoundCount(found.Count);
+        ShowHint(_hint, announce: true);
     }
 
-    private void ShowHint(string hint)
+    /// <summary>The short count shown over the results, such as "3 found".</summary>
+    public static string FoundCount(int count) => $"{count} found";
+
+    /// <summary>Shows the hint. A search's outcome is also read out by a screen reader, so it's heard without looking.</summary>
+    private void ShowHint(string hint, bool announce = false)
     {
         Hint.Text = hint;
         Hint.Visibility = hint.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (announce && hint.Length > 0)
+        {
+            LiveRegion.Announce(Hint);
+        }
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)

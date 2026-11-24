@@ -13,7 +13,7 @@
                 </Border>
                 <StackPanel Margin="0,0,0,4">
                     <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
-                        <StackPanel Margin="11,0,0,0">
+                        <StackPanel>
                             <TextBlock FontSize="14"
                                        TextWrapping="Wrap"
                                        Text="{Binding Title}"
@@ -38,8 +38,7 @@
                             <DataTemplate>
                                 <Border Margin="-4,0" Padding="4,0" CornerRadius="4" Background="{Binding SelectedBrush}">
                                 <CheckBox Style="{StaticResource DoneBox}" AutomationProperties.Name="{Binding SpokenName}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnItemChecked" Unchecked="OnItemChecked" ContextMenuOpening="OnRowMenuOpening" PreviewMouseLeftButtonDown="OnRowPressed">
-                                    <TextBlock Margin="10,0,0,0"
-                                               FontSize="13"
+                                    <TextBlock FontSize="13"
                                                TextWrapping="Wrap"
                                                TextDecorations="{Binding Strike}"
                                                Text="{Binding Title}"
@@ -112,7 +111,7 @@
                           Margin="12,0,0,0"
                           VerticalAlignment="Center"
                           Checked="OnHideFinishedClicked" Unchecked="OnHideFinishedClicked">
-                    <TextBlock x:Name="HideFinishedText" Margin="8,0,0,0" FontSize="13" Text="Hide finished" Foreground="{DynamicResource SecondaryText}" />
+                    <TextBlock x:Name="HideFinishedText" FontSize="13" Text="Hide finished" Foreground="{DynamicResource SecondaryText}" />
                 </CheckBox>
             </Grid>
             <Border x:Name="SuggestionCard"
@@ -237,8 +236,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <CheckBox Margin="0,0,0,5" AutomationProperties.Name="{Binding Label}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnRoutineStepClicked" Unchecked="OnRoutineStepClicked">
-                                    <TextBlock Margin="10,0,0,0"
-                                               FontSize="13"
+                                    <TextBlock FontSize="13"
                                                Text="{Binding Label}"
                                                Foreground="{StaticResource PrimaryText}" />
                                 </CheckBox>

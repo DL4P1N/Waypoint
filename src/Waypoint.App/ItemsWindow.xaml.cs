@@ -94,6 +94,13 @@ public partial class ItemsWindow : Window
         _submitted = submitted;
         InitializeComponent();
         WindowStyling.Apply(this);
+
+        // Before the place, so a window left narrow with Ask to the side opens that narrow again.
+        if (_database.GetPreference(AskHiddenKey) == "1")
+        {
+            ShowAsk(false, remember: false);
+        }
+
         RestorePlace();
         TodayPage.Work = PageWorkFor(server);
         NotesPage.Work = PageWorkFor(server);
@@ -400,7 +407,105 @@ public partial class ItemsWindow : Window
 
     /// <summary>The one rule for Ask's width, kept up as the window resizes, the page changes, or To do switches view.</summary>
     private void FitAsk() =>
-        AskWidth.Width = new GridLength(AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown));
+        AskWidth.Width = new GridLength(AskShown
+            ? AskWidthFor(ActualWidth > 0 ? ActualWidth : Width, _page == Page.ToDo && TodayPage.WeekShown)
+            : HiddenAskWidth);
+
+    private const string AskHiddenKey = "ask_hidden";
+
+    /// <summary>The strip Ask leaves when it's put to the side.</summary>
+    public const double HiddenAskWidth = 44;
+
+    /// <summary>The window's narrowest with Ask open.</summary>
+    public const double AskOpenMinWidth = 1040;
+
+    /// <summary>The window's narrowest with Ask put to the side.</summary>
+    public const double AskHiddenMinWidth = 780;
+
+    /// <summary>Whether Ask is open, rather than put to the side.</summary>
+    public bool AskShown => AskColumn.Visibility == Visibility.Visible;
+
+    private void OnAskHideClicked(object sender, RoutedEventArgs e) => ShowAsk(false, moveFocus: true);
+
+    private void OnAskShowClicked(object sender, RoutedEventArgs e) => ShowAsk(true, moveFocus: true);
+
+    /// <summary>
+    /// Opens Ask or puts it to the side, and remembers which for next time. The window can be narrower while it's to
+    /// the side, and grows back to fit when it opens again.
+    /// </summary>
+    public void ShowAsk(bool shown, bool moveFocus = false, bool remember = true)
+    {
+        var focusWasInAsk = AskColumn.IsKeyboardFocusWithin;
+        AskColumn.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        AskStrip.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
+        MinWidth = shown ? AskOpenMinWidth : AskHiddenMinWidth;
+        if (shown)
+        {
+            AskNews.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetName(AskShow, "Show Ask");
+        }
+
+        FitAsk();
+        if (shown)
+        {
+            KeepOnScreen();
+            ChatScroll.UpdateLayout();
+            ChatScroll.ScrollToEnd();
+        }
+
+        if (remember)
+        {
+            _database.SetPreference(AskHiddenKey, shown ? "0" : "1");
+        }
+
+        if (shown && moveFocus)
+        {
+            Dispatcher.BeginInvoke(() => Input.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        }
+        else if (!shown && (moveFocus || focusWasInAsk))
+        {
+            Dispatcher.BeginInvoke(() => AskShow.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        }
+    }
+
+    /// <summary>
+    /// Opening Ask in a window narrowed while it was to the side makes the window wider, so it's moved left as far as
+    /// needed to stay on its screen.
+    /// </summary>
+    private void KeepOnScreen()
+    {
+        if (WindowState != WindowState.Normal || !IsLoaded)
+        {
+            return;
+        }
+
+        if (Width < MinWidth || double.IsNaN(Width))
+        {
+            Width = MinWidth;
+        }
+
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var area = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
+        var scale = VisualTreeHelper.GetDpi(this);
+        Left = LeftOnScreen(Left, Math.Max(Width, MinWidth), area.Left / scale.DpiScaleX, area.Right / scale.DpiScaleX);
+    }
+
+    /// <summary>The window's left edge moved just far enough that its right edge is on the screen, never past its left.</summary>
+    public static double LeftOnScreen(double left, double width, double screenLeft, double screenRight) =>
+        left + width <= screenRight ? left : Math.Max(screenLeft, screenRight - width);
+
+    /// <summary>A reply that came while Ask was to the side marks its strip, and a screen reader hears that one came.</summary>
+    private void MarkAskNews()
+    {
+        AskNews.Visibility = Visibility.Visible;
+        AutomationProperties.SetName(AskShow, "Show Ask, a new reply is there");
+        LiveRegion.Announce(AskShow);
+    }
 
     /// <summary>
     /// Set while the window is hidden and a refresh was skipped: true when every one skipped was a refresh every so
@@ -469,6 +574,12 @@ public partial class ItemsWindow : Window
         }
 
         var page = (Page)Menu.SelectedIndex;
+        if (FindPage.IsVisible)
+        {
+            FindPage.Leave();
+            _beforeFind = null;
+        }
+
         ShowPage(page);
         _database.SetPreference(PageKey, page.ToString());
         if (page == Page.ToDo)
@@ -479,10 +590,24 @@ public partial class ItemsWindow : Window
 
     private void OnFindClicked(object sender, RoutedEventArgs e) => OpenFind();
 
-    /// <summary>Find anywhere takes the page's place until a result is picked or it's closed. Half-typed text is saved first.</summary>
+    /// <summary>Where the keyboard was before Find anywhere opened, to go back to when it's closed.</summary>
+    private IInputElement? _beforeFind;
+
+    /// <summary>
+    /// Find anywhere takes the page's place until a result is picked or it's closed. Half-typed text is saved first.
+    /// No page is picked in the side menu meanwhile, so picking any one, the one Find covers too, goes back to it.
+    /// </summary>
     private void OpenFind()
     {
+        if (!FindPage.IsVisible)
+        {
+            _beforeFind = Keyboard.FocusedElement is DependencyObject focused && !FindPage.IsAncestorOf(focused) ? Keyboard.FocusedElement : null;
+        }
+
         SaveDrafts();
+        _choosingPage = true;
+        Menu.SelectedIndex = -1;
+        _choosingPage = false;
         foreach (var page in new FrameworkElement[] { TodayPage, NotesPage, MoneyPage, HistoryPage, SettingsPage })
         {
             page.Visibility = Visibility.Collapsed;
@@ -493,16 +618,43 @@ public partial class ItemsWindow : Window
         FindPage.FocusSearch();
     }
 
-    /// <summary>Back to the page that was open.</summary>
-    private void CloseFind()
+    /// <summary>Back to the page that was open, with the keyboard where it was before Find opened.</summary>
+    private void CloseFind() => CloseFind(restoreFocus: true);
+
+    /// <param name="restoreFocus">False when what comes next puts the keyboard somewhere itself, as Ctrl+N does.</param>
+    private void CloseFind(bool restoreFocus)
     {
         FindPage.Leave();
         ShowPage(_page);
+        var before = _beforeFind;
+        _beforeFind = null;
+        if (!restoreFocus)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (FindPage.IsVisible || !IsVisible)
+            {
+                return;
+            }
+
+            if (before is UIElement { IsVisible: true, IsEnabled: true, Focusable: true } element && IsAncestorOf(element))
+            {
+                element.Focus();
+            }
+            else if (Menu.ItemContainerGenerator.ContainerFromIndex(Menu.SelectedIndex) is ListBoxItem current)
+            {
+                current.Focus();
+            }
+        }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
     /// <summary>Opens the page a result is on and shows it there.</summary>
     private void ShowFound(FoundThing thing)
     {
+        _beforeFind = null;
         switch (thing)
         {
             case { Item: { } item }:
@@ -574,7 +726,7 @@ public partial class ItemsWindow : Window
         {
             if (FindPage.IsVisible)
             {
-                CloseFind();
+                CloseFind(restoreFocus: false);
             }
 
             if (_page == Page.ToDo)
@@ -661,6 +813,11 @@ public partial class ItemsWindow : Window
     public void StartTyping(string text)
     {
         ShowList();
+        if (!AskShown)
+        {
+            ShowAsk(true);
+        }
+
         Input.Text = text;
         Input.CaretIndex = text.Length;
         Input.Focus();
@@ -695,6 +852,12 @@ public partial class ItemsWindow : Window
     public const string WorkingText = "Sorting...";
 
     public void ShowReply(string text) => AddToChat(new ChatRow(text, ChatKind.Reply));
+
+    /// <summary>
+    /// A line from Waypoint itself, such as a problem it kept going after. It reads like a reply but answers nothing
+    /// typed, so a "Sorting..." still waiting stays for its own reply.
+    /// </summary>
+    public void ShowNotice(string text) => AddToChat(new ChatRow(text, ChatKind.Reply), answers: false);
 
     /// <summary>
     /// A reply with a link under it for each thing it made, which opens that thing where it went: To do, the Shopping
@@ -766,10 +929,11 @@ public partial class ItemsWindow : Window
         }
     }
 
-    private void AddToChat(ChatRow row)
+    /// <param name="answers">False for a notice, which leaves every "Sorting..." in place.</param>
+    private void AddToChat(ChatRow row, bool answers = true)
     {
         // A reply takes the place of the oldest "Sorting...", since replies come in the order messages were sent.
-        if (row.Kind == ChatKind.Reply && _chat.FirstOrDefault(shown => shown.Kind == ChatKind.Working) is { } working)
+        if (answers && row.Kind == ChatKind.Reply && _chat.FirstOrDefault(shown => shown.Kind == ChatKind.Working) is { } working)
         {
             _chat.Remove(working);
         }
@@ -779,7 +943,24 @@ public partial class ItemsWindow : Window
         ShowThingsToTry();
         ChatScroll.UpdateLayout();
         ChatScroll.ScrollToEnd();
+        if (row.Kind == ChatKind.Reply)
+        {
+            if (!AskShown)
+            {
+                MarkAskNews();
+            }
+            else if (RowText(row) is { } words)
+            {
+                LiveRegion.Announce(words);
+            }
+        }
     }
+
+    /// <summary>The words of a row shown in the chat, once it's laid out.</summary>
+    private TextBox? RowText(ChatRow row) =>
+        Chat.ItemContainerGenerator.ContainerFromItem(row) is DependencyObject shown
+            ? Descendants(shown).OfType<TextBox>().FirstOrDefault(box => box.Name == "RowText")
+            : null;
 
     /// <param name="openKept">Shows what the server couldn't save, when there's any, through an Open link beside the status.</param>
     public void Refresh(int pending, string? sortError, string? calendarError, string? nudgeError, string? discordError, ClassOccurrence? nextClass, BedtimeStatus? tonight = null, string? serverProblem = null, Action? openKept = null, Action? dismissKept = null)

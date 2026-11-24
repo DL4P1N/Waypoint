@@ -93,7 +93,7 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
                         <CheckBox x:Name="LessSeeThroughOn" Margin="0,12,0,0" Checked="OnLessSeeThroughChanged" Unchecked="OnLessSeeThroughChanged">
-                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Less see-through" Foreground="{DynamicResource PrimaryText}" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap" Text="Less see-through" Foreground="{DynamicResource PrimaryText}" />
                         </CheckBox>
                         <TextBlock Style="{StaticResource Note}"
                                    Text="Makes the window background nearly solid, so what's behind it doesn't show through." />
@@ -248,10 +248,10 @@
                             <TextBox x:Name="WindDownStepName" Grid.Row="1" Grid.Column="1" Margin="10,8,0,0" Style="{StaticResource FieldBox}" Tag="Wind-down step" AutomationProperties.Name="Second wind-down step's name" />
                         </Grid>
                         <CheckBox x:Name="LateCheckInsOn" Margin="0,8,0,0" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked">
-                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Late-night check-ins: a Discord card every 30 minutes while the PC is still in use after bedtime" Foreground="{DynamicResource PrimaryText}" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap" Text="Late-night check-ins: a Discord card every 30 minutes while the PC is still in use after bedtime" Foreground="{DynamicResource PrimaryText}" />
                         </CheckBox>
                         <CheckBox x:Name="QuietOn" Margin="0,8,0,0" Checked="OnBedtimeTicked" Unchecked="OnBedtimeTicked">
-                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Quiet evening: hold money notices and nudges after the wrap-up" Foreground="{DynamicResource PrimaryText}" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap" Text="Quiet evening: hold money notices and nudges after the wrap-up" Foreground="{DynamicResource PrimaryText}" />
                         </CheckBox>
                         <TextBlock Style="{StaticResource FieldLabel}" Text="Extra routine steps, one per line" />
                         <TextBox x:Name="RoutineSteps"
@@ -283,7 +283,7 @@
                         <!-- Recording -->
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Recording" />
                         <CheckBox x:Name="OfferRecordOn" Checked="OnOfferRecordChanged" Unchecked="OnOfferRecordChanged">
-                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Offer to record when a class starts" Foreground="{DynamicResource PrimaryText}" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap" Text="Offer to record when a class starts" Foreground="{DynamicResource PrimaryText}" />
                         </CheckBox>
                         <TextBlock Style="{StaticResource Note}"
                                    Text="A card asks at the start of each class, with Record and Not now. Nothing records unless you choose Record." />

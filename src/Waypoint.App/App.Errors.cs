@@ -45,8 +45,8 @@ public partial class App
         // copy would sit invisible, holding the single-instance lock.
         if (e.Exception is ServerUnavailableException away && _started)
         {
-            _itemsWindow?.ShowReply(away.Message);
             e.Handled = true;
+            SayInAsk(away.Message);
             return;
         }
 
@@ -55,14 +55,38 @@ public partial class App
         if (e.Exception is ServerTimedOutException slow && _started)
         {
             LogError(slow);
-            _itemsWindow?.ShowReply(slow.Message);
             e.Handled = true;
+            SayInAsk(slow.Message);
             return;
         }
 
         LogError(e.Exception);
         e.Handled = _started;
+
+        // Kept going, so it's said once in Ask in a plain line. The same problem coming back stays quiet.
+        if (_started && _unexpected.FirstTime(e.Exception) is { } line)
+        {
+            SayInAsk(line);
+        }
     }
+
+    /// <summary>
+    /// A notice in Ask from the problem handler. It isn't the answer to anything typed, so a "Sorting..." stays. If
+    /// saying it fails too, that's only logged, so the handler itself never takes the app down.
+    /// </summary>
+    private void SayInAsk(string line)
+    {
+        try
+        {
+            _itemsWindow?.ShowNotice(line);
+        }
+        catch (Exception failure)
+        {
+            LogError(failure);
+        }
+    }
+
+    private readonly UnexpectedProblems _unexpected = new();
 
     private string? _loggedSortFailure;
 
@@ -112,5 +136,35 @@ public partial class App
         {
             // Nothing else to do with it, and the app should keep running.
         }
+    }
+}
+
+/// <summary>
+/// The plain line for a problem nothing else caught, given once for each distinct problem: the same kind thrown from
+/// the same place, whatever its message says. The detail is in errors.log either way.
+/// </summary>
+internal sealed class UnexpectedProblems
+{
+    /// <summary>Enough to tell problems apart for a long run, without growing forever.</summary>
+    private const int MaxRemembered = 100;
+
+    private readonly HashSet<string> _said = [];
+
+    /// <summary>The line to say, or null when this problem was already said.</summary>
+    public string? FirstTime(Exception exception)
+    {
+        var key = $"{exception.GetType().FullName}|{exception.TargetSite?.DeclaringType?.FullName}.{exception.TargetSite?.Name}";
+        if (_said.Contains(key))
+        {
+            return null;
+        }
+
+        if (_said.Count >= MaxRemembered)
+        {
+            _said.Clear();
+        }
+
+        _said.Add(key);
+        return $"{Waypoint.Core.PlainProblem.Describe(exception)} Waypoint kept going, and the detail is in errors.log.";
     }
 }
