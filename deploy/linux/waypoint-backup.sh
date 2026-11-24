@@ -62,17 +62,31 @@ if [ ! -d "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ] || [ ! -w "$BACKUP_DIR" ]; the
     fail "$BACKUP_DIR isn't a folder the backup can write to. Run: sudo chgrp waypoint-backup $BACKUP_DIR && sudo chmod 2770 $BACKUP_DIR"
 fi
 
-stamp="$(date +%Y-%m-%d-%H%M)"
+# One backup at a time, whether from the timer or run by hand, since each one removes what the others don't list.
+exec 9> "$BACKUP_DIR/.waypoint-backup.lock"
+if ! flock -n 9; then
+    fail "another backup is still running, so this one was left out."
+fi
+
+# To the second, so a second run in the same minute makes a backup of its own rather than replacing the first.
+stamp="$(date +%Y-%m-%d-%H%M%S)"
 target="$BACKUP_DIR/waypoint-$stamp.tar.gz.age"
 refs="$BACKUP_DIR/waypoint-$stamp.refs"
+if [ -e "$target" ] || [ -e "$refs" ]; then
+    fail "$target is already there. Run it again in a second."
+fi
 
 # The snapshot sits in the data folder, which only the service user can open, and is removed however this ends.
 snapshot="$DATA_DIR/backup-snapshot.db"
 attachment_list="$DATA_DIR/backup-attachments.list"
+found_list="$DATA_DIR/backup-attachments.found"
 hash_cache="$DATA_DIR/backup-attachment-hashes"
 cleanup() {
     rm -f -- "$snapshot" "$snapshot-wal" "$snapshot-shm" "$target.partial" "$attachment_list" "$refs.partial" \
-        "$hash_cache.new" "${blob_partial:-}"
+        "$hash_cache.new" "$found_list" "$found_list.hash" "$found_list.pipe" "${blob_partial:-}"
+    if [ -n "${encrypting:-}" ]; then
+        kill "$encrypting" 2> /dev/null || true
+    fi
     # The list of attachments for a backup that was never finished would only keep them from being removed.
     if [ ! -f "$target" ]; then
         rm -f -- "$refs"
@@ -105,7 +119,8 @@ done
 # mixed in. The names show each file's SHA-256 and the sizes show roughly how big it is, but nothing of what's in it.
 # Regular files only: a symlink is left out rather than followed.
 store="attachments-$(printf '%s' "$AGE_RECIPIENT" | sha256sum | cut -c1-12)"
-# Each file's SHA-256 by its size and time changed, so files that haven't changed aren't read again every night.
+# Each file's SHA-256 by its size, inode, and times changed, so files that haven't changed aren't read again every
+# night.
 declare -A known_hashes=()
 if [ -f "$hash_cache" ] && [ ! -L "$hash_cache" ]; then
     while IFS= read -r -d '' record; do
@@ -117,26 +132,46 @@ fi
 : > "$hash_cache.new"
 if [ -d "$DATA_DIR/attachments" ] && [ ! -L "$DATA_DIR/attachments" ]; then
     mkdir -p -- "$BACKUP_DIR/$store"
+    # Listed first, so a folder find can't read fails the backup rather than leaving its files out unnoticed.
+    if ! find "$DATA_DIR/attachments" -type f ! -name '*.part' -printf '%s %i %T@ %C@ %P\0' > "$found_list"; then
+        fail "the attachments folder couldn't all be read, so nothing was backed up."
+    fi
     while IFS= read -r -d '' found; do
-        size="${found%% *}"
-        rest="${found#* }"
-        changed="${rest%% *}"
-        path="${rest#* }"
-        hash="${known_hashes["$size $changed $path"]:-}"
-        if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]]; then
-            hash="$(sha256sum < "$DATA_DIR/attachments/$path" | cut -c1-64)"
-        fi
-        blob="$store/$hash.age"
-        if [ ! -f "$BACKUP_DIR/$blob" ]; then
-            blob_partial="$BACKUP_DIR/$blob.partial"
-            age -r "$AGE_RECIPIENT" -o "$BACKUP_DIR/$blob.partial" < "$DATA_DIR/attachments/$path"
-            mv -- "$BACKUP_DIR/$blob.partial" "$BACKUP_DIR/$blob"
+        rest="$found"
+        stats=""
+        for _ in 1 2 3 4; do
+            stats="$stats${stats:+ }${rest%% *}"
+            rest="${rest#* }"
+        done
+        path="$rest"
+        hash="${known_hashes["$stats $path"]:-}"
+        if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || [ ! -f "$BACKUP_DIR/$store/$hash.age" ]; then
+            # Hashed from the same read that's encrypted, so the name always matches what's inside, even if the file
+            # changes meanwhile.
+            blob_partial="$BACKUP_DIR/$store/.incoming.partial"
+            rm -f -- "$found_list.pipe"
+            mkfifo -m 600 "$found_list.pipe"
+            age -r "$AGE_RECIPIENT" -o "$blob_partial" < "$found_list.pipe" &
+            encrypting=$!
+            tee -- "$found_list.pipe" < "$DATA_DIR/attachments/$path" | sha256sum > "$found_list.hash"
+            wait "$encrypting"
+            rm -f -- "$found_list.pipe"
+            hash="$(cut -c1-64 "$found_list.hash")"
+            if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]]; then
+                fail "the attachment $path couldn't be read to back it up."
+            fi
+            if [ -f "$BACKUP_DIR/$store/$hash.age" ]; then
+                rm -f -- "$blob_partial"
+            else
+                mv -- "$blob_partial" "$BACKUP_DIR/$store/$hash.age"
+            fi
             blob_partial=""
         fi
+        blob="$store/$hash.age"
         printf '%s %s\0' "$blob" "$path" >> "$attachment_list"
         printf '%s\n' "$blob" >> "$refs.partial"
-        printf '%s %s %s %s\0' "$hash" "$size" "$changed" "$path" >> "$hash_cache.new"
-    done < <(find "$DATA_DIR/attachments" -type f ! -name '*.part' -printf '%s %T@ %P\0')
+        printf '%s %s %s\0' "$hash" "$stats" "$path" >> "$hash_cache.new"
+    done < "$found_list"
 fi
 mv -- "$hash_cache.new" "$hash_cache"
 members+=(backup-attachments.list)
@@ -161,7 +196,8 @@ if [ -n "${RCLONE_REMOTE:-}" ]; then
         *:) remote_prefix="$RCLONE_REMOTE" ;;
         *) remote_prefix="${RCLONE_REMOTE%/}/" ;;
     esac
-    if [ -d "$BACKUP_DIR/$store" ] && ! rclone copy --ignore-existing --exclude '*.partial' "$BACKUP_DIR/$store" "$remote_prefix$store"; then
+    # Only the attachments tonight's backup lists, and any there that's missing or the wrong size goes again.
+    if [ -s "$refs" ] && ! rclone copy --size-only --files-from "$refs" "$BACKUP_DIR" "$RCLONE_REMOTE"; then
         fail "the backup was made in $BACKUP_DIR, but copying its attachments to $RCLONE_REMOTE didn't work."
     fi
     if ! rclone copy "$refs" "$RCLONE_REMOTE" || ! rclone copy "$target" "$RCLONE_REMOTE"; then
@@ -174,8 +210,10 @@ if [ -n "${RCLONE_REMOTE:-}" ]; then
     fi
     kept_remote="$(printf '%s\n' "$listing" | grep '\.tar\.gz\.age$' | sort | tail -n "$RCLONE_KEEP" || true)"
     old_remote="$(printf '%s\n' "$listing" | grep '\.tar\.gz\.age$' | sort | head -n -"$RCLONE_KEEP" || true)"
+    # Tonight's backup and its list always stay, even if the remote holds some with later names.
+    kept_remote="$(printf '%s\nwaypoint-%s.tar.gz.age\n' "$kept_remote" "$stamp")"
     while read -r old; do
-        if [ -n "$old" ] && ! rclone deletefile "$remote_prefix$old"; then
+        if [ -n "$old" ] && [ "$old" != "waypoint-$stamp.tar.gz.age" ] && ! rclone deletefile "$remote_prefix$old"; then
             fail "the backup was copied to $RCLONE_REMOTE, but $old couldn't be removed from there."
         fi
     done <<< "$old_remote"
@@ -190,6 +228,8 @@ if [ -n "${RCLONE_REMOTE:-}" ]; then
         ! stored_remote="$(rclone lsf -R --files-only --include 'attachments-*/*' "$RCLONE_REMOTE")"; then
         fail "the backup was copied to $RCLONE_REMOTE, but which of its attachments are still needed couldn't be checked."
     fi
+    # Tonight's list from here too, so its attachments stay even if the copy there can't be read back yet.
+    wanted_remote="$(printf "%s\n" "$wanted_remote"; cat -- "$refs")"
     while read -r stored; do
         if [ -n "$stored" ] && ! grep -qxF -- "$stored" <<< "$wanted_remote" && ! rclone deletefile "$remote_prefix$stored"; then
             fail "the backup was copied to $RCLONE_REMOTE, but $stored couldn't be removed from there."
