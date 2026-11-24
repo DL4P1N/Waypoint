@@ -85,6 +85,8 @@ Every card, on the PC and on Discord, keeps the same order and words:
 2. **10 more minutes** on a card you can start, or **Not now** on a plain reminder, which brings it back once, ten minutes later
 3. **Skip**, which clears it with nothing more to come
 
+The main action is filled with the accent. Start, 10 more minutes and Save my spot are only on tasks, deadlines and exams; a plain reminder has Done and Not now. Reminders, tasks and deadlines, an assignment's nudge from the calendar included, always have Done; an exam's alert has Got it, since it comes before the exam. On something that repeats, such as a weekly deadline, Done means done for this time and moves it to its next date, on the PC and Discord alike.
+
 A card that comes back offers only Start and Skip, so it never turns into a chain. Skip never checks anything off, and the item stays on your list. On the PC, **Save my spot first** opens the Save my spot form, unless you saved a spot in the last hour. Repeating reminders keep Done and a Not now that brings them back after their usual gap.
 
 **"After this."** If a card with Start gets no answer for half an hour (on Discord, or left up on the PC), Waypoint holds that one thing and brings it back once as "Earlier you meant to: ..." with **Start** and **Not now**. It rides on something already showing, whichever comes first: opening the Waypoint window or To do, finishing a session with Did it, tonight's heads-up, or the next morning's briefing. Nothing new is sent for it. Only the newest is kept, so a new one replaces an older one. Once it's been shown, it's gone whatever you choose, and nothing older comes back after it. It's also dropped if you start, finish, move, snooze, or delete that item first, or say its reminder didn't help. Anything held for more than a day is dropped.
@@ -174,6 +176,7 @@ The side menu has To do, Notes, Budget, History, and Settings. Your lists are on
 | Ctrl+K | Find anywhere (in a note, Ctrl+K is the link box) |
 | Ctrl+E | Show a note's Markdown text, or the formatted note again |
 | Ctrl+Alt+M | Mark a moment while recording |
+| Ctrl+Alt+R | Bring the newest corner card forward, while one is up. Esc on a card answers it with the gentlest choice: Not now, 10 more minutes, or Still waiting, or it closes unanswered. |
 
 ### Lists
 
@@ -261,7 +264,7 @@ The night before a class or shift that starts before noon, Waypoint walks you to
 - Once you've saved your spot, that reminder stays quiet and the wrap-up says your spot is saved.
 - If the PC wakes late, you get only the latest reminder, with anything you missed.
 - The window's colors stay the same at night.
-- **Late-night check-ins**: on nights with a wind-down, if the PC is still in use after bedtime (keyboard, mouse, or game controller input in the last 15 minutes), a Discord card comes about every 30 minutes, starting 30 minutes after the bedtime reminder. It says the time, the first class or shift tomorrow and when to leave, and how much sleep is still possible if you stop now. While a wind-down step whose reminder is on isn't checked off, the card leads with it and has **Done:** and the step's name to check it off, so there's no separate repeating reminder for them. Its other buttons: **Save my spot and stop** opens the Save my spot form and ends them for the night, **Stop at...** picks a time for one last reminder, and **Not tonight** ends them. A button on an old card only works for the night it was sent. Once the PC has had no input for 15 minutes, nothing more comes that night. "No more bedtime reminders tonight" ends them too. They only go to Discord, never as a PC notification. Waypoint only reads the time since the last input (and, for controllers, only whether one's state changed), only from bedtime until morning, and never which app is open. Once the night's check-ins end, or the next time the app starts or closes after that night, even the time of the last one is cleared. Turn them off under Settings, Bedtime (`lateCheckIns` in the file). Whenever settings.json has a server address, in Server or Local mode, the PC sends that one number to the server about once a minute from 5 minutes before bedtime until morning, since the server may be the one sending alerts. The server keeps only the latest one, in memory. If it hears nothing for 15 minutes after the last input it knows of, it counts the PC as off for the night. An address without http:// or https:// is skipped for this.
+- **Late-night check-ins**: on nights with a wind-down, if the PC is still in use after bedtime (keyboard, mouse, or game controller input in the last 15 minutes), a Discord card comes about every 30 minutes, starting 30 minutes after the bedtime reminder. It says the time, the first class or shift tomorrow and when to leave, and how much sleep is still possible if you stop now. While a wind-down step whose reminder is on isn't checked off, the card leads with it and has **Done:** and the step's name to check it off, so there's no separate repeating reminder for them. Its other buttons: **Save my spot and stop** opens the Save my spot form and ends them for the night, **Stop at...** picks a time for one last reminder, and **Not tonight** ends them. A button on an old card only works for the night it was sent. Once the PC has had no input for 15 minutes, nothing more comes that night. "No more bedtime reminders tonight" ends them too. They only go to Discord, never as a PC notification. Waypoint only reads the time since the last input (and, for controllers, only whether one's state changed), only from bedtime until morning, and never which app is open. Once the night's check-ins end, or the next time the app starts or closes after that night, even the time of the last one is cleared. They are off unless you turn them on under Settings, Bedtime (`lateCheckIns` in the file). Whenever settings.json has a server address, in Server or Local mode, the PC sends that one number to the server about once a minute from 5 minutes before bedtime until morning, since the server may be the one sending alerts. The server keeps only the latest one, in memory. If it hears nothing for 15 minutes after the last input it knows of, it counts the PC as off for the night. An address without http:// or https:// is skipped for this.
 
 ## Budget
 
@@ -426,7 +429,7 @@ Everything can also go in `%LOCALAPPDATA%\Waypoint\settings.json` (restart Waypo
     "bedMinutes": 0,
     "snoozeMinutes": 15,
     "quietAfterWrapUp": false,
-    "lateCheckIns": true,
+    "lateCheckIns": false,
     "routineSteps": []
   },
   "discord": {

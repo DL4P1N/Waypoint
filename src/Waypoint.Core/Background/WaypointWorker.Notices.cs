@@ -135,7 +135,7 @@ public sealed partial class WaypointWorker
         {
             if (Activation.PickTask(_database.WithoutQuietWaiting(_database.GetOpenItems(), DateOnly.FromDateTime(_clock())), null) is not { } next)
             {
-                return "Nothing to start";
+                return CardLabels.NothingToStart;
             }
 
             Captures.StartOn(next, CaptureOrigin.Discord);

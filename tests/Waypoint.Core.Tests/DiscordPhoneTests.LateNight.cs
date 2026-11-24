@@ -27,7 +27,7 @@ public sealed partial class DiscordPhoneTests
     private WaypointWorker LateWorker(SetIdle idle)
     {
         _database.SetWeeklyHours(["Wednesday"], "08:00-12:00");
-        var settings = new WaypointSettings(Discord: new DiscordSettings("token", "owner", "capture", "alerts", "budget"));
+        var settings = new WaypointSettings(Bedtime: new BedtimeSettings(LateCheckIns: true), Discord: new DiscordSettings("token", "owner", "capture", "alerts", "budget"));
         var worker = new WaypointWorker(_database, settings, _folder, new Host(), exception => throw exception, new WorkerParts(
             _ => new NoTokens(),
             Clock: () => _now,

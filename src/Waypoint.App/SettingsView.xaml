@@ -97,6 +97,9 @@
                         </CheckBox>
                         <TextBlock Style="{StaticResource Note}"
                                    Text="Makes the window background nearly solid, so what's behind it doesn't show through." />
+                        <CheckBox x:Name="CardSoundOn" Margin="0,12,0,0" Checked="OnCardSoundChanged" Unchecked="OnCardSoundChanged">
+                            <TextBlock Margin="10,0,0,0" FontSize="13" TextWrapping="Wrap" Text="Play a sound with reminder cards" Foreground="{DynamicResource PrimaryText}" />
+                        </CheckBox>
                     </StackPanel>
 
                     <StackPanel x:Name="WorkSection" Visibility="Collapsed">

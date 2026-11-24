@@ -23,11 +23,15 @@ public partial class App
     /// <param name="cameBack">Set on the card shown again after one was closed without an answer.</param>
     private void ShowReminderCard(DueReminder reminder, Action closed, bool cameBack = false)
     {
-        // Repeating items and reminders are finished here. An exam's alert is only an alert.
-        var finishesItem = reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task;
+        var finishesItem = ReminderWindow.FinishesItem(reminder);
         var snoozeMinutes = reminder.RepeatMinutes ?? WaypointWorker.DefaultSnoozeMinutes;
 
-        SystemSounds.Asterisk.Play();
+        // The card that came back is the same reminder again, so it comes up quietly.
+        if (!cameBack && CornerCards.SoundOn(_database.GetPreference(CornerCards.SoundPreference)))
+        {
+            SystemSounds.Asterisk.Play();
+        }
+
         ReminderWindow? window = null;
         ReminderCardHold? holdLater = null;
 
@@ -49,17 +53,14 @@ public partial class App
                 () => Answer(DoseAnswer.NotNow),
                 dose: new ReminderDose(!reminder.IsFollowUp, () => Answer(DoseAnswer.Skip)))
             {
-                Slot = _openCards % MaxStackedCards,
                 FeedbackKept = () => _database.AddFeedback(Feedback.Reminder, ItemRef.Format(reminder.Item), null, DateTime.Now),
                 FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
             };
-            _openCards++;
             var doseRef = ItemRef.Format(reminder.Item);
             _cardsUp.Add(doseRef);
             var doseCard = window;
             window.Closed += (_, _) =>
             {
-                _openCards--;
                 _cardsUp.Remove(doseRef);
                 CardClosed(doseCard.Answered, reminder, closed, snoozeMinutes, cameBack);
             };
@@ -114,7 +115,7 @@ public partial class App
             },
             () => _database.SnoozeReminder(reminder, DateTime.Now.AddMinutes(snoozeMinutes)),
             reminder.Item.Source == ItemSource.Calendar ? () => _database.SkipNudges(reminder.Item.Id) : null,
-            Activation.CanStart(reminder.Item)
+            Activation.CardOffersStart(reminder.Item)
                 ? () =>
                 {
                     _database.RecordReminderAnswer(reminder.Item, ReminderAnswer.Started, DateTime.Now);
@@ -124,7 +125,6 @@ public partial class App
             transition,
             waiting)
         {
-            Slot = _openCards % MaxStackedCards,
             FeedbackKept = () =>
             {
                 // Saying it didn't help means it isn't held for after this. The card is still up, and closing it
@@ -134,7 +134,6 @@ public partial class App
             },
             FeedbackNoted = (id, note) => _database.NoteFeedback(id, note),
         };
-        _openCards++;
 
         // A card with Start left unanswered for a while means "after this", so the item is held once, to come back
         // when To do or Ask next opens. The card stays up, and answering it after all drops the hold.
@@ -146,7 +145,6 @@ public partial class App
         var card = window;
         window.Closed += (_, _) =>
         {
-            _openCards--;
             _cardsUp.Remove(cardRef);
             holdLater?.Answered();
             CardClosed(card.Answered, reminder, closed, snoozeMinutes, cameBack);
@@ -178,6 +176,30 @@ public partial class App
             due => ShowReminderCard(due, closed, cameBack: true),
             closed,
             LogError);
+    }
+
+    private GlobalHotkey? _cardKey;
+
+    /// <summary>
+    /// The card shortcut is held only while a corner card is up, so it never takes the keys from anything else
+    /// the rest of the time. If another app already has them, the cards still work with the mouse.
+    /// </summary>
+    private void OnCornerCardsChanged()
+    {
+        if (CornerCards.Count > 0 && _cardKey is null)
+        {
+            _cardKey = new GlobalHotkey(CornerCards.FocusNewest, GlobalHotkey.VkR);
+            if (!_cardKey.Register())
+            {
+                _cardKey.Dispose();
+                _cardKey = null;
+            }
+        }
+        else if (CornerCards.Count == 0 && _cardKey is not null)
+        {
+            _cardKey.Dispose();
+            _cardKey = null;
+        }
     }
 
     /// <summary>The same form and save as the To do page's Save my spot, opened over the reminder card.</summary>

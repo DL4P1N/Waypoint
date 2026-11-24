@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using Waypoint.Core.Capture;
 using Waypoint.Core.Remote;
 
 namespace Waypoint.App;
@@ -210,7 +211,7 @@ public partial class FindView : UserControl
         _hint = text.Length < FindAnywhere.MinLength ? StartHint
             : result.Partial && result.Answered.Count == 0 ? NoneReachedHint
             : result.Partial ? PartialHint
-            : found.Count == 0 ? $"Nothing on any page matches \"{text}\"."
+            : found.Count == 0 ? CardLabels.NothingMatches("on any page", text)
             : FoundCount(found.Count);
         ShowHint(_hint, announce: true);
     }

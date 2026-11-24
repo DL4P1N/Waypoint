@@ -36,6 +36,36 @@ public sealed partial class DiscordPhoneTests
     }
 
     [Fact]
+    public async Task A_deadline_reminder_card_has_done_and_done_finishes_the_deadline()
+    {
+        var (deadline, _) = DueReminderFor("Made up lab report", ItemKind.Deadline);
+        var worker = Worker(toDo: null, lists: null);
+
+        worker.CheckAlerts();
+        await Until(() => Rows("sent_reminders") == 1);
+
+        var card = Assert.Single(CardsAbout("Made up lab report"));
+        Assert.Contains("\"waypoint:done\"", card.Body);
+        Assert.Contains("\"waypoint:start\"", card.Body);
+        AssertOneAction(worker, card.Id, deadline);
+    }
+
+    [Fact]
+    public async Task A_repeating_deadline_card_has_done_and_done_moves_it_to_its_next_date()
+    {
+        var (deadline, _) = DueReminderFor("Made up weekly quiz", ItemKind.Deadline, new Recurrence(RecurrenceUnit.Week));
+        var worker = Worker(toDo: null, lists: null);
+
+        worker.CheckAlerts();
+        await Until(() => Rows("sent_reminders") == 1);
+
+        var card = Assert.Single(CardsAbout("Made up weekly quiz"));
+        Assert.Contains("\"waypoint:done\"", card.Body);
+        Assert.NotNull(worker.OnButtonPressed(card.Id, AlertActionKind.Done));
+        Assert.True(_database.GetOpenItems().Single(item => item.Id == deadline.Id).DueDate > Today);
+    }
+
+    [Fact]
     public async Task A_reminder_card_made_but_never_heard_back_about_is_found_in_the_channel_instead_of_posted_again()
     {
         var (task, key) = DueReminderFor("Made up library return");
@@ -421,11 +451,21 @@ public sealed partial class DiscordPhoneTests
     private void AssertEachViewMadeOnce() => Assert.Equal(["To do", "Waiting on"], ViewsMade().Order());
 
     /// <summary>A made up task with a reminder already due.</summary>
-    private (StoredItem Task, string Key) DueReminderFor(string title)
+    private (StoredItem Task, string Key) DueReminderFor(string title, ItemKind kind = ItemKind.Task, Recurrence? recurs = null)
     {
         // The morning briefing would name the task too, so it's had already today.
         _database.SetPreference("last_briefing", Today.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-        var task = AddTask(title, Today);
+        StoredItem task;
+        if (recurs is null)
+        {
+            task = _database.AddByHand(new HandAddedItem(kind, title, Today), _now).Item!;
+        }
+        else
+        {
+            _database.CompleteCapture(_database.AddCapture(title), [new SortedItem(kind, title, Today, null, Recurs: recurs)]);
+            task = _database.GetOpenItems().Single(item => item.Title == title);
+        }
+
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO reminders (item_id, remind_at) VALUES ($item, $at)";

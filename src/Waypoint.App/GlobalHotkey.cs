@@ -20,6 +20,9 @@ public sealed class GlobalHotkey : IDisposable
     /// <summary>Ctrl+Alt+Space, for asking Waypoint from anywhere.</summary>
     public const uint VkSpace = 0x20;
 
+    /// <summary>Ctrl+Alt+R, which brings the newest corner card forward. Registered only while a card is up.</summary>
+    public const uint VkR = 0x52;
+
     private static readonly IntPtr MessageOnlyParent = new(-3);
 
     private readonly HwndSource _source;

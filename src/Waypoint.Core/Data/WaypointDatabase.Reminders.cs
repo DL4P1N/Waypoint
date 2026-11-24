@@ -156,6 +156,7 @@ public sealed partial class WaypointDatabase
         using var transaction = Begin(connection);
         string? messageId = null;
         long itemId = 0;
+        var source = ItemSource.Capture;
         DateOnly? dueOn = null;
 
         // Without a message, this means the most recent reminder, and for a typed answer one sent before it.
@@ -166,7 +167,8 @@ public sealed partial class WaypointDatabase
 
         using (var find = connection.CreateCommand())
         {
-            find.CommandText = "SELECT message_id, item_id, due_on FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
+            // The card's item is found by its own source, since a calendar event's ID can be the same number as a typed item's.
+            find.CommandText = "SELECT message_id, item_id, due_on, source FROM sent_reminders WHERE handled = 0 AND start_only = 0 AND message_id = $message";
             find.Parameters.AddWithValue("$message", target);
             using var reader = find.ExecuteReader();
             if (reader.Read())
@@ -174,6 +176,7 @@ public sealed partial class WaypointDatabase
                 messageId = reader.GetString(0);
                 itemId = reader.GetInt64(1);
                 dueOn = reader.IsDBNull(2) ? null : DateOnly.Parse(reader.GetString(2), CultureInfo.InvariantCulture);
+                source = Enum.Parse<ItemSource>(reader.GetString(3));
             }
         }
 
@@ -183,14 +186,14 @@ public sealed partial class WaypointDatabase
             return null;
         }
 
-        var reply = AlertActionOn(connection, itemId, dueOn, action.Kind, now, snoozeMinutes);
+        var reply = AlertActionOn(connection, source, itemId, dueOn, action.Kind, now, snoozeMinutes);
         transaction.Commit();
         return reply;
     }
 
-    private static string? AlertActionOn(SqliteConnection connection, long itemId, DateOnly? dueOn, AlertActionKind kind, DateTime now, int snoozeMinutes)
+    private static string? AlertActionOn(SqliteConnection connection, ItemSource source, long itemId, DateOnly? dueOn, AlertActionKind kind, DateTime now, int snoozeMinutes)
     {
-        if (FindItem(connection, ItemSource.Capture, itemId) is not { Done: false } item)
+        if (FindItem(connection, source, itemId) is not { Done: false } item)
         {
             return null;
         }

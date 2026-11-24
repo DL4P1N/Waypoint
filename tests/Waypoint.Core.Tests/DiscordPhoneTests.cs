@@ -706,7 +706,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
 
         var date = worker.OnDiscordCommand(new SlashCommand("add", Options(("title", "x"), ("date", "someday"))));
         Assert.True(date.Private);
-        Assert.Contains("couldn't read that date", date.Card.Description);
+        Assert.Equal(CardLabels.DateHint, date.Card.Description);
         Assert.True(worker.OnDiscordCommand(new SlashCommand("spent", Options(("amount", "-3"), ("what", "coffee")))).Private);
         Assert.Empty(_database.GetOpenItems());
     }
@@ -769,6 +769,61 @@ public sealed partial class DiscordPhoneTests : IDisposable
         Assert.False(result.Card!.HasSessionButtons);
         await Task.Delay(100);
         Assert.DoesNotContain(_discord.Of(HttpMethod.Post), post => post.Url.Contains("/channels/capture/") && post.Body.Contains("said again"));
+    }
+
+    private static ButtonPress EndPress(long sessionId) =>
+        new(DiscordBridge.ActionPrefix + DiscordBridge.EndSessionAction + sessionId, null, "m5", "c");
+
+    [Fact]
+    public async Task End_on_the_session_card_stops_that_session_without_marking_it_done()
+    {
+        AddTask("Read chapter 4", Today);
+        var worker = await Started(toDo: null, lists: null);
+        var card = worker.OnDiscordCommand(new SlashCommand("start", Options())).Card;
+        var session = _database.GetActiveSession(_now)!;
+        Assert.Equal(session.Id, card.SessionId);
+
+        var result = await worker.OnButtonActedAsync(EndPress(session.Id));
+
+        Assert.Contains("still on your list", result!.Outcome);
+        Assert.Null(_database.GetActiveSession(_now));
+        Assert.Contains(_database.GetOpenItems(), item => item.Title == "Read chapter 4");
+    }
+
+    [Fact]
+    public async Task End_on_an_old_session_card_leaves_the_session_going_now_alone_and_never_reaches_the_sorter()
+    {
+        AddTask("Read chapter 4", Today);
+        AddTask("Made up essay", Today);
+        var worker = await Started(toDo: null, lists: null);
+        var captures = 0;
+        worker.Captures.Sorted += _ => captures++;
+        worker.OnDiscordCommand(new SlashCommand("start", Options()));
+        var old = _database.GetActiveSession(_now)!.Id;
+        _database.CancelSession(_now);
+
+        // Nothing is going: End on the old card says so and nothing is typed in for it.
+        Assert.Equal(WaypointDatabase.SessionAlreadyEnded, (await worker.OnButtonActedAsync(EndPress(old)))!.Outcome);
+
+        worker.OnDiscordCommand(new SlashCommand("start", Options()));
+        var now = _database.GetActiveSession(_now)!;
+        Assert.NotEqual(old, now.Id);
+
+        Assert.Equal(WaypointDatabase.SessionAlreadyEnded, (await worker.OnButtonActedAsync(EndPress(old)))!.Outcome);
+        Assert.Equal(now.Id, _database.GetActiveSession(_now)?.Id);
+        await Task.Delay(100);
+        Assert.Equal(0, captures);
+    }
+
+    [Fact]
+    public void Help_names_the_words_a_session_understands()
+    {
+        var help = DiscordViews.HelpCard().Description!;
+
+        foreach (var word in new[] { "did it", "smaller", "pause", "resume" })
+        {
+            Assert.Contains(word, help);
+        }
     }
 
     [Fact]

@@ -134,7 +134,7 @@ public sealed partial class WaypointWorker
     {
         if (_database.GetActiveSession(now) is { Status: SessionStatus.Active } session)
         {
-            return new CommandReply(DiscordText.Notice(session.TaskTitle, Activation.JobReply(session.Action)) with { HasSessionButtons = true, CanTrial = session.CanTrial });
+            return new CommandReply(DiscordText.Notice(session.TaskTitle, Activation.JobReply(session.Action)) with { HasSessionButtons = true, CanTrial = session.CanTrial, SessionId = session.Id });
         }
 
         if (Activation.PickTask(_database.WithoutQuietWaiting(_database.GetOpenItems(), DateOnly.FromDateTime(now)), null) is not { } item)
@@ -162,7 +162,7 @@ public sealed partial class WaypointWorker
         }
 
         var card = DiscordText.Reply(reply.Length > 0 ? reply : "Saved.");
-        card = outcome.Activation is { } running ? card with { HasSessionButtons = true, CanTrial = running.CanTrial } : card;
+        card = outcome.Activation is { } running ? card with { HasSessionButtons = true, CanTrial = running.CanTrial, SessionId = running.Id } : card;
         var target = outcome.CaptureId is { } captureId && _discordReplies.TryRemove(captureId, out var found) ? found : null;
 
         // One saved before a restart still answers under the message it came from.

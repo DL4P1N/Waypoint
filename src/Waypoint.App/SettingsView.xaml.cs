@@ -660,6 +660,7 @@ public partial class SettingsView : UserControl
         Swatches.ItemsSource = swatches;
         Swatches.SelectedItem = swatches.FirstOrDefault(swatch => swatch.Name == current.Name);
         LessSeeThroughOn.IsChecked = current.LessSeeThrough;
+        CardSoundOn.IsChecked = CornerCards.SoundOn(_database.GetPreference(CornerCards.SoundPreference));
         _loading = false;
     }
 
@@ -673,6 +674,17 @@ public partial class SettingsView : UserControl
 
         _database.SetLessSeeThrough(LessSeeThroughOn.IsChecked == true);
         _changed();
+    }
+
+    /// <summary>Kept on this PC. On unless turned off here.</summary>
+    private void OnCardSoundChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _database is null)
+        {
+            return;
+        }
+
+        _database.SetPreference(CornerCards.SoundPreference, CardSoundOn.IsChecked == true ? "yes" : "no");
     }
 
     /// <summary>The same call as typing "use the amber theme".</summary>

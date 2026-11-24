@@ -2,7 +2,8 @@ namespace Waypoint.Core.Schedule;
 
 /// <summary>
 /// Sleep targets, in local time. The minutes on each stage count back from bedtime, and null turns that stage off.
-/// The two wind-down steps are named by the user, and each gets its own reminder and checklist line.
+/// The two wind-down steps are named by the user, and each gets its own reminder and checklist line. Late-night
+/// check-ins are off unless turned on, in Settings or with <c>lateCheckIns</c> in the file.
 /// </summary>
 public sealed record BedtimeSettings(
     double SleepHours = 8,
@@ -18,7 +19,7 @@ public sealed record BedtimeSettings(
     int SnoozeMinutes = 15,
     bool QuietAfterWrapUp = false,
     string[]? RoutineSteps = null,
-    bool LateCheckIns = true,
+    bool LateCheckIns = false,
     string? EveningStepName = BedtimeSettings.DefaultEveningStepName,
     string? WindDownStepName = BedtimeSettings.DefaultWindDownStepName)
 {

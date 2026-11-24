@@ -28,7 +28,7 @@ public sealed class ReminderCardHold
     }
 
     /// <summary>Only a card with Start, and not a waiting-on nudge, can mean "after this".</summary>
-    public static bool Applies(StoredItem item, bool waiting) => !waiting && Activation.CanStart(item);
+    public static bool Applies(StoredItem item, bool waiting) => !waiting && Activation.CardOffersStart(item);
 
     public void Start() => _timer.Start();
 

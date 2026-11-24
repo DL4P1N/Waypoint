@@ -63,6 +63,9 @@ public sealed record DiscordCard(string Title, string? Description, IReadOnlyLis
     /// <summary>More rows of buttons under the first, such as Back and Next on a long view. Discord allows five rows in all, a menu counting as one.</summary>
     public IReadOnlyList<IReadOnlyList<CardAction>> MoreRows { get; init; } = [];
 
+    /// <summary>The session a card's session buttons were posted for. End on the card only ends that one.</summary>
+    public long? SessionId { get; init; }
+
     /// <summary>Answered as a new reply only the owner sees, so the pressed message, such as a pinned view, stays as it was.</summary>
     public bool Private { get; init; }
 }
@@ -172,6 +175,7 @@ public static partial class DiscordText
 
         // A dose's Not now comes back once, so the card that comes back has only Took it and Skip.
         var dose = item is { Dose: true, Recurs: not null };
+        canStart = canStart && Activation.CardOffersStart(item);
         return new DiscordCard(Fit(Escape(reminder.Message ?? item.Title), MaxTitle), null, fields, item.Kind == ItemKind.Exam ? CardTone.Attention : CardTone.Reminder, canFinish || dose, canStart && !dose)
         {
             Transition = !dose && canStart && TransitionAssist.Applies(reminder),

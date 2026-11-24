@@ -124,7 +124,7 @@ public partial class HistoryView : UserControl
         var words = search?.Trim() ?? "";
         if (words.Length > 0)
         {
-            return $"Nothing in History matches \"{words}\". Open things are on To do, and Ctrl+K looks through every page.";
+            return $"{CardLabels.NothingMatches("in History", words)} Open things are on To do, and Ctrl+K looks through every page.";
         }
 
         return filter switch

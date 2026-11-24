@@ -66,6 +66,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// <summary>Buttons that carry what they act on, such as a wait-list purchase or an item to put back.</summary>
     public const string ActionPrefix = "waypoint:act:";
 
+    /// <summary>End on a session card, carried with the session's ID so an old card can't end a later session.</summary>
+    public const string EndSessionAction = "end-session:";
+
     /// <summary>Menus on pinned views. They're told apart from alert buttons, since using one keeps the view.</summary>
     public const string ViewPrefix = "waypoint:view-";
     private const int OnlySeenByPresser = 64;

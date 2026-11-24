@@ -320,6 +320,17 @@ public sealed partial class WaypointDatabase
     public OpReply CancelSession(DateTime now) =>
         (GetActiveSession(now) ?? GetPausedSession()) is { } session ? Cancel(session, now) : new OpReply("Nothing's in progress.", true);
 
+    /// <summary>
+    /// End on a session card: stops that session if it's still going or paused, with nothing marked done. A card from
+    /// a session that's already over changes nothing, whatever is going now.
+    /// </summary>
+    public string EndSessionFromCard(long sessionId, DateTime now) =>
+        (GetActiveSession(now) ?? GetPausedSession()) is { } session && session.Id == sessionId
+            ? Cancel(session, now).Text
+            : SessionAlreadyEnded;
+
+    public const string SessionAlreadyEnded = "That session already ended, so nothing changed.";
+
     /// <summary>Keeps a link or document to open, once it passes the check. Anything else is turned down.</summary>
     public OpReply SetSessionResource(string? resource, DateTime now)
     {

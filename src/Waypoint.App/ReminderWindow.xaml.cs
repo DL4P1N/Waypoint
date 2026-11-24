@@ -2,6 +2,8 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using Waypoint.Core.Capture;
 
 namespace Waypoint.App;
@@ -26,11 +28,8 @@ public sealed record ReminderWaiting(Action FollowUp, Action StillWaiting);
 public sealed record ReminderDose(bool OffersNotNow, Action Skip);
 
 /// <summary>Corner card that stays up until answered and doesn't take focus from what's running.</summary>
-public partial class ReminderWindow : Window
+public partial class ReminderWindow : Window, ICornerCard
 {
-    private const int ScreenMargin = 16;
-    private const int CardGap = 8;
-
     private readonly Action _primary;
     private readonly Action _snooze;
     private readonly Action? _skip;
@@ -50,9 +49,6 @@ public partial class ReminderWindow : Window
         Answered = true;
         Close();
     }
-
-    /// <summary>How many cards up from the corner this one sits, so they don't cover each other.</summary>
-    public int Slot { get; init; }
 
     /// <summary>Keeps This didn't help for this card and returns its ID. Without it, the card has no This didn't help.</summary>
     public Func<long>? FeedbackKept
@@ -87,6 +83,10 @@ public partial class ReminderWindow : Window
         Kind.Text = KindLabel(item.Kind);
         ItemTitle.Text = reminder.Message ?? item.Title;
         Primary.Content = primaryLabel;
+        if (item.Recurs is not null && dose is null && primaryLabel == "Done")
+        {
+            Primary.ToolTip = Activation.DoneThisTime;
+        }
         Snooze.ToolTip = $"Back in {MinutesText(snoozeMinutes)}";
         Skip.Visibility = skip is null ? Visibility.Collapsed : Visibility.Visible;
         Start.Visibility = start is null ? Visibility.Collapsed : Visibility.Visible;
@@ -124,11 +124,59 @@ public partial class ReminderWindow : Window
 
         Details.Text = DetailLine(reminder, DateOnly.FromDateTime(DateTime.Now));
 
-        Loaded += (_, _) =>
+        // The main action is filled with the accent, so it stands out from the rest. Enter presses it once the card
+        // has been brought forward.
+        if (MainButton is { } main)
         {
-            Left = SystemParameters.WorkArea.Right - ActualWidth - ScreenMargin;
-            Top = SystemParameters.WorkArea.Bottom - ((ActualHeight + CardGap) * (Slot + 1)) - ScreenMargin + CardGap;
+            main.IsDefault = true;
+        }
+
+        CornerCards.Track(this);
+        Kind.ToolTip = CornerCards.KeyHint;
+        System.Windows.Automation.AutomationProperties.SetHelpText(this, CornerCards.KeyHint);
+        KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && !e.Handled)
+            {
+                e.Handled = true;
+                Dismiss();
+            }
         };
+    }
+
+    /// <summary>
+    /// Whether the card's Done finishes its item: repeating reminders, and reminders, tasks and deadlines (an
+    /// assignment's nudge from the calendar too). An exam's alert is only an alert, answered with Got it.
+    /// </summary>
+    public static bool FinishesItem(DueReminder reminder) => Activation.CardFinishes(reminder);
+
+    /// <summary>The card's main button: the first one on its row, the same as on Discord.</summary>
+    public Button? MainButton => Buttons.Children.OfType<Button>().FirstOrDefault(button => button.Visibility == Visibility.Visible);
+
+    public void TakeFocus()
+    {
+        Activate();
+        MainButton?.Focus();
+    }
+
+    /// <summary>
+    /// Esc: Not now (or 10 more minutes) when the card has it, Still waiting on a waiting-on nudge, and otherwise the
+    /// card closes unanswered, the same as Alt+F4, so nothing is decided for the user.
+    /// </summary>
+    public void Dismiss()
+    {
+        if (Snooze.Visibility == Visibility.Visible)
+        {
+            OnSnoozeClicked(Snooze, new RoutedEventArgs());
+        }
+        else if (StillWaiting.Visibility == Visibility.Visible)
+        {
+            OnStillWaitingClicked(StillWaiting, new RoutedEventArgs());
+        }
+        else
+        {
+            Close();
+        }
     }
 
     private static string MinutesText(int minutes) =>

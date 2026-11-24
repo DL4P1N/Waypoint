@@ -47,7 +47,7 @@ public class LateCheckInsTests
     }
 
     private static BedtimeSchedule Bedtimes(BedtimeSettings? settings = null, ClassSchedule? schedule = null) =>
-        new(settings ?? new BedtimeSettings(), schedule ?? Schedule);
+        new(settings ?? new BedtimeSettings(LateCheckIns: true), schedule ?? Schedule);
 
     private LateCheckIns CheckIns(BedtimeSchedule? schedule = null) => new(schedule ?? Bedtimes(), _log, _idle);
 
@@ -327,10 +327,21 @@ public class LateCheckInsTests
     [Fact]
     public void The_setting_is_kept_with_the_other_bedtime_choices()
     {
-        var off = BedtimeChoices.Parse(new BedtimeChoices(LateCheckIns: false).Serialize()).ApplyTo(new BedtimeSettings());
+        var off = BedtimeChoices.Parse(new BedtimeChoices(LateCheckIns: false).Serialize()).ApplyTo(new BedtimeSettings(LateCheckIns: true));
+        var on = BedtimeChoices.Parse(new BedtimeChoices(LateCheckIns: true).Serialize()).ApplyTo(new BedtimeSettings());
 
         Assert.False(off.LateCheckIns);
-        Assert.True(BedtimeChoices.None.ApplyTo(new BedtimeSettings()).LateCheckIns);
+        Assert.True(on.LateCheckIns);
+        Assert.True(BedtimeChoices.None.ApplyTo(new BedtimeSettings(LateCheckIns: true)).LateCheckIns);
+    }
+
+    [Fact]
+    public void A_new_setup_starts_with_them_off_and_a_file_without_the_setting_keeps_them_off()
+    {
+        Assert.False(new BedtimeSettings().LateCheckIns);
+        Assert.False(BedtimeChoices.None.ApplyTo(new BedtimeSettings()).LateCheckIns);
+        Assert.False(WaypointSettings.Parse("""{"bedtime": {"sleepHours": 7.5}}""").Bedtime!.LateCheckIns);
+        Assert.True(WaypointSettings.Parse("""{"bedtime": {"lateCheckIns": true}}""").Bedtime!.LateCheckIns);
     }
 
     [Fact]

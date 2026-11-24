@@ -74,6 +74,20 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
+    public void The_card_sound_is_on_until_turned_off_and_kept_on_this_pc() => Ui.Run(ui =>
+    {
+        var view = Open(ui);
+        var box = UiTest.Named<CheckBox>(view, "CardSoundOn");
+        Assert.True(box.IsChecked);
+
+        box.IsChecked = false;
+
+        Assert.False(CornerCards.SoundOn(ui.Database.GetPreference(CornerCards.SoundPreference)));
+        view.Load();
+        Assert.False(UiTest.Named<CheckBox>(view, "CardSoundOn").IsChecked);
+    });
+
+    [Fact]
     public void Work_hour_hints_fit_their_boxes_in_the_smallest_window() => Ui.Run(ui =>
     {
         var view = Open(ui);
@@ -531,7 +545,7 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
-    public void Bedtime_has_a_late_night_check_ins_switch_that_starts_on_and_no_dim_switch() => Ui.Run(ui =>
+    public void Bedtime_has_a_late_night_check_ins_switch_that_starts_off_and_no_dim_switch() => Ui.Run(ui =>
     {
         var settings = new MemorySettings();
         var view = new SettingsView();
@@ -541,13 +555,14 @@ public sealed class SettingsViewTests
         view.ShowSection("bedtime");
         ui.Pump();
 
+        // Off for a new setup, until turned on here.
         var lateCheckIns = UiTest.Named<CheckBox>(view, "LateCheckInsOn");
-        Assert.True(lateCheckIns.IsChecked);
+        Assert.False(lateCheckIns.IsChecked);
         Assert.Null(view.FindName("DimOn"));
 
-        lateCheckIns.IsChecked = false;
+        lateCheckIns.IsChecked = true;
         UiTest.Call(view, "OnBedtimeSaved", view, new RoutedEventArgs());
-        Assert.False(settings.SavedBedtime!.LateCheckIns);
+        Assert.True(settings.SavedBedtime!.LateCheckIns);
     });
 
     [Fact]

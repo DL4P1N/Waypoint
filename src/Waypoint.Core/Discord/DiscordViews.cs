@@ -87,6 +87,7 @@ public static partial class DiscordViews
             "In the notes and lists forums, type in a post to add to that note or list, or start a new post to make one.",
             "",
             "Anything typed in the capture channel is sorted like the box on the PC.",
+            "In a session, typing did it, smaller, or pause there does the same as its buttons, and resume picks a paused one back up.",
         ]), [], CardTone.Reminder);
 
     public static DiscordCard BudgetCard(IReadOnlyList<string> lines) =>

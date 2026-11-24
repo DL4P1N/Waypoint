@@ -39,7 +39,7 @@ public sealed partial class WaypointWorker
         var typed = words is null ? null : DiscordText.Escape(words);
         var heading = typed is null ? "History" : $"History matching {typed}";
         var title = DiscordPages.Titled(filter == HistoryFilter.All ? heading : $"{heading}, {FilterLabel(filter).ToLowerInvariant()}", page, pages.Count);
-        var empty = typed is null ? "Nothing here yet." : $"Nothing in History matches {typed}.";
+        var empty = typed is null ? CardLabels.NothingYet : CardLabels.NothingMatches("in History", typed);
         var lines = string.Join("\n", shown.Select(HistoryLine));
         var description = said is null ? lines : $"{DiscordText.Escape(said)}\n\n{lines}";
 
