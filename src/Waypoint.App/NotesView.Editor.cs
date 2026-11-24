@@ -24,6 +24,13 @@ public partial class NotesView
         if (note?.Id != _draft.Id)
         {
             _opens++;
+
+            // Another note opened, from the list or from elsewhere such as Find anywhere, is what's wanted in view, so a
+            // list asked for in a narrow window steps aside for it.
+            if (note is not null)
+            {
+                _listAskedFor = false;
+            }
         }
 
         _draft.Load(note);

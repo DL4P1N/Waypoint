@@ -234,6 +234,15 @@ public sealed class NotesViewTests
         Assert.True(page.Body.ActualWidth >= NotesView.TightEditorWidth, $"The note is {page.Body.ActualWidth:0} wide");
         var strip = UiTest.Named<WrapPanel>(UiTest.Named<NoteToolbar>(page.View, "Toolbar"), "Strip");
         Assert.True(strip.ActualHeight < 80, $"The toolbar wrapped to {strip.ActualHeight:0} high");
+
+        // A note opened from elsewhere, such as Find anywhere, while the list is asked for, is shown, not left behind it.
+        var other = ui.Database.CreateNote("Lecture 15", "pointers", DateTime.Now);
+        show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
+        ui.Pump();
+        page.View.ShowNote(other);
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, noteSide.Visibility);
+        Assert.Equal("Lecture 15", page.Title.Text);
     });
 
     [Theory]
