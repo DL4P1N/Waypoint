@@ -5,6 +5,7 @@ using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 using Waypoint.Core.Email;
+using Waypoint.Core.Remote;
 using Waypoint.Core.Schedule;
 
 namespace Waypoint.Core.Tests;
@@ -229,5 +230,44 @@ public sealed class CalendarFeedSettingsTests : IDisposable
         await worker.SyncCalendarAsync();
         Assert.Single(_feed.Asked);
         Assert.Contains(_database.GetOpenItems(), item => item.Title == "Quiz");
+    }
+
+    [Fact]
+    public void Undo_after_remove_puts_the_same_link_back_but_never_over_a_newer_one()
+    {
+        var worker = Worker();
+        Assert.StartsWith("There's no removed link", worker.PutBackCalendarFeed());
+        worker.SaveCalendarFeed(PageLink);
+        worker.RemoveCalendarFeed();
+
+        Assert.Equal("Put the feed link back.", worker.PutBackCalendarFeed());
+        Assert.Equal(new CalendarFeedForm(true, true), worker.GetCalendarFeed());
+        Assert.NotNull(worker.Calendar);
+
+        // A link saved after the remove is the one kept.
+        worker.RemoveCalendarFeed();
+        worker.SaveCalendarFeed("https://example.test/newer.ics");
+        Assert.StartsWith("A feed link is already saved", worker.PutBackCalendarFeed());
+        Assert.Equal("https://example.test/newer.ics", CalendarFeedSetup.Saved(_database));
+
+        // Only the link this Remove took away comes back: a Remove that took nothing leaves nothing to put back.
+        worker.RemoveCalendarFeed();
+        worker.RemoveCalendarFeed();
+        Assert.StartsWith("There's no removed link", worker.PutBackCalendarFeed());
+        Assert.Null(CalendarFeedSetup.Saved(_database));
+    }
+
+    [Fact]
+    public void Undo_against_a_server_from_before_it_says_the_server_needs_updating()
+    {
+        var client = new ServerClient(new HttpClient(new OlderServer()) { BaseAddress = new Uri("http://server/") }, "token");
+
+        Assert.Equal(ServerSettingsData.PutBackNeedsNewerServer, new ServerSettingsData(client).PutBackCalendarFeed());
+    }
+
+    private sealed class OlderServer : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
     }
 }

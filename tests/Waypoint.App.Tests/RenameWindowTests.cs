@@ -26,6 +26,33 @@ public sealed class RenameWindowTests
         Assert.Equal("New filter", add.Title);
     });
 
+    [Fact]
+    public void An_empty_name_says_what_is_missing_and_keeps_the_form_open() => Ui.Run(ui =>
+    {
+        var owner = Window.GetWindow(ui.Host(new Grid()));
+        string? said = null;
+        var shown = false;
+        bool? stillOpen = null;
+        ui.RenameOpened = form =>
+        {
+            form.NameBox.Text = "   ";
+            form.DoneButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var problem = (TextBlock)form.FindName("Problem");
+            said = problem.Text;
+            shown = problem.Visibility == Visibility.Visible;
+            stillOpen = form.IsVisible;
+            form.NameBox.Text = "Groceries";
+            Assert.Equal(Visibility.Collapsed, problem.Visibility);
+        };
+
+        Assert.NotEqual(true, new RenameWindow(owner, "Email advisor").ShowDialog());
+
+        Assert.Equal("Type a name first.", said);
+        Assert.True(shown);
+        Assert.True(stillOpen);
+        Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(new RenameWindow(owner, "x").FindName("Problem") as TextBlock));
+    });
+
     /// <summary>Asked through real UI Automation from another thread, the way a screen reader or test tool sees it.</summary>
     [Fact]
     public void The_pairing_form_is_in_the_automation_tree_with_its_own_names() => Ui.Run(ui =>

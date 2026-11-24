@@ -163,6 +163,20 @@ public sealed class BudgetControlsTests : IDisposable
     }
 
     [Fact]
+    public void A_hand_added_expense_no_rule_places_waits_under_Uncategorized_instead_of_Buffer()
+    {
+        _database.SaveMerchantRule("target", "Groceries");
+
+        _database.AddExpense("Made Up Corner Shop", 900, null, _today, DateTime.Now);
+        _database.AddExpense("Made Up Kiosk", 700, "No Such Category", _today, DateTime.Now);
+        _database.AddExpense("Target", 2000, null, _today, DateTime.Now);
+
+        Assert.Equal(BudgetMath.UncategorizedLabel, Row("Made Up Corner Shop").Category);
+        Assert.Equal(BudgetMath.UncategorizedLabel, Row("Made Up Kiosk").Category);
+        Assert.Equal("Groceries", Row("Target").Category);
+    }
+
+    [Fact]
     public void A_hand_added_expense_keeps_the_category_picked_over_a_rule()
     {
         _database.SaveMerchantRule("target", "Groceries");

@@ -283,6 +283,13 @@ public sealed class RecorderTests : IDisposable
     }
 
     [Fact]
+    public void Asking_to_record_names_the_class_only_when_one_is_on()
+    {
+        Assert.Null(NewRecorder().ClassTitleFor(Tuesday));
+        Assert.Equal("CS 101, Tue Nov 3", NewRecorder(Schedule()).ClassTitleFor(Tuesday));
+    }
+
+    [Fact]
     public void A_recording_started_in_class_is_titled_with_the_course_and_date()
     {
         var recorder = NewRecorder(Schedule());

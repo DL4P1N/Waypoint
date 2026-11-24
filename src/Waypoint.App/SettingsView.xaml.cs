@@ -67,10 +67,25 @@ public partial class SettingsView : UserControl
 
     /// <summary>Class changes asked for and not finished yet. While any is, a read doesn't replace the classes shown.</summary>
     private int _classSaves;
-    private int? _editingClass;
+    /// <summary>
+    /// The class the form is changing, found again by what it is rather than where it was, so a class removed or put
+    /// back above it can't make Save change another one.
+    /// </summary>
+    private ClassMeeting? _editingClass;
     private DateOnly? _termStart;
     private DateOnly? _termEnd;
     private bool _loading;
+
+    /// <summary>Said by a section's Save when what's typed there was kept over what's saved, since it isn't saved yet.</summary>
+    public const string NotSavedYet = "Not saved yet. Press Save to keep what's typed here.";
+
+    private readonly Unsaved _commuteEdits;
+    private readonly Unsaved _rateEdits;
+    private readonly Unsaved _bedtimeEdits;
+    private readonly Unsaved _classEdits;
+    private readonly Unsaved _discordEdits;
+    private readonly Unsaved _feedEdits;
+    private readonly Unsaved _emailEdits;
 
     public SettingsView()
     {
@@ -78,6 +93,15 @@ public partial class SettingsView : UserControl
         Days.ItemsSource = Week.Select(day => day.ToString()).ToList();
         ClassDays.ItemsSource = Week.Select(day => day.ToString()).ToList();
         ShowShiftDate();
+        _commuteEdits = new(WorkStatus, () => Commute.Text);
+        _rateEdits = new(WorkStatus, () => HourlyRate.Text);
+        _bedtimeEdits = new(BedtimeNote, () => Unsaved.Join(SleepHours.Text, ReadyMinutes.Text, LatestBedtime.Text, RoutineSteps.Text, EveningStepName.Text, WindDownStepName.Text));
+        _classEdits = new(ClassesStatus, () => Unsaved.Join(
+            [ClassName.Text, ClassStart.Text, ClassEnd.Text, ClassPlace.Text, ClassTravel.Text, _editingClass is { } editing ? ClassLabel(editing) : "", .. ClassDays.SelectedItems.Cast<string>()]));
+        _discordEdits = new(DiscordNote, () => Unsaved.Join(
+            DiscordOwner.Text, DiscordCapture.Text, DiscordAlerts.Text, DiscordBudget.Text, DiscordNotesForum.Text, DiscordListsForum.Text, DiscordToken.Password));
+        _feedEdits = new(CalendarStatus, () => CalendarFeed.Text);
+        _emailEdits = new(EmailNote, () => Unsaved.Join(EmailClientId.Text, EmailOwnAddress.Text));
         Column.SelectionChanged += entry => ShowSection(entry.Key);
         Column.SearchChanged += OnSearched;
 
@@ -177,6 +201,13 @@ public partial class SettingsView : UserControl
     private void LoadDiscord()
     {
         var form = _settings.GetDiscord();
+        DiscordTokenNote.Visibility = form.HasToken ? Visibility.Visible : Visibility.Collapsed;
+        DiscordNote.Visibility = Visibility.Collapsed;
+        if (_discordEdits.Edited)
+        {
+            return;
+        }
+
         DiscordOwner.Text = form.OwnerUserId ?? "";
         DiscordCapture.Text = form.CaptureChannelId ?? "";
         DiscordAlerts.Text = form.AlertsChannelId ?? "";
@@ -184,8 +215,7 @@ public partial class SettingsView : UserControl
         DiscordNotesForum.Text = form.NotesForumChannelId ?? "";
         DiscordListsForum.Text = form.ListsForumChannelId ?? "";
         DiscordToken.Clear();
-        DiscordTokenNote.Visibility = form.HasToken ? Visibility.Visible : Visibility.Collapsed;
-        DiscordNote.Visibility = Visibility.Collapsed;
+        _discordEdits.Filled();
     }
 
     /// <summary>Saving starts Discord again, which on the server can take a while, so the window isn't held up waiting.</summary>
@@ -214,6 +244,10 @@ public partial class SettingsView : UserControl
 
         ShowDiscord(reply);
         DiscordToken.Clear();
+        if (reply.StartsWith("Saved", StringComparison.Ordinal))
+        {
+            _discordEdits.Filled();
+        }
 
         // Whether a token is kept now is read in the page's order, so the window isn't held for it in server mode.
         var hasToken = await Work.Read(() => settings.GetDiscord().HasToken);
@@ -249,9 +283,13 @@ public partial class SettingsView : UserControl
     private void LoadAlertEmail()
     {
         var form = _settings.GetAlertEmail();
-        EmailClientId.Text = form.ClientId ?? "";
-        EmailOwnAddress.Text = form.OwnAddress ?? "";
         EmailNote.Visibility = Visibility.Collapsed;
+        if (!_emailEdits.Edited)
+        {
+            EmailClientId.Text = form.ClientId ?? "";
+            EmailOwnAddress.Text = form.OwnAddress ?? "";
+            _emailEdits.Filled();
+        }
     }
 
     /// <summary>Saved where email is read: on this PC in local mode, on the server in server mode. Neither value is a secret.</summary>
@@ -265,6 +303,11 @@ public partial class SettingsView : UserControl
         }
 
         ShowNote(EmailNote, reply);
+        if (reply.StartsWith("Saved", StringComparison.Ordinal))
+        {
+            _emailEdits.Filled();
+        }
+
         ShowAfterChanges();
     }
 
@@ -331,14 +374,14 @@ public partial class SettingsView : UserControl
 
         var today = DateOnly.FromDateTime(DateTime.Now);
         var weekly = _settings.GetWeeklyHours();
-        WeeklyRows.ItemsSource = weekly.Select(hours => new WorkRow($"{hours.Day}  {Hours(hours.Start, hours.End)}", $"Remove {hours.Day}", weekly: hours.Day)).ToList();
+        WeeklyRows.ItemsSource = weekly.Select(hours => new WorkRow($"{hours.Day}  {Hours(hours.Start, hours.End)}", $"Remove {hours.Day}", weekly: hours)).ToList();
         NoWeekly.Visibility = weekly.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         var dates = _settings.GetWorkDates(today);
         DateRows.ItemsSource = dates.Select(date => new WorkRow(
             $"{date.Date.ToString("ddd, MMM d", CultureInfo.InvariantCulture)}  {(date.IsDayOff ? "off" : Hours(date.Start!.Value, date.End!.Value))}",
             $"Remove {date.Date.ToString("MMM d", CultureInfo.InvariantCulture)}",
-            date: date.Date)).ToList();
+            dates: dates.Where(other => other.Date == date.Date).ToList())).ToList();
         NoDates.Visibility = dates.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         Tonight.Text = _settings.DescribeTonight(DateTime.Now);
@@ -449,7 +492,10 @@ public partial class SettingsView : UserControl
         }
     }
 
-    /// <summary>Fills the boxes from what's saved, for when the page is opened.</summary>
+    /// <summary>
+    /// Fills the boxes from what's saved, for when the page is opened. A section with something typed and not saved
+    /// keeps it, and says by its Save that it isn't saved yet, rather than having it quietly replaced.
+    /// </summary>
     public void Load()
     {
         if (_settings is null)
@@ -457,21 +503,45 @@ public partial class SettingsView : UserControl
             return;
         }
 
-        ShowCommute();
-        HourlyRate.Text = _settings.GetHourlyRate().ToString("0.00", CultureInfo.InvariantCulture);
+        var kept = new[] { _commuteEdits, _rateEdits, _bedtimeEdits, _classEdits, _discordEdits, _feedEdits, _emailEdits }.Where(part => part.Edited).ToList();
+        if (_commuteEdits.Edited)
+        {
+            WorkRemote.IsChecked = _settings.GetCommuteMinutes() == 0;
+        }
+        else
+        {
+            ShowCommute();
+        }
+
+        if (!_rateEdits.Edited)
+        {
+            HourlyRate.Text = _settings.GetHourlyRate().ToString("0.00", CultureInfo.InvariantCulture);
+            _rateEdits.Filled();
+        }
+
         var settings = _settings.GetBedtime();
-        SleepHours.Text = settings.SleepHours.ToString(CultureInfo.CurrentCulture);
-        ReadyMinutes.Text = settings.ReadyMinutes.ToString(CultureInfo.CurrentCulture);
-        LatestBedtime.Text = settings.LatestBedtime is { } latest ? latest.ToString("h:mm tt", CultureInfo.InvariantCulture) : "";
+        var keepBedtime = _bedtimeEdits.Edited;
+        if (!keepBedtime)
+        {
+            SleepHours.Text = settings.SleepHours.ToString(CultureInfo.CurrentCulture);
+            ReadyMinutes.Text = settings.ReadyMinutes.ToString(CultureInfo.CurrentCulture);
+            LatestBedtime.Text = settings.LatestBedtime is { } latest ? latest.ToString("h:mm tt", CultureInfo.InvariantCulture) : "";
+        }
+
         _loading = true;
         EveningStepOn.IsChecked = settings.EveningStepMinutes is not null;
         WindDownStepOn.IsChecked = settings.WindDownStepMinutes is not null;
         QuietOn.IsChecked = settings.QuietAfterWrapUp;
         LateCheckInsOn.IsChecked = settings.LateCheckIns;
         _loading = false;
-        RoutineSteps.Text = string.Join(Environment.NewLine, settings.RoutineSteps ?? []);
-        EveningStepName.Text = settings.EveningStepLabel();
-        WindDownStepName.Text = settings.WindDownStepLabel();
+        if (!keepBedtime)
+        {
+            RoutineSteps.Text = string.Join(Environment.NewLine, settings.RoutineSteps ?? []);
+            EveningStepName.Text = settings.EveningStepLabel();
+            WindDownStepName.Text = settings.WindDownStepLabel();
+            _bedtimeEdits.Filled();
+        }
+
         WeeklyStatus.Visibility = Visibility.Collapsed;
         ShiftStatus.Visibility = Visibility.Collapsed;
         WorkStatus.Visibility = Visibility.Collapsed;
@@ -481,11 +551,21 @@ public partial class SettingsView : UserControl
         _loading = false;
         LoadClasses();
         LoadDiscord();
-        CalendarFeed.Clear();
+        if (!_feedEdits.Edited)
+        {
+            CalendarFeed.Clear();
+            _feedEdits.Filled();
+        }
+
         CalendarStatus.Visibility = Visibility.Collapsed;
         ShowCalendarFeed();
         LoadAlertEmail();
         Refresh();
+        foreach (var part in kept)
+        {
+            part.Note.Text = NotSavedYet;
+            part.Note.Visibility = Visibility.Visible;
+        }
     }
 
     /// <summary>
@@ -518,14 +598,28 @@ public partial class SettingsView : UserControl
         if (reply.StartsWith("Saved", StringComparison.Ordinal))
         {
             CalendarFeed.Clear();
+            _feedEdits.Filled();
         }
 
         CalendarFeedChanged(reply);
     }
 
+    /// <summary>Removed straight away, like a class, with an Undo that saves the same link again where it was kept.</summary>
     private async void OnCalendarFeedRemoved(object sender, RoutedEventArgs e)
     {
+        CalendarBar.Changed();
         var (ok, reply) = await Change(() => _settings.RemoveCalendarFeed(), ShowCalendar);
+        if (ok)
+        {
+            ShowCalendar("");
+            CalendarBar.Show(reply, PutBackCalendarFeed);
+            CalendarFeedChanged();
+        }
+    }
+
+    private async void PutBackCalendarFeed()
+    {
+        var (ok, reply) = await Change(() => _settings.PutBackCalendarFeed(), ShowCalendar);
         if (ok)
         {
             CalendarFeedChanged(reply);
@@ -535,6 +629,11 @@ public partial class SettingsView : UserControl
     private void CalendarFeedChanged(string reply)
     {
         ShowCalendar(reply);
+        CalendarFeedChanged();
+    }
+
+    private void CalendarFeedChanged()
+    {
         Work.Peek(ShowCalendarFeed);
         ShowAfterChanges();
         _changed();
@@ -590,6 +689,7 @@ public partial class SettingsView : UserControl
 
     private async void OnWeeklySaved(object sender, RoutedEventArgs e)
     {
+        WorkBar.Changed();
         var days = Days.SelectedItems.Cast<string>().ToList();
         if (days.Count == 0)
         {
@@ -631,6 +731,7 @@ public partial class SettingsView : UserControl
 
     private async void OnShiftAdded(object sender, RoutedEventArgs e)
     {
+        WorkBar.Changed();
         if (ReadHours(ShiftStart.Text, ShiftEnd.Text) is not ({ } start, { } end))
         {
             ShowShift(TimesHint);
@@ -662,7 +763,7 @@ public partial class SettingsView : UserControl
     private async void OnCommuteSaved(object sender, RoutedEventArgs e)
     {
         var commute = Commute.Text;
-        await FieldSaved(() => _settings.SetCommute(commute), CommuteHint, "Try a number of minutes, like 15.");
+        await FieldSaved(() => _settings.SetCommute(commute), CommuteHint, "Try a number of minutes, like 15.", _commuteEdits);
         WorkRemote.IsChecked = Work.Peek(() => _settings.GetCommuteMinutes()) == 0;
     }
 
@@ -670,7 +771,7 @@ public partial class SettingsView : UserControl
     private async void OnWorkRemoteClicked(object sender, RoutedEventArgs e)
     {
         var minutes = WorkRemote.IsChecked == true ? 0 : WorkShift.DefaultCommuteMinutes;
-        await FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.");
+        await FieldSaved(() => _settings.SetCommute(minutes.ToString(CultureInfo.InvariantCulture)), CommuteHint, "Try a number of minutes, like 15.", _commuteEdits);
         Work.Peek(ShowCommute);
     }
 
@@ -679,20 +780,22 @@ public partial class SettingsView : UserControl
         var minutes = _settings.GetCommuteMinutes();
         Commute.Text = minutes.ToString(CultureInfo.CurrentCulture);
         WorkRemote.IsChecked = minutes == 0;
+        _commuteEdits.Filled();
     }
 
     private async void OnHourlyRateSaved(object sender, RoutedEventArgs e)
     {
         var rate = BudgetFormWindow.ParseCents(HourlyRate.Text) is { } cents ? cents / 100m : (decimal?)null;
-        await FieldSaved(() => _settings.SetHourlyRate(rate), HourlyRateHint, "Try an amount like 20.00.");
+        await FieldSaved(() => _settings.SetHourlyRate(rate), HourlyRateHint, "Try an amount like 20.00.", _rateEdits);
     }
 
     /// <summary>
     /// Something the field can't use is answered under it with an example, the way the other forms do, rather than
     /// with the question the chat would ask.
     /// </summary>
-    private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis)
+    private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis, Unsaved part)
     {
+        WorkBar.Changed();
         hint.Visibility = Visibility.Collapsed;
         var (ok, reply) = await Change(change, ShowWork);
         if (!ok)
@@ -708,25 +811,82 @@ public partial class SettingsView : UserControl
             return;
         }
 
+        part.Filled();
         WorkSaved(reply, ShowWork);
     }
 
-    private void OnWorkRowRemoved(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Removed straight away, like a class, with an Undo that sets the same hours again: a day's regular hours, or
+    /// every shift or the day off that date had, since removing one takes the whole date back to the usual hours.
+    /// </summary>
+    private async void OnWorkRowRemoved(object sender, RoutedEventArgs e)
     {
         var row = (WorkRow)((FrameworkElement)sender).DataContext;
-        if (row.Weekly is { } day)
+        WorkBar.Changed();
+        if (row.Weekly is { } hours)
         {
-            WorkSaved(() => _settings.RemoveWeeklyHours([day.ToString()]), ShowWeekly);
+            var (ok, reply) = await Change(() => _settings.RemoveWeeklyHours([hours.Day.ToString()]), ShowWeekly);
+            if (ok)
+            {
+                WorkRemoved(reply, ShowWeekly, () => WorkSaved(() => PutWeeklyHoursBack(hours), ShowWeekly));
+            }
         }
-        else if (row.Date is { } date)
+        else if (row.Dates is [{ Date: var date }, ..] dates)
         {
-            WorkSaved(() => _settings.RemoveWorkDate(date), ShowShift);
+            var (ok, reply) = await Change(() => _settings.RemoveWorkDate(date), ShowShift);
+            if (ok)
+            {
+                WorkRemoved(reply, ShowShift, () => WorkSaved(() => PutWorkDateBack(dates), ShowShift));
+            }
         }
+    }
+
+    /// <summary>The message goes in the Undo bar rather than under the list, so there's one place that says it.</summary>
+    private void WorkRemoved(OpReply reply, Action<string> show, Action undo)
+    {
+        if (reply.IsAnswer)
+        {
+            WorkSaved(reply, show);
+            return;
+        }
+
+        show("");
+        WorkBar.Show(reply.Text, undo);
+        ShowAfterChanges();
+        _changed();
+    }
+
+    /// <summary>Only into a day that's still empty, so Undo never replaces hours set since the remove.</summary>
+    private OpReply PutWeeklyHoursBack(WeeklyHours hours) =>
+        _settings.GetWeeklyHours().Any(found => found.Day == hours.Day)
+            ? new OpReply($"{hours.Day} has other hours now, so those were kept.", true)
+            : _settings.SetWeeklyHours([hours.Day.ToString()], $"{Clock(hours.Start)}-{Clock(hours.End)}");
+
+    /// <summary>Only onto a date that's still back to the usual hours, so Undo never adds to what was set since.</summary>
+    private OpReply PutWorkDateBack(IReadOnlyList<WorkDate> dates)
+    {
+        var removed = dates[0].Date;
+        if (_settings.GetWorkDates(removed).Any(found => found.Date == removed))
+        {
+            return new OpReply($"{removed.ToString("dddd, MMM d", CultureInfo.InvariantCulture)} has something else set now, so that was kept.", true);
+        }
+
+        var reply = new OpReply("");
+        foreach (var date in dates)
+        {
+            var day = date.Date.ToDateTime(TimeOnly.MinValue);
+            reply = date is { Start: { } start, End: { } end }
+                ? _settings.AddWorkShift(day.Add(start.ToTimeSpan()), day.Add(end.ToTimeSpan()))
+                : _settings.SetDayOff(day);
+        }
+
+        return reply;
     }
 
     /// <summary>Runs a work change and says how it went under the part of the section it was made in.</summary>
     private async void WorkSaved(Func<OpReply> change, Action<string> show)
     {
+        WorkBar.Changed();
         var (ok, reply) = await Change(change, show);
         if (ok)
         {
@@ -799,6 +959,7 @@ public partial class SettingsView : UserControl
 
         if (await SaveBedtime(choices))
         {
+            _bedtimeEdits.Filled();
             ShowBedtime("Bedtime saved.");
         }
     }
@@ -869,13 +1030,26 @@ public partial class SettingsView : UserControl
         _savedClasses = _classes.ToList();
         _termStart = form.TermStart;
         _termEnd = form.TermEnd;
-        ClearClassForm();
-        ClassesStatus.Visibility = Visibility.Collapsed;
+        if (!_classEdits.Edited)
+        {
+            ClearClassForm();
+            _classEdits.Filled();
+            ClassesStatus.Visibility = Visibility.Collapsed;
+        }
+
         ShowClasses();
     }
 
     private void ShowClasses()
     {
+        // A class being changed that's gone now: what's typed stays, and Save adds it as a new class.
+        if (_editingClass is { } editing && FindClass(_classes, editing) < 0)
+        {
+            _editingClass = null;
+            ClassFormTitle.Text = "Add a class";
+            ClassEditCancel.Visibility = Visibility.Collapsed;
+        }
+
         ClassRows.ItemsSource = _classes.Select((meeting, index) => new ClassRow(ClassLabel(meeting), meeting.Course, index)).ToList();
         NoClasses.Visibility = _classes.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         TermStartButton.Content = _termStart is { } start ? $"First day: {start.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)}" : "First day: not set";
@@ -888,6 +1062,22 @@ public partial class SettingsView : UserControl
         var days = string.Join(", ", Week.Where(meeting.Days.Contains).Select(day => day.ToString()[..3]));
         var place = string.IsNullOrWhiteSpace(meeting.Room) ? "" : $"  {meeting.Room.Trim()}";
         return $"{meeting.Course}  {days}  {Hours(meeting.Start, meeting.End)}{place}";
+    }
+
+    /// <summary>Where the class is in the list, by its name, place, days and times, or -1 when it isn't there.</summary>
+    private static int FindClass(IReadOnlyList<ClassMeeting> classes, ClassMeeting meeting)
+    {
+        for (var index = 0; index < classes.Count; index++)
+        {
+            var found = classes[index];
+            if (found.Course == meeting.Course && (found.Room ?? "") == (meeting.Room ?? "") && found.Start == meeting.Start
+                && found.End == meeting.End && found.TravelMinutes == meeting.TravelMinutes && found.Days.Order().SequenceEqual(meeting.Days.Order()))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private void ClearClassForm()
@@ -921,7 +1111,7 @@ public partial class SettingsView : UserControl
                 return;
             }
 
-            if (_editingClass is { } index && index < classes.Count)
+            if (_editingClass is { } editing && FindClass(classes, editing) is >= 0 and var index)
             {
                 classes[index] = meeting;
             }
@@ -931,7 +1121,7 @@ public partial class SettingsView : UserControl
             }
         }
 
-        SaveClasses(classes);
+        SaveClasses(classes, fromForm: true);
     }
 
     /// <summary>The class in the form, or null after saying what to fix.</summary>
@@ -973,7 +1163,8 @@ public partial class SettingsView : UserControl
     /// from the classes before it, and a read that comes back while a later change is still on its way is left
     /// unshown, so it can't bring back what that change took out.
     /// </summary>
-    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null)
+    /// <param name="fromForm">Saved from the class form, so what's typed there is saved and the form can be emptied.</param>
+    private async void SaveClasses(List<ClassMeeting> classes, string? done = null, Action? undo = null, bool fromForm = false)
     {
         ClassesBar.Changed();
         var form = new ClassesForm(_termStart, _termEnd, classes);
@@ -996,6 +1187,10 @@ public partial class SettingsView : UserControl
             }
 
             _savedClasses = classes.ToList();
+            if (fromForm)
+            {
+                _classEdits.Filled();
+            }
 
             // The classes as the server saved them, read off the window's thread, then shown from that.
             var saved = await Work.Read(() => _settings.GetClasses());
@@ -1041,7 +1236,7 @@ public partial class SettingsView : UserControl
 
         var meeting = _classes[row.Index];
         ClearClassForm();
-        _editingClass = row.Index;
+        _editingClass = meeting;
         ClassName.Text = meeting.Course;
         foreach (var day in meeting.Days.Select(day => day.ToString()))
         {
@@ -1131,6 +1326,11 @@ public partial class SettingsView : UserControl
         catch (ServerTimedOutException slow)
         {
             show(slow.Message);
+            return (false, default!);
+        }
+        catch (ServerRefusedException refused)
+        {
+            show(Waypoint.Core.PlainProblem.Report(refused));
             return (false, default!);
         }
     }
@@ -1232,15 +1432,34 @@ public partial class SettingsView : UserControl
     /// <summary>One entry in the Settings column. Words are what a search finds it by, besides its label.</summary>
     public sealed record SettingsSection(string Key, string Label, string Words);
 
-    private sealed class WorkRow(string label, string removeLabel, DayOfWeek? weekly = null, DateOnly? date = null)
+    /// <summary>
+    /// What a part of the page with its own Save showed when last filled from what's saved, or just saved. When it
+    /// shows something else now, something was typed there and not saved, and filling the page again leaves it.
+    /// </summary>
+    private sealed class Unsaved(TextBlock note, Func<string> state)
+    {
+        private string? _filled;
+
+        /// <summary>Where the section says how saving went, which is where "Not saved yet" goes.</summary>
+        public TextBlock Note => note;
+
+        public bool Edited => _filled is not null && state() != _filled;
+
+        public void Filled() => _filled = state();
+
+        public static string Join(params IEnumerable<string> parts) => string.Join('\u001f', parts);
+    }
+
+    private sealed class WorkRow(string label, string removeLabel, WeeklyHours? weekly = null, IReadOnlyList<WorkDate>? dates = null)
     {
         public string Label => label;
 
         public string RemoveLabel => removeLabel;
 
-        public DayOfWeek? Weekly => weekly;
+        public WeeklyHours? Weekly => weekly;
 
-        public DateOnly? Date => date;
+        /// <summary>Everything set for the row's date, since removing it takes them all away.</summary>
+        public IReadOnlyList<WorkDate>? Dates => dates;
 
         /// <summary>What a screen reader says for the row, rather than the class name.</summary>
         public override string ToString() => Label;

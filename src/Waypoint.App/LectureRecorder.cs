@@ -75,7 +75,7 @@ public sealed class LectureRecorder : IDisposable
         }
 
         _window.ShowNotes();
-        var ask = new RecordWindow(_window, _core.TitleFor(DateTime.Now), LastInput, _database.GetPreference(KeepAudioPreference) == "yes");
+        var ask = new RecordWindow(_window, _core.ClassTitleFor(DateTime.Now), LastInput, _database.GetPreference(KeepAudioPreference) == "yes");
         if (ask.ShowDialog() == true)
         {
             _database.SetPreference(InputPreference, ask.Input.ToString());

@@ -102,6 +102,7 @@
                     <StackPanel x:Name="WorkSection" Visibility="Collapsed">
                         <!-- Work hours -->
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Work hours" />
+                        <local:UndoBar x:Name="WorkBar" Margin="0,0,0,10" />
                         <TextBlock x:Name="NoWeekly" Style="{StaticResource Note}" Margin="0,0,0,6" Text="No regular hours yet." />
                         <ItemsControl x:Name="WeeklyRows" ItemTemplate="{StaticResource WorkRowTemplate}" />
 
@@ -361,6 +362,7 @@
                             <Button x:Name="CalendarRemove" Grid.Column="2" Margin="8,0,0,0" Padding="14,6" Content="Remove" AutomationProperties.Name="Remove calendar feed" Click="OnCalendarFeedRemoved" />
                         </Grid>
                         <TextBlock x:Name="CalendarFeedNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+                        <local:UndoBar x:Name="CalendarBar" Margin="0,6,0,0" />
                         <TextBlock x:Name="CalendarStatus" Style="{StaticResource Note}" Visibility="Collapsed" />
 
 

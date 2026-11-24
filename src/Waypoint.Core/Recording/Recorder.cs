@@ -70,9 +70,12 @@ public sealed class Recorder
     public IReadOnlyList<RecordingWarning> Warnings => _session?.Watch.Showing ?? [];
 
     /// <summary>The title a recording started now gets: the class and date in class, else "Recording" and the date.</summary>
-    public string TitleFor(DateTime now) => ClassLinking.CurrentClass(_schedule, now) is { } current
+    public string TitleFor(DateTime now) => ClassTitleFor(now) ?? $"Recording, {now.ToString("ddd MMM d", CultureInfo.InvariantCulture)}";
+
+    /// <summary>The class and date when a class is on now, else null, so asking can say "a lecture" instead.</summary>
+    public string? ClassTitleFor(DateTime now) => ClassLinking.CurrentClass(_schedule, now) is { } current
         ? ClassLinking.Title(current.Meeting.Course, now)
-        : $"Recording, {now.ToString("ddd MMM d", CultureInfo.InvariantCulture)}";
+        : null;
 
     /// <summary>Starts recording. Call only when the user asked for it.</summary>
     public RecordingInfo Start(AudioInput input, bool keepAudio)

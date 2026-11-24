@@ -35,10 +35,41 @@ public partial class RenameWindow : Window
         AutomationProperties.SetName(form.NameBox, "Server token");
         AutomationProperties.SetAutomationId(form.NameBox, "PairToken");
         AutomationProperties.SetAutomationId(form, "PairWithServer");
+        form.EmptyProblem = "Paste the server's token first.";
         return form;
     }
 
     public string NewName => NameBox.Text.Trim();
 
-    private void OnRenameClicked(object sender, RoutedEventArgs e) => DialogResult = NewName.Length > 0 ? true : null;
+    /// <summary>
+    /// Said under the box when the button is pressed with it empty, so pressing it is never met with silence. Null
+    /// when an empty box means something to whoever opened the form, such as removing a link.
+    /// </summary>
+    public string? EmptyProblem { get; set; } = "Type a name first.";
+
+    private void OnRenameClicked(object sender, RoutedEventArgs e)
+    {
+        if (NewName.Length > 0)
+        {
+            DialogResult = true;
+            return;
+        }
+
+        if (EmptyProblem is { } problem)
+        {
+            Problem.Text = problem;
+            Problem.Visibility = Visibility.Visible;
+            LiveRegion.Announce(Problem);
+        }
+
+        NameBox.Focus();
+    }
+
+    private void OnNameChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (Problem is not null && NameBox.Text.Trim().Length > 0)
+        {
+            Problem.Visibility = Visibility.Collapsed;
+        }
+    }
 }

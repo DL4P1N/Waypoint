@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Windows;
@@ -200,9 +201,13 @@ public sealed class SettingsViewTests
 
         public bool OnServer => Remote;
 
-        public IReadOnlyList<WeeklyHours> GetWeeklyHours() => [];
+        public List<WeeklyHours> Weekly { get; } = [];
 
-        public IReadOnlyList<WorkDate> GetWorkDates(DateOnly from) => [];
+        public List<WorkDate> Dates { get; } = [];
+
+        public IReadOnlyList<WeeklyHours> GetWeeklyHours() => Weekly.ToList();
+
+        public IReadOnlyList<WorkDate> GetWorkDates(DateOnly from) => Dates.Where(date => date.Date >= from).OrderBy(date => date.Date).ToList();
 
         public int GetCommuteMinutes() => 15;
 
@@ -237,15 +242,43 @@ public sealed class SettingsViewTests
             return Waypoint.Core.Background.WaypointWorker.ClassesSaved(form.Classes.Count);
         }
 
-        public OpReply SetWeeklyHours(IReadOnlyList<string> days, string? hours) => new($"Work saved: {string.Join(", ", days)}, {hours}.");
+        public OpReply SetWeeklyHours(IReadOnlyList<string> days, string? hours)
+        {
+            if (hours is { Length: 11 } && hours[5] == '-')
+            {
+                foreach (var day in days.Select(Enum.Parse<DayOfWeek>))
+                {
+                    Weekly.RemoveAll(found => found.Day == day);
+                    Weekly.Add(new WeeklyHours(day, TimeOnly.Parse(hours[..5], CultureInfo.InvariantCulture), TimeOnly.Parse(hours[6..], CultureInfo.InvariantCulture)));
+                }
+            }
 
-        public OpReply RemoveWeeklyHours(IReadOnlyList<string> days) => new("");
+            return new($"Work saved: {string.Join(", ", days)}, {hours}.");
+        }
 
-        public OpReply AddWorkShift(DateTime? start, DateTime? end) => new("");
+        public OpReply RemoveWeeklyHours(IReadOnlyList<string> days)
+        {
+            Weekly.RemoveAll(found => days.Contains(found.Day.ToString()));
+            return new($"Removed {string.Join(", ", days)}.");
+        }
 
-        public OpReply SetDayOff(DateTime? date) => new("");
+        public OpReply AddWorkShift(DateTime? start, DateTime? end)
+        {
+            Dates.Add(new WorkDate(DateOnly.FromDateTime(start!.Value), TimeOnly.FromDateTime(start.Value), TimeOnly.FromDateTime(end!.Value)));
+            return new("Shift added.");
+        }
 
-        public OpReply RemoveWorkDate(DateOnly date) => new("");
+        public OpReply SetDayOff(DateTime? date)
+        {
+            Dates.Add(new WorkDate(DateOnly.FromDateTime(date!.Value), null, null));
+            return new("Day off saved.");
+        }
+
+        public OpReply RemoveWorkDate(DateOnly date)
+        {
+            Dates.RemoveAll(found => found.Date == date);
+            return new($"{date.ToString("dddd, MMM d", CultureInfo.InvariantCulture)} is back to the usual hours.");
+        }
 
         public OpReply SetCommute(string? minutes) => new("");
 
@@ -274,10 +307,26 @@ public sealed class SettingsViewTests
             return "Saved. Reading the feed now, then every hour.";
         }
 
+        private string? _removed;
+
         public string RemoveCalendarFeed()
         {
+            _removed = Link;
             Link = null;
             return "Removed. Nothing more is read from the feed, and what it already added stays.";
+        }
+
+        public bool RefusePutBack { get; set; }
+
+        public string PutBackCalendarFeed()
+        {
+            if (RefusePutBack)
+            {
+                throw new ServerRefusedException(500, "The server turned that down (500).");
+            }
+
+            Link = _removed;
+            return "Put the feed link back.";
         }
     }
 
@@ -407,6 +456,39 @@ public sealed class SettingsViewTests
         Assert.Equal(new DateOnly(2030, 5, 3), settings.Classes.TermEnd);
         Assert.Equal([SettingsView.ClassLabel(art), SettingsView.ClassLabel(bio)], ClassLines(view));
         Assert.Equal(Visibility.Collapsed, bar.Visibility);
+    });
+
+    [Fact]
+    public void The_class_being_changed_is_found_again_after_one_above_it_is_removed() => Ui.Run(ui =>
+    {
+        var art = new ClassMeeting("Art 101", "Room 4", [DayOfWeek.Monday], new TimeOnly(9, 0), new TimeOnly(10, 0));
+        var bio = new ClassMeeting("Bio 102", "", [DayOfWeek.Tuesday], new TimeOnly(11, 0), new TimeOnly(12, 0));
+        var chem = new ClassMeeting("Chem 103", "", [DayOfWeek.Friday], new TimeOnly(13, 0), new TimeOnly(14, 0));
+        var settings = new MemorySettings { Classes = new(null, null, [art, bio, chem]) };
+        var view = OpenClasses(ui, settings);
+        Button Named(string name) => UiTest.Descendants<Button>(view).Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == name);
+        var className = UiTest.Named<TextBox>(view, "ClassName");
+
+        UiTest.Call(view, "OnClassEdited", Named("Change Bio 102"), new RoutedEventArgs());
+        UiTest.Call(view, "OnClassRemoved", Named("Remove Art 101"), new RoutedEventArgs());
+        ui.Pump();
+        className.Text = "Bio 202";
+        UiTest.Call(view, "OnClassesSaved", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(["Bio 202", "Chem 103"], settings.Classes.Classes.Select(meeting => meeting.Course));
+
+        // The class being changed is removed: what's typed stays, as a new class.
+        UiTest.Call(view, "OnClassEdited", Named("Change Chem 103"), new RoutedEventArgs());
+        className.Text = "Chem 203";
+        UiTest.Call(view, "OnClassRemoved", Named("Remove Chem 103"), new RoutedEventArgs());
+        ui.Pump();
+        view.Load();
+        Assert.Equal("Chem 203", className.Text);
+        Assert.Equal("Add a class", UiTest.Named<TextBlock>(view, "ClassFormTitle").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "ClassesStatus").Text);
+        UiTest.Call(view, "OnClassesSaved", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(["Bio 202", "Chem 203"], settings.Classes.Classes.Select(meeting => meeting.Course));
     });
 
     [Fact]
@@ -556,7 +638,135 @@ public sealed class SettingsViewTests
         UiTest.Call(view, "OnCalendarFeedRemoved", view, new RoutedEventArgs());
         Assert.Null(settings.Link);
         Assert.Equal(Visibility.Collapsed, remove.Visibility);
-        Assert.StartsWith("Removed.", UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+        var bar = UiTest.Named<UndoBar>(view, "CalendarBar");
+        Assert.StartsWith("Removed.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "CalendarStatus").Visibility);
+
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal("https://example.test/feed.ics", settings.Link);
+        Assert.Equal(Visibility.Visible, remove.Visibility);
+        Assert.Equal("Put the feed link back.", UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+
+        // A server that turns Undo down is said plainly rather than left unanswered.
+        settings.RefusePutBack = true;
+        UiTest.Call(view, "OnCalendarFeedRemoved", view, new RoutedEventArgs());
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Null(settings.Link);
+        Assert.Equal(Waypoint.Core.PlainProblem.Report(new ServerRefusedException(500, "")), UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+    });
+
+    [Fact]
+    public void Typing_left_unsaved_is_kept_when_the_page_is_filled_again_and_says_it_isnt_saved() => Ui.Run(ui =>
+    {
+        var settings = new MemorySettings();
+        var view = new SettingsView();
+        view.Connect(settings, ui.Database, null, new BedtimeSettings(), () => [], () => { });
+        ui.Host(view);
+        view.Load();
+        ui.Pump();
+        var rate = UiTest.Named<TextBox>(view, "HourlyRate");
+        var commute = UiTest.Named<TextBox>(view, "Commute");
+        var sleep = UiTest.Named<TextBox>(view, "SleepHours");
+        var feed = UiTest.Named<TextBox>(view, "CalendarFeed");
+        var className = UiTest.Named<TextBox>(view, "ClassName");
+        var workStatus = UiTest.Named<TextBlock>(view, "WorkStatus");
+        Assert.Equal("20.00", rate.Text);
+
+        rate.Text = "31.25";
+        sleep.Text = "6";
+        feed.Text = "https://example.test/half-pasted";
+        className.Text = "Made Up 101";
+        commute.Text = "15";
+
+        // Another page and back fills the page again.
+        view.Load();
+        Assert.Equal("31.25", rate.Text);
+        Assert.Equal("6", sleep.Text);
+        Assert.Equal("https://example.test/half-pasted", feed.Text);
+        Assert.Equal("Made Up 101", className.Text);
+        Assert.Equal(SettingsView.NotSavedYet, workStatus.Text);
+        Assert.Equal(Visibility.Visible, workStatus.Visibility);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "BedtimeNote").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "ClassesStatus").Text);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "EmailNote").Visibility);
+
+        // Typed back to what was saved is nothing unsaved.
+        sleep.Text = new BedtimeSettings().SleepHours.ToString(System.Globalization.CultureInfo.CurrentCulture);
+        className.Text = "";
+        feed.Text = "";
+
+        // Once saved, filling again shows what's saved.
+        UiTest.Call(view, "OnHourlyRateSaved", view, new RoutedEventArgs());
+        view.Load();
+        Assert.Equal("20.00", rate.Text);
+        Assert.Equal(Visibility.Collapsed, workStatus.Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "BedtimeNote").Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "CalendarStatus").Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<TextBlock>(view, "ClassesStatus").Visibility);
+    });
+
+    [Fact]
+    public void Removing_regular_hours_or_a_shift_can_be_undone() => Ui.Run(ui =>
+    {
+        var settings = new MemorySettings();
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0)));
+        settings.Dates.Add(new WorkDate(today.AddDays(3), new TimeOnly(8, 0), new TimeOnly(12, 0)));
+        settings.Dates.Add(new WorkDate(today.AddDays(3), new TimeOnly(13, 0), new TimeOnly(16, 30)));
+        var view = new SettingsView();
+        view.Connect(settings, ui.Database, null, new BedtimeSettings(), () => [], () => { });
+        ui.Host(view);
+        view.Load();
+        view.ShowSection("work");
+        ui.Pump();
+        var bar = UiTest.Named<UndoBar>(view, "WorkBar");
+        var undo = UiTest.Named<Button>(bar, "UndoButton");
+
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        Assert.Empty(settings.Weekly);
+        Assert.Equal("Removed Monday.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new WeeklyHours(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0))], settings.Weekly);
+
+        // Removing a date takes every shift it had, and Undo puts each back.
+        Remove(UiTest.Named<ItemsControl>(view, "DateRows"));
+        Assert.Empty(settings.Dates);
+        Assert.EndsWith("is back to the usual hours.", UiTest.Named<TextBlock>(bar, "Message").Text);
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new TimeOnly(8, 0), new TimeOnly(13, 0)], settings.Dates.Select(date => date.Start!.Value).Order());
+        Assert.Equal(2, ((System.Collections.IEnumerable)UiTest.Named<ItemsControl>(view, "DateRows").ItemsSource).Cast<object>().Count());
+
+        // Another work change ends the chance to undo, and Undo never replaces hours set since.
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        Assert.Equal(Visibility.Visible, bar.Visibility);
+        UiTest.Named<TextBox>(view, "ShiftStart").Text = "9-5";
+        UiTest.Call(view, "OnShiftAdded", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(Visibility.Collapsed, bar.Visibility);
+
+        settings.Weekly.Clear();
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(9, 0), new TimeOnly(17, 0)));
+        view.Refresh();
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(10, 0), new TimeOnly(14, 0)));
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(10, 0), new TimeOnly(14, 0))], settings.Weekly);
+        Assert.Equal("Tuesday has other hours now, so those were kept.", UiTest.Named<TextBlock>(view, "WeeklyStatus").Text);
+
+        void Remove(ItemsControl rows)
+        {
+            var row = ui.Container(rows, rows.Items[0]);
+            var button = UiTest.Descendants<Button>(row).Single(found => (string)found.Content == "×");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+            ui.Pump();
+        }
     });
 
     [Theory]

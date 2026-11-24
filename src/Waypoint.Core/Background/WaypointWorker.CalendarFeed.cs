@@ -33,19 +33,62 @@ public sealed partial class WaypointWorker
             return CalendarFeedSetup.NotALink;
         }
 
-        _database.SetPreference(CalendarFeedSetup.Preference, clean);
-        StartCalendar();
+        lock (_calendarFeedLock)
+        {
+            _database.SetPreference(CalendarFeedSetup.Preference, clean);
+            StartCalendar();
+        }
+
         return SyncsCalendar ? "Saved. Reading the feed now, then every hour." : "Saved. The feed is read every hour while Waypoint runs.";
     }
+
+    /// <summary>
+    /// The link the last Remove took away, kept only in memory so Undo can put it back. It's never sent out. A Remove
+    /// that took nothing away leaves none, so Undo can't bring back an older link.
+    /// </summary>
+    private string? _removedCalendarFeed;
+
+    private readonly object _calendarFeedLock = new();
 
     /// <summary>Forgets the page's link. Anything the feed already added stays where it is.</summary>
     public string RemoveCalendarFeed()
     {
-        _database.SetPreference(CalendarFeedSetup.Preference, "");
-        StartCalendar();
+        lock (_calendarFeedLock)
+        {
+            _removedCalendarFeed = CalendarFeedSetup.Saved(_database);
+            _database.SetPreference(CalendarFeedSetup.Preference, "");
+            StartCalendar();
+        }
+
         return Calendar is null
             ? "Removed. Nothing more is read from the feed, and what it already added stays."
             : "Removed. The calendar link from the setup file is used instead.";
+    }
+
+    /// <summary>
+    /// Undo for Remove: saves the link it took away again and starts reading it. A link saved since then is kept,
+    /// so Undo never replaces a newer one.
+    /// </summary>
+    public string PutBackCalendarFeed()
+    {
+        lock (_calendarFeedLock)
+        {
+            var link = _removedCalendarFeed;
+            _removedCalendarFeed = null;
+            if (CalendarFeedSetup.Saved(_database) is not null)
+            {
+                return "A feed link is already saved, so it was kept.";
+            }
+
+            if (link is null)
+            {
+                return "There's no removed link to put back. Paste it again to use it.";
+            }
+
+            _database.SetPreference(CalendarFeedSetup.Preference, link);
+            StartCalendar();
+            return "Put the feed link back.";
+        }
     }
 
     /// <summary>Builds the sync for the link in use, or none when there isn't one, and reads it now if the hourly sync runs.</summary>

@@ -364,6 +364,36 @@ public sealed class BudgetViewTests
     });
 
     [Fact]
+    public void A_purchase_shows_a_more_button_when_it_has_focus_that_opens_the_same_menu() => Ui.Run(ui =>
+    {
+        ui.Database.SaveCategory(new BudgetCategory("Fun", 5000));
+        ui.Database.AddExpense("Made up arcade", 1800, "Fun", Today, DateTime.Now);
+        var (view, _, entries, _) = Make(ui);
+        entries.SelectedItem = entries.Items.Cast<ColumnEntry>().Single(entry => entry.Key == "purchases");
+        ui.Pump();
+        UiTest.Descendants<Expander>(view).First().IsExpanded = true;
+        view.UpdateLayout();
+
+        var row = UiTest.Descendants<Grid>(view).First(grid => grid.DataContext?.GetType().Name == "PurchaseRow");
+        var more = UiTest.Descendants<Button>(row).Single(button => (string)button.Content == "⋯");
+        Assert.Equal(Visibility.Hidden, more.Visibility);
+        Assert.Equal("More for this purchase", System.Windows.Automation.AutomationProperties.GetName(more));
+
+        ui.Focus(row);
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, more.Visibility);
+
+        var before = ui.Menus.Count;
+        more.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, more));
+        ui.Pump();
+        Assert.Equal(before + 1, ui.Menus.Count);
+        var menu = ui.Menus[before];
+        Assert.Contains("Mark one-off", UiTest.Labels(menu));
+        ui.Choose(menu, "Delete");
+        Assert.Empty(Purchases(view));
+    });
+
+    [Fact]
     public void Purchase_and_category_rows_open_their_menus_from_the_keyboard() => Ui.Run(ui =>
     {
         ui.Database.SaveCategory(new BudgetCategory("Fun", 5000));

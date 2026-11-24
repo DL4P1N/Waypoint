@@ -17,7 +17,15 @@
         <TextBox x:Name="NameBox"
                  Margin="0,12,0,0"
                  Style="{StaticResource FieldBox}"
-                 AutomationProperties.Name="New name" />
+                 AutomationProperties.Name="New name"
+                 TextChanged="OnNameChanged" />
+        <TextBlock x:Name="Problem"
+                   AutomationProperties.LiveSetting="Polite"
+                   Margin="0,6,0,0"
+                   FontSize="13"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryText}"
+                   Visibility="Collapsed" />
         <StackPanel Margin="0,14,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Padding="14,6" Margin="0,0,8,0" Content="Cancel" IsCancel="True" />
             <Button x:Name="DoneButton" Padding="14,6" Content="Rename" IsDefault="True" Click="OnRenameClicked" />
