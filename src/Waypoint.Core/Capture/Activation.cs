@@ -191,6 +191,18 @@ public static class Activation
     public static bool CanStart(StoredItem item) =>
         item.Recurs is null && item.Kind is ItemKind.Task or ItemKind.Deadline or ItemKind.Exam or ItemKind.Reminder;
 
+    /// <summary>
+    /// Whether a reminder card, on the PC or Discord, offers Start and Save my spot: only for tasks, deadlines and
+    /// exams. A plain reminder is something to do or put off, so its card keeps to Done and Not now.
+    /// </summary>
+    public static bool CardOffersStart(StoredItem item) => CanStart(item) && item.Kind is not ItemKind.Reminder;
+
+    /// <summary>
+    /// Whether a reminder card, on the PC or Discord, offers Done for its item: reminders, tasks and deadlines,
+    /// including an assignment's nudge from the calendar. An exam's alert comes before the exam, so it's only an alert.
+    /// </summary>
+    public static bool CardFinishesKind(ItemKind kind) => kind is ItemKind.Reminder or ItemKind.Task or ItemKind.Deadline;
+
     /// <summary>The soonest thing that could be worked on, preferring whatever the note names.</summary>
     public static StoredItem? PickTask(IReadOnlyList<StoredItem> open, string? note)
     {

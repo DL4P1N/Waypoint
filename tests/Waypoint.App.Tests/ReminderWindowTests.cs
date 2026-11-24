@@ -148,6 +148,27 @@ public sealed class ReminderWindowTests
         Assert.Contains(CornerCards.KeyName, (string)UiTest.Named<TextBlock>(card, "Kind").ToolTip);
     });
 
+    [Fact]
+    public void A_deadline_card_offers_done_beside_start_and_an_exam_alert_does_not() => Ui.Run(ui =>
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var report = ui.Database.AddByHand(new HandAddedItem(ItemKind.Deadline, "Made up lab report", today), DateTime.Now).Item!;
+        var due = new DueReminder(1, report, null, null);
+        Assert.True(ReminderWindow.FinishesItem(due));
+        Assert.True(ReminderWindow.FinishesItem(new DueReminder(2, new StoredItem(2, ItemKind.Deadline, "Made up essay", today, null, false, Source: ItemSource.Calendar), null, null)));
+        Assert.False(ReminderWindow.FinishesItem(new DueReminder(3, new StoredItem(3, ItemKind.Exam, "Made up midterm", today, null, false), "Do a practice exam", null)));
+
+        // Built the way the app builds it: Done finishes the deadline through the same call as every other card.
+        var transition = new ReminderTransition(ReminderWindow.FinishesItem(due), () => { }, () => { }, () => { }, null);
+        var card = new ReminderWindow(due, "Done", 10, () => ui.Database.SetDone(report, true), () => { }, start: () => { }, transition: transition);
+        Assert.Equal(["Start", "Done", "10 more minutes", "Skip"], VisibleButtons(card).Select(button => (string)button.Content));
+
+        Click(UiTest.Named<Button>(card, "Primary"));
+
+        Assert.True(card.Answered);
+        Assert.DoesNotContain(ui.Database.GetOpenItems(), item => item.Id == report.Id);
+    });
+
     private static List<Button> VisibleButtons(ReminderWindow card)
     {
         var content = (FrameworkElement)card.Content;

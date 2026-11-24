@@ -23,8 +23,7 @@ public partial class App
     /// <param name="cameBack">Set on the card shown again after one was closed without an answer.</param>
     private void ShowReminderCard(DueReminder reminder, Action closed, bool cameBack = false)
     {
-        // Repeating items and reminders are finished here. An exam's alert is only an alert.
-        var finishesItem = reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task;
+        var finishesItem = ReminderWindow.FinishesItem(reminder);
         var snoozeMinutes = reminder.RepeatMinutes ?? WaypointWorker.DefaultSnoozeMinutes;
 
         // The card that came back is the same reminder again, so it comes up quietly.
@@ -116,7 +115,7 @@ public partial class App
             },
             () => _database.SnoozeReminder(reminder, DateTime.Now.AddMinutes(snoozeMinutes)),
             reminder.Item.Source == ItemSource.Calendar ? () => _database.SkipNudges(reminder.Item.Id) : null,
-            Activation.CanStart(reminder.Item)
+            Activation.CardOffersStart(reminder.Item)
                 ? () =>
                 {
                     _database.RecordReminderAnswer(reminder.Item, ReminderAnswer.Started, DateTime.Now);

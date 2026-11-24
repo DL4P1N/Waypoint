@@ -120,10 +120,10 @@ public sealed partial class WaypointWorker
 
     private async Task SendReminderOnceAsync(DiscordBridge discord, DueReminder reminder)
     {
-        // Only things that can be finished get the prompt. A nudge about an assignment or an exam alert doesn't finish it.
-        // A dose is answered with Took it, so its card has buttons even though it repeats.
+        // Only things that can be finished get Done, a deadline and an assignment's nudge among them. An exam's alert
+        // doesn't finish it. A dose is answered with Took it, so its card has buttons even though it repeats.
         var dose = reminder.Item is { Dose: true, Recurs: not null };
-        var canFinish = dose || (reminder.Item.Recurs is null && (reminder.RepeatMinutes is not null || reminder.Item.Kind is ItemKind.Reminder or ItemKind.Task));
+        var canFinish = dose || (reminder.Item.Recurs is null && (reminder.RepeatMinutes is not null || Activation.CardFinishesKind(reminder.Item.Kind)));
         var canStart = Activation.CanStart(reminder.Item);
         var waiting = _database.WaitingFor(reminder);
         var card = waiting is not null

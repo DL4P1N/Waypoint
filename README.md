@@ -85,6 +85,8 @@ Every card, on the PC and on Discord, keeps the same order and words:
 2. **10 more minutes** on a card you can start, or **Not now** on a plain reminder, which brings it back once, ten minutes later
 3. **Skip**, which clears it with nothing more to come
 
+The main action is filled with the accent. Start, 10 more minutes and Save my spot are only on tasks, deadlines and exams; a plain reminder has Done and Not now. Reminders, tasks and deadlines, an assignment's nudge from the calendar included, always have Done; an exam's alert has Got it, since it comes before the exam.
+
 A card that comes back offers only Start and Skip, so it never turns into a chain. Skip never checks anything off, and the item stays on your list. On the PC, **Save my spot first** opens the Save my spot form, unless you saved a spot in the last hour. Repeating reminders keep Done and a Not now that brings them back after their usual gap.
 
 **"After this."** If a card with Start gets no answer for half an hour (on Discord, or left up on the PC), Waypoint holds that one thing and brings it back once as "Earlier you meant to: ..." with **Start** and **Not now**. It rides on something already showing, whichever comes first: opening the Waypoint window or To do, finishing a session with Did it, tonight's heads-up, or the next morning's briefing. Nothing new is sent for it. Only the newest is kept, so a new one replaces an older one. Once it's been shown, it's gone whatever you choose, and nothing older comes back after it. It's also dropped if you start, finish, move, snooze, or delete that item first, or say its reminder didn't help. Anything held for more than a day is dropped.

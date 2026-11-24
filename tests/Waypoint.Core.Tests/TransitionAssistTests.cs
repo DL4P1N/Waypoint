@@ -132,6 +132,23 @@ public sealed class TransitionAssistTests : IDisposable
     }
 
     [Fact]
+    public void Only_tasks_deadlines_and_exams_offer_start_and_a_plain_reminder_keeps_done_and_not_now()
+    {
+        foreach (var kind in new[] { ItemKind.Task, ItemKind.Deadline, ItemKind.Exam })
+        {
+            Assert.True(Activation.CardOffersStart(new StoredItem(1, kind, "Write the essay", Today, null, false)));
+        }
+
+        var call = new StoredItem(2, ItemKind.Reminder, "Call the dentist", Today, null, false);
+        Assert.False(Activation.CardOffersStart(call));
+        Assert.False(TransitionAssist.Applies(new DueReminder(2, call, null, null)));
+
+        var card = DiscordText.Reminder(new DueReminder(2, call, null, null), Today, true, canStart: true);
+        Assert.True(card.HasButtons);
+        Assert.False(card.HasStart || card.Transition || card.MoreTime);
+    }
+
+    [Fact]
     public void Discord_cards_trade_snooze_for_more_time_and_not_now()
     {
         var item = new StoredItem(1, ItemKind.Task, "Write the essay", Today, null, false);

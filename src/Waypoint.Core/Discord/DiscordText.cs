@@ -172,6 +172,7 @@ public static partial class DiscordText
 
         // A dose's Not now comes back once, so the card that comes back has only Took it and Skip.
         var dose = item is { Dose: true, Recurs: not null };
+        canStart = canStart && Activation.CardOffersStart(item);
         return new DiscordCard(Fit(Escape(reminder.Message ?? item.Title), MaxTitle), null, fields, item.Kind == ItemKind.Exam ? CardTone.Attention : CardTone.Reminder, canFinish || dose, canStart && !dose)
         {
             Transition = !dose && canStart && TransitionAssist.Applies(reminder),

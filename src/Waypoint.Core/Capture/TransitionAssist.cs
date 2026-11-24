@@ -21,7 +21,7 @@ public static class TransitionAssist
     /// Whether a reminder gets the transition buttons. Reminders the user set to repeat keep their own
     /// rhythm, and things that can't be started keep the buttons they had.
     /// </summary>
-    public static bool Applies(DueReminder reminder) => reminder.RepeatMinutes is null && Activation.CanStart(reminder.Item);
+    public static bool Applies(DueReminder reminder) => reminder.RepeatMinutes is null && Activation.CardOffersStart(reminder.Item);
 
     /// <summary>Only the first reminder offers more time. The follow-up is the last one.</summary>
     public static bool OffersMoreTime(DueReminder reminder) => Applies(reminder) && !reminder.IsFollowUp;

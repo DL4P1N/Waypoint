@@ -120,6 +120,13 @@ public partial class ReminderWindow : Window, ICornerCard
 
         Details.Text = DetailLine(reminder, DateOnly.FromDateTime(DateTime.Now));
 
+        // The main action is filled with the accent, so it stands out from the rest. Enter presses it once the card
+        // has been brought forward.
+        if (MainButton is { } main)
+        {
+            main.IsDefault = true;
+        }
+
         CornerCards.Track(this);
         Kind.ToolTip = CornerCards.KeyHint;
         System.Windows.Automation.AutomationProperties.SetHelpText(this, CornerCards.KeyHint);
@@ -132,6 +139,12 @@ public partial class ReminderWindow : Window, ICornerCard
             }
         };
     }
+
+    /// <summary>
+    /// Whether the card's Done finishes its item: repeating reminders, and reminders, tasks and deadlines (an
+    /// assignment's nudge from the calendar too). An exam's alert is only an alert, answered with Got it.
+    /// </summary>
+    public static bool FinishesItem(DueReminder reminder) => reminder.RepeatMinutes is not null || Activation.CardFinishesKind(reminder.Item.Kind);
 
     /// <summary>The card's main button: the first one on its row, the same as on Discord.</summary>
     public Button? MainButton => Buttons.Children.OfType<Button>().FirstOrDefault(button => button.Visibility == Visibility.Visible);
