@@ -231,6 +231,22 @@ public sealed class NoteJobsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_key_whose_job_failed_starts_a_new_one()
+    {
+        var jobs = Jobs();
+        var failed = jobs.Start(NoteJobKind.Notes, 7, _ => throw new IOException("made-up failure"), once: "pc-1:write")!.Id;
+        Assert.Equal(NoteJobOutcome.Failed, (await Finished(jobs, failed)).Kind());
+
+        var again = jobs.Start(NoteJobKind.Notes, 7, _ => Task.FromResult(Written()), once: "pc-1:write", out var given)!.Id;
+
+        Assert.False(given);
+        Assert.NotEqual(failed, again);
+        Assert.Equal(NoteJobOutcome.Succeeded, (await Finished(jobs, again)).Kind());
+        Assert.Equal(again, jobs.Start(NoteJobKind.Notes, 7, _ => Task.FromResult(Written()), once: "pc-1:write", out var givenBack)!.Id);
+        Assert.True(givenBack);
+    }
+
+    [Fact]
     public async Task A_key_whose_job_was_forgotten_starts_a_new_one()
     {
         var jobs = Jobs();

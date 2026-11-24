@@ -50,15 +50,27 @@ public sealed class NoteJobs
     /// Starts a job, or returns null when as many as allowed are already running, so the PC can try later.
     /// <paramref name="noteId"/> is the note it writes, when that's known at the start. With <paramref name="once"/>,
     /// the key the PC sent the start with, a job already started under it is given back instead of starting another,
-    /// so a start sent again after its answer was lost checks on the first.
+    /// so a start sent again after its answer was lost checks on the first. One whose job failed, was stopped, or is
+    /// gone starts a new one, as sending it fresh would.
     /// </summary>
-    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null)
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null) =>
+        Start(kind, noteId, work, once, out _);
+
+    /// <inheritdoc cref="Start(NoteJobKind, long?, Func{CancellationToken, Task{NoteJobState}}, string?)"/>
+    /// <param name="again">True when the job already started under <paramref name="once"/> was given back.</param>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once, out bool again)
     {
+        again = false;
         Sweep();
-        var seen = once is not null && _store.SentOnceAnswer(once) is { } kept ? kept : null;
-        if (seen is not null && StillKnown(seen) is { } already)
+        if (once is not null && _store.SentOnceAnswer(once) is { } kept)
         {
-            return already;
+            if (StillWorthChecking(kept) is { } already)
+            {
+                again = true;
+                return already;
+            }
+
+            _store.ForgetSentOnce(once);
         }
 
         if (!_running.Wait(0))
@@ -73,14 +85,12 @@ public sealed class NoteJobs
         _jobs[id] = job;
         try
         {
-            // A key whose job has since been forgotten starts a new one, as sending it fresh would.
-            var started = once is null || seen is not null
-                ? Add(_store)
-                : _store.Once(once, _utcNow(), Add);
+            var started = once is null ? Add(_store) : _store.Once(once, _utcNow(), Add);
             if (started.Id != id)
             {
                 // Started under the same key a moment ago, by the same start sent twice at once.
                 Forget(job);
+                again = true;
                 return started;
             }
         }
@@ -136,13 +146,16 @@ public sealed class NoteJobs
         };
     }
 
-    /// <summary>The job a kept start answered with, while it's still known here.</summary>
-    private NoteJobStarted? StillKnown(string json)
+    /// <summary>
+    /// The job a kept start answered with, while it's still running here or ran to the end, so checking on it tells
+    /// the PC something. One that failed, was stopped, was lost, or is gone is worth starting again instead.
+    /// </summary>
+    private NoteJobStarted? StillWorthChecking(string json)
     {
         try
         {
             return JsonSerializer.Deserialize<NoteJobStarted>(json, RemoteJson.Options) is { Id.Length: > 0 } job
-                && (_jobs.ContainsKey(job.Id) || _store.GetNoteJob(job.Id) is not null)
+                && (_jobs.ContainsKey(job.Id) || _store.GetNoteJob(job.Id) is { Outcome: NoteJobOutcome.Succeeded })
                     ? job
                     : null;
         }

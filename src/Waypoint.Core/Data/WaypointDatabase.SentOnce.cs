@@ -28,22 +28,40 @@ public sealed partial class WaypointDatabase
     /// what it answered under the key in the same write, so the change and its key land together or not at all. Seen
     /// again, it gives back that answer and does nothing.
     /// </summary>
-    public T Once<T>(string key, DateTime now, Func<WaypointDatabase, T> work)
+    public T Once<T>(string key, DateTime now, Func<WaypointDatabase, T> work) => Once(key, now, work, out _);
+
+    /// <inheritdoc cref="Once{T}(string, DateTime, Func{WaypointDatabase, T})"/>
+    /// <param name="again">True when the key had been seen, so the kept answer was given back and nothing was done.</param>
+    public T Once<T>(string key, DateTime now, Func<WaypointDatabase, T> work, out bool again)
     {
         lock (_root._sentOnce)
         {
-            return InOneWrite(write =>
+            var seen = false;
+            var answer = InOneWrite(write =>
             {
                 if (write.SentOnceAnswer(key) is { } kept)
                 {
+                    seen = true;
                     return JsonSerializer.Deserialize<T>(kept, RemoteJson.Options)!;
                 }
 
-                var answer = work(write);
-                write.KeepSentOnce(key, JsonSerializer.Serialize(answer, RemoteJson.Options), now);
-                return answer;
+                var done = work(write);
+                write.KeepSentOnce(key, JsonSerializer.Serialize(done, RemoteJson.Options), now);
+                return done;
             });
+            again = seen;
+            return answer;
         }
+    }
+
+    /// <summary>Forgets a key, so the same sent again is done anew, such as a job start whose job failed or is gone.</summary>
+    public void ForgetSentOnce(string key)
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM sent_once WHERE key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        command.ExecuteNonQuery();
     }
 
     /// <summary>The answer kept for <paramref name="key"/>, as JSON, or null if it hasn't been seen or was forgotten.</summary>

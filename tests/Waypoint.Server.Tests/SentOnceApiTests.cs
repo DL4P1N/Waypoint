@@ -98,6 +98,35 @@ public sealed class SentOnceApiTests : IDisposable
     }
 
     [Fact]
+    public async Task The_answer_says_whether_a_change_was_done_now_or_only_answered_again()
+    {
+        using var http = Paired();
+        var expense = new ExpenseRequest("Made-up bakery", 450, null, Today);
+
+        using var first = await Post(http, "api/budget/expenses", expense, "pc-1:h");
+        using var again = await Post(http, "api/budget/expenses", expense, "pc-1:h");
+        using var none = await Post(http, "api/budget/expenses", expense, once: null);
+
+        Assert.Equal(ServerClient.OnceDone, first.Headers.GetValues(ServerClient.OnceHeader).Single());
+        Assert.Equal(ServerClient.OnceAgain, again.Headers.GetValues(ServerClient.OnceHeader).Single());
+        Assert.False(none.Headers.Contains(ServerClient.OnceHeader));
+    }
+
+    [Fact]
+    public async Task A_dose_sent_again_with_the_same_key_is_answered_as_before()
+    {
+        using var http = Paired();
+        var item = Database.AddByHand(new HandAddedItem(ItemKind.Task, "Made-up vitamin", null), DateTime.Now).Item!;
+
+        var took = await (await Post(http, "api/items/took", new ItemRequest(item), "pc-1:i")).Content.ReadAsStringAsync();
+        using var again = await Post(http, "api/items/took", new ItemRequest(item), "pc-1:i");
+
+        Assert.Equal(took, await again.Content.ReadAsStringAsync());
+        Assert.Equal(ServerClient.OnceAgain, again.Headers.GetValues(ServerClient.OnceHeader).Single());
+        Assert.NotNull(Database.SentOnceAnswer("pc-1:i"));
+    }
+
+    [Fact]
     public async Task The_same_expense_with_a_new_key_or_none_is_added_again()
     {
         using var http = Paired();

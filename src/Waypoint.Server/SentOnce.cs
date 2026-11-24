@@ -17,7 +17,24 @@ public static class SentOnce
     public static string? Key(HttpContext context) =>
         context.Request.Headers[ServerClient.OnceHeader].ToString().Trim() is { Length: > 0 and <= MaxKey } key ? key : null;
 
-    /// <summary>Does <paramref name="work"/> once per key, on the database it's handed, which is the write keeping the key.</summary>
-    public static T Run<T>(HttpContext context, WaypointDatabase database, Func<WaypointDatabase, T> work) =>
-        Key(context) is { } key ? database.Once(key, DateTime.Now, work) : work(database);
+    /// <summary>
+    /// Does <paramref name="work"/> once per key, on the database it's handed, which is the write keeping the key. The
+    /// answer says in the same header whether it was done now or only answered again, which also tells the PC this
+    /// server keeps changes once.
+    /// </summary>
+    public static T Run<T>(HttpContext context, WaypointDatabase database, Func<WaypointDatabase, T> work)
+    {
+        if (Key(context) is not { } key)
+        {
+            return work(database);
+        }
+
+        var answer = database.Once(key, DateTime.Now, work, out var again);
+        Tell(context, again);
+        return answer;
+    }
+
+    /// <summary>Says whether a change sent once was done now or only answered again.</summary>
+    public static void Tell(HttpContext context, bool again) =>
+        context.Response.Headers[ServerClient.OnceHeader] = again ? ServerClient.OnceAgain : ServerClient.OnceDone;
 }

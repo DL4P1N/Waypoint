@@ -55,6 +55,23 @@ public sealed class ServerNotes
     public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null) =>
         _jobs.Start(kind, noteId, work, once);
 
+    /// <summary>The same, for a start the PC sent with a key, saying in the answer whether it was started now or given back.</summary>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, HttpContext context)
+    {
+        if (SentOnce.Key(context) is not { } once)
+        {
+            return _jobs.Start(kind, noteId, work);
+        }
+
+        var started = _jobs.Start(kind, noteId, work, once, out var again);
+        if (started is not null)
+        {
+            SentOnce.Tell(context, again);
+        }
+
+        return started;
+    }
+
     public NoteJobState State(string id) => _jobs.State(id);
 
     public void Stop(string id) => _jobs.Stop(id);
@@ -161,7 +178,7 @@ public static class NotesRoutes
         {
             var data = notes.Value.Data;
             return Started(notes.Value.Start(NoteJobKind.Notes, id, async stop =>
-                new NoteJobState(Done: true, Notes: await data.WriteNotesAsync(id, request.Request, request.ReplaceEdits, DateTime.Now, request.Marks, stop)), SentOnce.Key(context)));
+                new NoteJobState(Done: true, Notes: await data.WriteNotesAsync(id, request.Request, request.ReplaceEdits, DateTime.Now, request.Marks, stop)), context));
         });
         group.MapPost("/{id:long}/written", (long id, WrittenNotes written) => notes.Value.Data.SaveWrittenAnyway(id, written, DateTime.Now));
         group.MapGet("/jobs/{job}", (string job) => notes.Value.State(job));
@@ -209,7 +226,7 @@ public static class NotesRoutes
         {
             var data = notes.Value.Data;
             return Started(notes.Value.Start(NoteJobKind.Study, null, async stop =>
-                new NoteJobState(Done: true, Study: await data.MakeStudyAsync(request.Exam, request.FolderId, request.ReplaceEdits, DateTime.Now, stop)), SentOnce.Key(context)));
+                new NoteJobState(Done: true, Study: await data.MakeStudyAsync(request.Exam, request.FolderId, request.ReplaceEdits, DateTime.Now, stop)), context));
         });
         group.MapPost("/{id:long}/study-anyway", (long id, MarkdownRequest request) => notes.Value.Data.SaveStudyAnyway(id, request.Markdown, DateTime.Now));
     }
