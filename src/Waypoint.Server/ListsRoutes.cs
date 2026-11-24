@@ -24,9 +24,14 @@ public static class ListsRoutes
             return Results.NoContent();
         });
         api.MapPost("/lists/delete", (NameRequest request, WaypointServer server) => new TextValue(Lists(server).DeleteList(request.Name, DateTime.Now)));
-        api.MapPost("/lists/entries", (ListEntryRequest request, WaypointServer server) =>
+        // Added once per key the PC sent it with.
+        api.MapPost("/lists/entries", (ListEntryRequest request, HttpContext context, WaypointServer server) =>
         {
-            Lists(server).AddListEntry(request.List, request.Text, DateTime.Now);
+            SentOnce.Run(context, server.Database, database =>
+            {
+                new LocalListsData(database).AddListEntry(request.List, request.Text, DateTime.Now);
+                return true;
+            });
             return Results.NoContent();
         });
         api.MapPost("/lists/entries/done", (EntryDoneRequest request, WaypointServer server) =>

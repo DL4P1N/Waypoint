@@ -52,8 +52,29 @@ public sealed class ServerNotes
     /// <summary>How many notes or practice questions are written at once. Each is a claude -p, which is slow and heavy.</summary>
     public const int MaxRunning = 2;
 
-    /// <summary>Starts a job, or returns null when <see cref="MaxRunning"/> are already running, so the PC can try later.</summary>
-    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work) => _jobs.Start(kind, noteId, work);
+    /// <summary>
+    /// Starts a job, or returns null when <see cref="MaxRunning"/> are already running, so the PC can try later. With
+    /// <paramref name="once"/>, a job already started under it is given back instead.
+    /// </summary>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null) =>
+        _jobs.Start(kind, noteId, work, once);
+
+    /// <summary>The same, for a start the PC sent with a key, saying in the answer whether it was started now or given back.</summary>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, HttpContext context)
+    {
+        if (SentOnce.Key(context) is not { } once)
+        {
+            return _jobs.Start(kind, noteId, work);
+        }
+
+        var started = _jobs.Start(kind, noteId, work, once, out var again);
+        if (started is not null)
+        {
+            SentOnce.Tell(context, again);
+        }
+
+        return started;
+    }
 
     public NoteJobState State(string id) => _jobs.State(id);
 
@@ -157,11 +178,11 @@ public static class NotesRoutes
             notes.Value.Data.StartForRecording(request.FileName, request.PickedFolderId, request.FolderPicked, request.At, request.Title));
         group.MapPost("/{id:long}/transcript", (long id, TranscriptRequest request) =>
             notes.Value.Data.AttachTranscriptOnce(id, request.RecordingName, request.Transcript, request.TimestampsJson, DateTime.Now, request.ClientId));
-        group.MapPost("/{id:long}/write", (long id, WriteNotesRequest request) =>
+        group.MapPost("/{id:long}/write", (long id, WriteNotesRequest request, HttpContext context) =>
         {
             var data = notes.Value.Data;
             return Started(notes.Value.Start(NoteJobKind.Notes, id, async stop =>
-                new NoteJobState(Done: true, Notes: await data.WriteNotesAsync(id, request.Request, request.ReplaceEdits, DateTime.Now, request.Marks, stop))));
+                new NoteJobState(Done: true, Notes: await data.WriteNotesAsync(id, request.Request, request.ReplaceEdits, DateTime.Now, request.Marks, stop)), context));
         });
         group.MapPost("/{id:long}/written", (long id, WrittenNotes written) => notes.Value.Data.SaveWrittenAnyway(id, written, DateTime.Now));
         group.MapGet("/jobs/{job}", (string job) => notes.Value.State(job));
@@ -205,11 +226,11 @@ public static class NotesRoutes
             ParseDay(today) is { } day ? Results.Ok(notes.Value.Data.ExamsFor(course, day)) : Results.BadRequest());
         group.MapGet("/{id:long}/study-exam", (long id, string today) =>
             ParseDay(today) is { } day ? Results.Ok(new Found<StudyExam>(notes.Value.Data.ExamForNote(id, day))) : Results.BadRequest());
-        group.MapPost("/study", (StudyRequest request) =>
+        group.MapPost("/study", (StudyRequest request, HttpContext context) =>
         {
             var data = notes.Value.Data;
             return Started(notes.Value.Start(NoteJobKind.Study, null, async stop =>
-                new NoteJobState(Done: true, Study: await data.MakeStudyAsync(request.Exam, request.FolderId, request.ReplaceEdits, DateTime.Now, stop))));
+                new NoteJobState(Done: true, Study: await data.MakeStudyAsync(request.Exam, request.FolderId, request.ReplaceEdits, DateTime.Now, stop)), context));
         });
         group.MapPost("/{id:long}/study-anyway", (long id, MarkdownRequest request) => notes.Value.Data.SaveStudyAnyway(id, request.Markdown, DateTime.Now));
     }

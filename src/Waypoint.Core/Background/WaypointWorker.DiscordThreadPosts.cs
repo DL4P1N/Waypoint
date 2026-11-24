@@ -120,11 +120,18 @@ public sealed partial class WaypointWorker
     private static bool IsBots(DiscordBridge discord, string? owner) =>
         discord.BotUserId is { } bot ? owner == bot : owner != discord.OwnerUserId;
 
-    /// <summary>An older post that a new one took over from says where things are now, and is archived.</summary>
+    /// <summary>
+    /// An older post that a new one took over from says where things are now, and is archived. What it says is noted
+    /// before it's sent, with Discord's nonce, so a try Discord took without the answer coming back isn't added twice.
+    /// It's tried only here, so its note goes once it's tried, and one a crash left is let go by a later round.
+    /// </summary>
     private async Task PointToNewPostAsync(DiscordBridge discord, DiscordThreadRow old, string moved, string kind)
     {
         var what = kind == WaypointDatabase.ThreadNote ? "This note" : "This list";
-        var (_, outcome) = await discord.SendInThreadAsync(old.Thread, DiscordText.Notice("Moved", $"{what} has a new post now: <#{moved}>. Anything typed here still goes to it.", CardTone.Reminder));
+        var card = DiscordText.Notice("Moved", $"{what} has a new post now: <#{moved}>. Anything typed here still goes to it.", CardTone.Reminder);
+        var sendKey = $"{MovedSends}{old.Thread}:{moved}";
+        var (_, outcome) = await SendOnceInPostAsync(discord, old.Thread, sendKey, card);
+        _database.FinishDiscordSend(sendKey);
         if (outcome == ThreadChange.Missing)
         {
             _database.MarkDiscordThreadGone(old.Thread);
@@ -132,6 +139,49 @@ public sealed partial class WaypointWorker
         }
 
         await discord.EditThreadAsync(old.Thread, archived: true);
+    }
+
+    /// <summary>How the "Moved" message in a replaced post is noted while it's sent.</summary>
+    private const string MovedSends = "moved:";
+
+    /// <summary>How the "Not added" message in a post being retired is noted until the post is retired.</summary>
+    private const string RetireSends = "retire:";
+
+    /// <summary>
+    /// One of Waypoint's messages in a post, sent once under <paramref name="sendKey"/>: one already sent under it is
+    /// given back, and one tried before without an answer is looked for first and sent again only if it isn't there.
+    /// Unknown, with no message, while the post can't be read to tell.
+    /// </summary>
+    private async Task<(string? Id, ThreadChange Outcome)> SendOnceInPostAsync(DiscordBridge discord, string thread, string sendKey, DiscordCard card)
+    {
+        var send = _database.BeginDiscordSend(sendKey, thread, _clock());
+        if (send.MessageId is { } sent)
+        {
+            return (sent, ThreadChange.Done);
+        }
+
+        if (!send.Fresh)
+        {
+            var search = await FindUnkeptAsync(discord, thread, send.Nonce, card, after: DiscordBridge.SnowflakeAt(send.StartedAt - TimeSpan.FromMinutes(1)));
+            if (search.Result == SentLookup.Unknown)
+            {
+                return (null, ThreadChange.Failed);
+            }
+
+            if (search.MessageId is { } found)
+            {
+                _database.SetDiscordSendMessage(sendKey, found);
+                return (found, ThreadChange.Done);
+            }
+        }
+
+        var (id, outcome) = await discord.SendInThreadAsync(thread, card, send.Nonce);
+        if (id is not null)
+        {
+            _database.SetDiscordSendMessage(sendKey, id);
+        }
+
+        return (id, outcome);
     }
 
     /// <summary>
@@ -187,10 +237,20 @@ public sealed partial class WaypointWorker
         }
 
         string? last = after.LastOrDefault()?.Id;
+        var sendKey = RetireSends + row.Thread + ":not-added";
         if (unread)
         {
-            var (said, _) = await discord.SendInThreadAsync(row.Thread, DiscordText.Notice("Not added", $"{why}, so what was typed here wasn't added to it. It stays in this post.", CardTone.Attention));
-            last = said ?? last;
+            // Sent once, so a post that can't be archived just now and is retired on a later round says it only once.
+            var card = DiscordText.Notice("Not added", $"{why}, so what was typed here wasn't added to it. It stays in this post.", CardTone.Attention);
+            var (said, outcome) = await SendOnceInPostAsync(discord, row.Thread, sendKey, card);
+            if (said is null && outcome == ThreadChange.Failed && _database.GetDiscordSend(sendKey) is { } tried && _clock() - tried.StartedAt < NoticeGiveUp)
+            {
+                // It didn't go, or whether it went can't be told yet, so the post waits for a later round, which looks
+                // for it before sending it again. After a day the post is retired without it.
+                return;
+            }
+
+            last = said is not null && IsNewer(said, last) ? said : last;
         }
 
         var archived = await discord.EditThreadAsync(row.Thread, archived: true);
@@ -199,13 +259,24 @@ public sealed partial class WaypointWorker
             return;
         }
 
-        if (last is not null)
+        _database.InOneWrite(write =>
         {
-            _database.AdvanceDiscordThread(row.Thread, last);
-        }
+            if (last is not null)
+            {
+                write.AdvanceDiscordThread(row.Thread, last);
+            }
 
-        _database.SetDiscordThreadState(row.Thread, archived == ThreadChange.Missing ? WaypointDatabase.PostGone : WaypointDatabase.PostRetired);
+            write.SetDiscordThreadState(row.Thread, archived == ThreadChange.Missing ? WaypointDatabase.PostGone : WaypointDatabase.PostRetired);
+            write.FinishDiscordSend(sendKey);
+        });
     }
+
+    /// <summary>Whether one message ID is newer than another, or there's no other.</summary>
+    private static bool IsNewer(string id, string? than) =>
+        than is null
+        || (ulong.TryParse(id, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var one)
+            && ulong.TryParse(than, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var other)
+            && one > other);
 
     /// <summary>Every message in a post after a point, a page at a time, or null when it can't be read.</summary>
     private static async Task<List<ThreadEntry>?> ReadAllAfterAsync(DiscordBridge discord, string thread, string? after)

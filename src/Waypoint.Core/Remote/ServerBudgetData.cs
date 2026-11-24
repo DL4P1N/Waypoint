@@ -19,8 +19,18 @@ public sealed class ServerBudgetData(ServerClient server) : IBudgetData
 
     public BudgetPage GetPage(DateOnly month, DateOnly today) => server.GetOr($"api/budget/page/{BudgetPage.MonthKey(month)}", BudgetPage.Empty);
 
+    /// <summary>
+    /// Sent once, so saving the same again after the answer was lost doesn't add it twice, and the answer then says
+    /// so, for whoever meant two. The same for a repayment and pay received.
+    /// </summary>
     public OpReply AddExpense(string title, long? cents, string? category, DateOnly date, DateTime now) =>
-        server.Send<OpReply>(Post, "api/budget/expenses", new ExpenseRequest(title, cents, category, date));
+        Once("api/budget/expenses", new ExpenseRequest(title, cents, category, date));
+
+    private OpReply Once(string path, object body)
+    {
+        var reply = server.SendOnce<OpReply>(Post, path, body, null, out var again);
+        return again ? reply with { Text = ServerClient.SavedOnce(reply.Text) } : reply;
+    }
 
     public string ApplyBudgetOp(BudgetOp op, DateOnly today) => server.Send<TextValue>(Post, "api/budget/ops", op).Value ?? "";
 
@@ -58,7 +68,7 @@ public sealed class ServerBudgetData(ServerClient server) : IBudgetData
 
     public OpReply MarkPurchaseOneOff(long itemId, bool oneOff) => server.Send<OpReply>(Post, $"api/budget/purchases/{itemId}/one-off", new FlagValue(oneOff));
 
-    public OpReply RecordRepayment(long itemId, long? cents) => server.Send<OpReply>(Post, $"api/budget/purchases/{itemId}/repayment", new AmountRequest(cents));
+    public OpReply RecordRepayment(long itemId, long? cents) => Once($"api/budget/purchases/{itemId}/repayment", new AmountRequest(cents));
 
     public DeletedItem? DeletePurchase(long itemId, DateTime now) => server.Send<DeletedItem?>(Post, $"api/budget/purchases/{itemId}/delete");
 
@@ -67,7 +77,7 @@ public sealed class ServerBudgetData(ServerClient server) : IBudgetData
 
     public OpReply ResolveWaitItem(long id, string decision) => server.Send<OpReply>(Post, $"api/budget/waits/{id}/resolve", new TextValue(decision));
 
-    public OpReply ConfirmPayReceived(long? cents, DateOnly today) => server.Send<OpReply>(Post, "api/budget/pay-received", new AmountRequest(cents));
+    public OpReply ConfirmPayReceived(long? cents, DateOnly today) => Once("api/budget/pay-received", new AmountRequest(cents));
 
     public OpReply SetDefaultWaitHours(string hours) => server.Send<OpReply>(Post, "api/budget/wait-hours", new TextValue(hours));
 

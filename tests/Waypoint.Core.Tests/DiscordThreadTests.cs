@@ -128,6 +128,9 @@ public sealed partial class DiscordThreadTests : IDisposable
         /// <summary>Messages whose deletes fail, the way an outage does.</summary>
         public HashSet<string> FailingDeletes { get; } = [];
 
+        /// <summary>Whether archiving a post fails, the way an outage does.</summary>
+        public bool FailingArchives { get; set; }
+
         /// <summary>Every name a post was made with, to check none is cut in half.</summary>
         public List<string> PostNames { get; } = [];
 
@@ -281,6 +284,8 @@ public sealed partial class DiscordThreadTests : IDisposable
 
             switch (parts)
             {
+                case [_, _] when method == HttpMethod.Patch && FailingArchives && JsonNode.Parse(body)!["archived"]?.GetValue<bool>() == true:
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("{}") };
                 case [_, _] when method == HttpMethod.Patch && !CanManageThreads && JsonNode.Parse(body)!["archived"]?.GetValue<bool>() == true:
                 case [_, _] when method == HttpMethod.Delete && !CanManageThreads:
                     return new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("""{"code":50013}""") };

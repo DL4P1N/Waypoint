@@ -210,7 +210,9 @@ public static class Api
             server.Database.SetDone(request.Item, request.Done);
             return Results.NoContent();
         });
-        api.MapPost("/items/took", (ItemRequest request, WaypointServer server) => server.Database.TakeDose(request.Item, DateTime.Now));
+        // A dose taken is counted once per key the PC sent it with.
+        api.MapPost("/items/took", (ItemRequest request, HttpContext context, WaypointServer server) =>
+            SentOnce.Run(context, server.Database, database => database.TakeDose(request.Item, DateTime.Now)));
         api.MapPost("/items/dose", (DoseRequest request, WaypointServer server) => new FlagValue(server.Database.SetDose(request.Item, request.Dose)));
         api.MapPost("/items/moved", (ItemRequest request, WaypointServer server) => new FlagValue(server.Database.IsMovedFromFeed(request.Item)));
         api.MapPost("/items/delete", (ItemRequest request, WaypointServer server) => server.Database.DeleteItem(request.Item, DateTime.Now));

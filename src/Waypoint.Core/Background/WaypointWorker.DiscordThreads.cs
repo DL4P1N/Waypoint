@@ -401,9 +401,28 @@ public sealed partial class WaypointWorker
                     return;
                 }
 
-                foreach (var later in parts.Skip(index + 1))
+                // Taken away from the last back, each dropped from the row once it's gone, so one whose delete fails
+                // stays in the row and is tried again on a later round, rather than left in the post for good. One
+                // that still can't be taken away after a day is let go and left in the post, as a stray part is, so
+                // the missing part is sent at last.
+                for (var later = parts.Count - 1; later > index; later--)
                 {
-                    await discord.DeleteAsync(row.Thread, later.Message);
+                    var dropKey = $"{PartDropSends}{row.Thread}:{parts[later].Message}";
+                    if (await discord.DeleteInThreadAsync(row.Thread, parts[later].Message))
+                    {
+                        _database.FinishDiscordSend(dropKey);
+                        parts.RemoveAt(later);
+                        continue;
+                    }
+
+                    if (_clock() - _database.BeginDiscordSend(dropKey, row.Thread, _clock()).StartedAt < NoticeGiveUp)
+                    {
+                        _database.SetDiscordThreadParts(row.Thread, parts);
+                        return;
+                    }
+
+                    _database.FinishDiscordSend(dropKey);
+                    parts.RemoveAt(later);
                 }
 
                 parts.RemoveRange(index, parts.Count - index);
@@ -538,11 +557,12 @@ public sealed partial class WaypointWorker
     /// <summary>
     /// A part or a notice noted for a post that's no longer live, such as one retired or made again, is let go, since
     /// that post is never brought up to date again. What's in it stays as it is. A notice that never went out shows
-    /// on this PC first, once.
+    /// on this PC first, once. A notice already in such a post is forgotten too, so it never keeps the rounds coming.
     /// </summary>
     private void ForgetSendsOfRetiredPosts()
     {
-        foreach (var send in _database.GetDiscordSends("part:").Concat(_database.GetDiscordSends(NoticeSends)))
+        _database.ForgetDiscordNoticesOfEndedPosts();
+        foreach (var send in new[] { "part:", NoticeSends, MovedSends, RetireSends, PartDropSends }.SelectMany(_database.GetDiscordSends))
         {
             var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
             if (thread is null || _database.FindDiscordThread(thread) is { Live: true })
@@ -560,6 +580,9 @@ public sealed partial class WaypointWorker
             }
         }
     }
+
+    /// <summary>How a later part that couldn't be taken away is noted, with when that was first tried, until it's gone or let go.</summary>
+    private const string PartDropSends = "partdrop:";
 
     /// <summary>How the Edit button on one part of a note starts, whatever the part says.</summary>
     private static string PartEditPrefix(long noteId, int index) =>

@@ -79,14 +79,66 @@ public sealed class ServerAddressTests
         Assert.Equal(1, lookups);
     }
 
+    /// <summary>The message of an error and of what's inside it, since the connection's own error comes wrapped.</summary>
+    private static string Said(Exception? error) =>
+        error is null ? "" : $"{error.Message} {Said(error.InnerException)}";
+
     [Fact]
-    public async Task A_tailnet_name_is_not_looked_up_at_all()
+    public async Task A_tailnet_name_that_points_outside_Tailscale_never_gets_the_token()
     {
-        var client = Guarded("http://optiplex.tailnet-name.ts.net:5280/", (_, _) => throw new InvalidOperationException("looked up"));
-        client.Timeout = TimeSpan.FromSeconds(2);
+        var client = Guarded("http://optiplex.tailnet-name.ts.net:5280/", (_, _) => Task.FromResult(new[] { IPAddress.Parse("203.0.113.9") }));
+        client.Timeout = TimeSpan.FromSeconds(5);
 
-        var error = await Record.ExceptionAsync(() => Send(client));
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => Send(client));
 
-        Assert.IsNotType<InvalidOperationException>(error);
+        Assert.Contains("won't send the pairing token", Said(error));
+    }
+
+    [Theory]
+    [InlineData("100.101.2.3", "100.100.1.2", true)]
+    [InlineData("127.0.0.1", "127.0.0.1", true)]
+    [InlineData("::1", "::1", true)]
+    [InlineData("::ffff:100.101.2.3", "::ffff:100.100.1.2", true)]
+    [InlineData("fd7a:115c:a1e0::5", "fd7a:115c:a1e0::9", true)]
+    // Tailscale down: the Tailscale address was reached out the default route, from the home network.
+    [InlineData("192.168.1.20", "100.100.1.2", false)]
+    [InlineData("::ffff:192.168.1.20", "::ffff:100.100.1.2", false)]
+    [InlineData("100.101.2.3", "203.0.113.9", false)]
+    public void A_connection_carries_the_token_only_when_both_ends_are_this_PC_or_Tailscale(string local, string remote, bool vetted) =>
+        Assert.Equal(vetted, ServerAddress.IsVetted(new IPEndPoint(IPAddress.Parse(local), 50000), new IPEndPoint(IPAddress.Parse(remote), 5280)));
+
+    [Fact]
+    public async Task Plain_http_to_this_PC_still_goes_through_the_checked_connection()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var answered = Task.Run(async () =>
+        {
+            using var accepted = await listener.AcceptTcpClientAsync();
+            var stream = accepted.GetStream();
+            var buffer = new byte[4096];
+            var heard = "";
+            while (!heard.Contains("\r\n\r\n"))
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                heard += System.Text.Encoding.ASCII.GetString(buffer, 0, read);
+            }
+
+            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
+            return heard;
+        });
+        using var client = ServerAddress.Client(new Uri($"http://127.0.0.1:{port}/"));
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "made-up-token");
+
+        using var response = await Send(client);
+
+        Assert.Equal("ok", await response.Content.ReadAsStringAsync());
+        Assert.Contains("made-up-token", await answered);
     }
 }

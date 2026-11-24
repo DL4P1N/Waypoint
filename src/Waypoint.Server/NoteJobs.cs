@@ -48,30 +48,64 @@ public sealed class NoteJobs
 
     /// <summary>
     /// Starts a job, or returns null when as many as allowed are already running, so the PC can try later.
-    /// <paramref name="noteId"/> is the note it writes, when that's known at the start.
+    /// <paramref name="noteId"/> is the note it writes, when that's known at the start. With <paramref name="once"/>,
+    /// the key the PC sent the start with, a job already started under it is given back instead of starting another,
+    /// so a start sent again after its answer was lost checks on the first. One whose job failed, was stopped, or is
+    /// gone starts a new one, as sending it fresh would.
     /// </summary>
-    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work)
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once = null) =>
+        Start(kind, noteId, work, once, out _);
+
+    /// <inheritdoc cref="Start(NoteJobKind, long?, Func{CancellationToken, Task{NoteJobState}}, string?)"/>
+    /// <param name="again">True when the job already started under <paramref name="once"/> was given back.</param>
+    public NoteJobStarted? Start(NoteJobKind kind, long? noteId, Func<CancellationToken, Task<NoteJobState>> work, string? once, out bool again)
     {
+        again = false;
         Sweep();
+        if (once is not null && _store.SentOnceAnswer(once) is { } kept)
+        {
+            if (StillWorthChecking(kept) is { } already)
+            {
+                again = true;
+                return already;
+            }
+
+            _store.ForgetSentOnce(once);
+        }
+
         if (!_running.Wait(0))
         {
             return null;
         }
 
+        // Known here as running before it's kept, so from the moment anyone can learn of it, it's never taken for one
+        // kept as running whose ending couldn't be kept.
         var id = Guid.NewGuid().ToString("N");
+        var job = new Job(id, _newStop());
+        _jobs[id] = job;
         try
         {
-            _store.AddNoteJob(id, kind, noteId, _utcNow());
+            var started = once is null ? Add(_store) : _store.Once(once, _utcNow(), Add);
+            if (started.Id != id)
+            {
+                // Started under the same key a moment ago, by the same start sent twice at once.
+                Forget(job);
+                again = true;
+                return started;
+            }
         }
         catch
         {
-            _running.Release();
+            Forget(job);
             throw;
         }
 
-        // Known as running before it starts, so a job that ends at once is never missed while it's kept.
-        var job = new Job(id, _newStop());
-        _jobs[id] = job;
+        NoteJobStarted Add(WaypointDatabase store)
+        {
+            store.AddNoteJob(id, kind, noteId, _utcNow());
+            return new NoteJobStarted(id);
+        }
+
         var token = job.Token;
         var task = Task.Run(() => work(token), CancellationToken.None);
 
@@ -81,20 +115,54 @@ public sealed class NoteJobs
         return new NoteJobStarted(id);
     }
 
+    /// <summary>A job made but never run, let go of again.</summary>
+    private void Forget(Job job)
+    {
+        _jobs.TryRemove(job.Id, out _);
+        job.Release();
+        _running.Release();
+    }
+
     /// <summary>
-    /// How a job stands. One that ended is answered from the database, as often as asked, until it's swept an hour
-    /// after it ended. One the server doesn't know is lost.
+    /// How a job stands. One that ended is answered from the database, as often as asked, for an hour after it ended.
+    /// One the server doesn't know is lost, and so is one kept as running that isn't running here: how it ended
+    /// couldn't be kept. Asking only reads, so the PC checking every few seconds never writes; finished jobs are
+    /// swept as new ones start.
     /// </summary>
     public NoteJobState State(string id)
     {
-        Sweep();
         if (_jobs.ContainsKey(id))
         {
             // Still running, or ended a moment ago and not kept yet, so the PC asks again.
             return NoteJobState.Running();
         }
 
-        return _store.GetNoteJob(id) is { } kept ? FromStore(kept) : NoteJobState.Lost();
+        return _store.GetNoteJob(id) switch
+        {
+            null => NoteJobState.Lost(),
+            { Outcome: NoteJobOutcome.Running } => NoteJobState.Lost(),
+            { FinishedAt: { } ended } when ended < _utcNow() - KeepFinished => NoteJobState.Lost(),
+            { } kept => FromStore(kept),
+        };
+    }
+
+    /// <summary>
+    /// The job a kept start answered with, while it's still running here or ran to the end, so checking on it tells
+    /// the PC something. One that failed, was stopped, was lost, or is gone is worth starting again instead.
+    /// </summary>
+    private NoteJobStarted? StillWorthChecking(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<NoteJobStarted>(json, RemoteJson.Options) is { Id.Length: > 0 } job
+                && (_jobs.ContainsKey(job.Id) || _store.GetNoteJob(job.Id) is { Outcome: NoteJobOutcome.Succeeded })
+                    ? job
+                    : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Stops a job. A job that already ended, or one that isn't known, is left as it is.</summary>
@@ -148,15 +216,14 @@ public sealed class NoteJobs
         task.IsCanceled || task.Exception?.GetBaseException() is OperationCanceledException;
 
     /// <summary>
-    /// What the PC is told from a kept job. A job that ran to the end is told with what came of it. A job cut off by a
-    /// restart is lost and marked interrupted, which every PC tells as the server restarting while writing them.
+    /// What the PC is told from a kept job that ended. A job that ran to the end is told with what came of it. A job
+    /// cut off by a restart is lost and marked interrupted, which every PC tells as the server restarting while
+    /// writing them.
     /// </summary>
     private static NoteJobState FromStore(NoteJobRecord kept)
     {
         switch (kept.Outcome)
         {
-            case NoteJobOutcome.Running:
-                return NoteJobState.Running();
             case NoteJobOutcome.Succeeded:
                 var result = Result(kept.Result);
                 return new NoteJobState(Done: true, Notes: result?.Notes, Study: result?.Study, Outcome: NoteJobOutcome.Succeeded);
@@ -200,7 +267,8 @@ public sealed class NoteJobs
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            // The job is then told as lost. What it saved to the note stays saved.
+            // The job is then told as lost, since it's kept as running but no longer runs here. What it saved to the
+            // note stays saved.
             _logger.LogError(exception, "How a notes job ended couldn't be kept.");
         }
         finally

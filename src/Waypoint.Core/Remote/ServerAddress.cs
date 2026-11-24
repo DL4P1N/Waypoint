@@ -39,56 +39,130 @@ public static class ServerAddress
     private static bool IsTailnetName(string host) => host.EndsWith(".ts.net", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// A client for the server. Where the address is a plain http host name, every send first checks, off the calling
-    /// thread, that the name resolves only to this machine or Tailscale addresses, so the token never goes anywhere
-    /// else, and a name that can't be looked up just now sends nothing and is tried again on the next send.
+    /// A client for the server. Over plain http, every connection is checked before anything is sent on it: it has to
+    /// be to this machine or a Tailscale address, and go out from one, so with Tailscale down a Tailscale address
+    /// reached some other way never gets the token. Where the address is a host name, not .ts.net, every send first
+    /// checks, off the calling thread, that the name resolves only to such addresses, and a name that can't be looked
+    /// up just now sends nothing and is tried again on the next send. No proxy is used for plain http.
     /// </summary>
-    public static HttpClient Client(Uri baseAddress, Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null) =>
-        NeedsLookup(baseAddress)
-            ? new HttpClient(new LookupGuard(resolve ?? ((host, token) => Dns.GetHostAddressesAsync(host, token)))) { BaseAddress = baseAddress }
-            : new HttpClient { BaseAddress = baseAddress };
+    public static HttpClient Client(Uri baseAddress, Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null)
+    {
+        if (baseAddress.Scheme != Uri.UriSchemeHttp)
+        {
+            return new HttpClient { BaseAddress = baseAddress };
+        }
 
-    private sealed class LookupGuard(Func<string, CancellationToken, Task<IPAddress[]>> resolve) : DelegatingHandler(new HttpClientHandler())
+        var names = new Names(resolve ?? ((host, token) => Dns.GetHostAddressesAsync(host, token)));
+        var vetted = new SocketsHttpHandler { UseProxy = false, ConnectCallback = names.ConnectAsync };
+        return NeedsLookup(baseAddress)
+            ? new HttpClient(new LookupGuard(names, vetted)) { BaseAddress = baseAddress }
+            : new HttpClient(vetted) { BaseAddress = baseAddress };
+    }
+
+    /// <summary>
+    /// Whether a connection made for plain http may carry the token: both ends are this machine or Tailscale. A
+    /// Tailscale address reached from an address of another network went out some other way, such as the default
+    /// route with Tailscale down.
+    /// </summary>
+    internal static bool IsVetted(EndPoint? local, EndPoint? remote) =>
+        local is IPEndPoint from && remote is IPEndPoint to && IsThisMachineOrTailscale(from.Address) && IsThisMachineOrTailscale(to.Address);
+
+    /// <summary>What names resolved to, kept a few minutes once they were found wholly inside Tailscale.</summary>
+    private sealed class Names(Func<string, CancellationToken, Task<IPAddress[]>> resolve)
     {
         private static readonly TimeSpan KeepFor = TimeSpan.FromMinutes(5);
-        private readonly Dictionary<string, DateTime> _good = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (IPAddress[] Addresses, DateTime Until)> _good = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Where <paramref name="host"/> points: itself when it's an address, empty when it can't be looked up just now.</summary>
+        public async Task<IPAddress[]> FindAsync(string host, CancellationToken cancellationToken)
+        {
+            if (IPAddress.TryParse(host.Trim('[', ']'), out var literal))
+            {
+                return [literal];
+            }
+
+            lock (_good)
+            {
+                if (_good.TryGetValue(host, out var kept) && kept.Until > DateTime.UtcNow)
+                {
+                    return kept.Addresses;
+                }
+            }
+
+            IPAddress[] found;
+            try
+            {
+                // Off the caller's thread, since a name lookup can be slow and some resolvers block.
+                found = await Task.Run(() => resolve(host, cancellationToken), cancellationToken).ConfigureAwait(false);
+            }
+            catch (SocketException)
+            {
+                found = [];
+            }
+
+            if (found.Length > 0 && found.All(IsThisMachineOrTailscale))
+            {
+                lock (_good)
+                {
+                    _good[host] = (found, DateTime.UtcNow + KeepFor);
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>Connects only to a vetted address, and lets the connection be used only if it's vetted at both ends.</summary>
+        public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+        {
+            var host = context.DnsEndPoint.Host;
+            var addresses = await FindAsync(host, cancellationToken).ConfigureAwait(false);
+            if (addresses.Length == 0)
+            {
+                throw new HttpRequestException($"Waypoint can't look up {host} right now, so it sent nothing. It will try again.");
+            }
+
+            if (!addresses.All(IsThisMachineOrTailscale))
+            {
+                throw new HttpRequestException(Outside(host));
+            }
+
+            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(addresses, context.DnsEndPoint.Port, cancellationToken).ConfigureAwait(false);
+                if (!IsVetted(socket.LocalEndPoint, socket.RemoteEndPoint))
+                {
+                    throw new HttpRequestException("Tailscale doesn't look connected on this PC, so Waypoint won't send the pairing token to the server another way over plain http. It will try again.");
+                }
+
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
+    }
+
+    private static string Outside(string host) =>
+        $"{host} points somewhere that isn't this PC or Tailscale, so Waypoint won't send the pairing token there over plain http. Use the Tailscale address or an https:// address.";
+
+    /// <summary>Checks a plain http host name before each send, so a name that points elsewhere says so plainly.</summary>
+    private sealed class LookupGuard(Names names, HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var host = request.RequestUri!.Host;
-            bool known;
-            lock (_good)
+            var found = await names.FindAsync(host, cancellationToken).ConfigureAwait(false);
+            if (found.Length == 0)
             {
-                known = _good.TryGetValue(host, out var until) && until > DateTime.UtcNow;
+                throw new HttpRequestException($"Waypoint can't look up {host} right now, so it sent nothing. It will try again.");
             }
 
-            if (!known)
+            if (!found.All(IsThisMachineOrTailscale))
             {
-                IPAddress[] found;
-                try
-                {
-                    // Off the caller's thread, since a name lookup can be slow and some resolvers block.
-                    found = await Task.Run(() => resolve(host, cancellationToken), cancellationToken).ConfigureAwait(false);
-                }
-                catch (System.Net.Sockets.SocketException)
-                {
-                    found = [];
-                }
-
-                if (found.Length == 0)
-                {
-                    throw new HttpRequestException($"Waypoint can't look up {host} right now, so it sent nothing. It will try again.");
-                }
-
-                if (!found.All(IsThisMachineOrTailscale))
-                {
-                    throw new HttpRequestException($"{host} points somewhere that isn't this PC or Tailscale, so Waypoint won't send the pairing token there over plain http. Use the Tailscale address or an https:// address.");
-                }
-
-                lock (_good)
-                {
-                    _good[host] = DateTime.UtcNow + KeepFor;
-                }
+                throw new HttpRequestException(Outside(host));
             }
 
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);

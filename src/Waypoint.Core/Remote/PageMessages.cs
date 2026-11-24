@@ -7,11 +7,14 @@ public static class PageMessages
 
     public const string CantRunYet = "Can't reach the server, so this has to wait until it's back.";
 
-    /// <summary>A pairing problem says so, since waiting won't fix it. Anything else is the server being away.</summary>
-    public static string CantChange(ServerUnavailableException away) => NotPaired(away) ? away.Message : CantChangeYet;
+    /// <summary>
+    /// A pairing problem says so, since waiting won't fix it, and so does a change the server didn't answer in time,
+    /// since it may have gone through. Anything else is the server being away.
+    /// </summary>
+    public static string CantChange(ServerUnavailableException away) => NotPaired(away) || away.TimedOut ? away.Message : CantChangeYet;
 
     /// <summary>The same for something run on the server, such as a backup or the notes export.</summary>
-    public static string CantRun(ServerUnavailableException away) => NotPaired(away) ? away.Message : CantRunYet;
+    public static string CantRun(ServerUnavailableException away) => NotPaired(away) || away.TimedOut ? away.Message : CantRunYet;
 
     private static bool NotPaired(ServerUnavailableException away) => away.Message.Contains("didn't accept this PC", StringComparison.Ordinal);
 }
