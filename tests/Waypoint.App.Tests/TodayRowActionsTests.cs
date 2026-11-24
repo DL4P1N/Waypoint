@@ -243,7 +243,7 @@ public sealed class TodayRowActionsTests
         ui.Pump();
 
         Assert.Equal("Call the dentist on Monday", Stored(ui, task.Id).Title);
-        Assert.Equal(TodayView.ChangedSince("Call the dentist"), BarText(view));
+        Assert.Equal("Call the dentist has changed since, so it was left as it is.", BarText(view));
     });
 
     [Fact]
