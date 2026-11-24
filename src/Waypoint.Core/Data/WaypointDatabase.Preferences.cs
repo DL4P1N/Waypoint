@@ -14,7 +14,7 @@ public sealed partial class WaypointDatabase : IPreferences
 
     public void SetPreference(string key, string value)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         WritePreference(connection, key, value);
     }
 

@@ -184,6 +184,33 @@ public sealed class OneWriteTests : IDisposable
     }
 
     [Fact]
+    public void A_single_statement_write_on_the_database_itself_inside_a_write_is_refused_at_once_and_reads_still_work()
+    {
+        _database.SetPreference("made_up_kept", "1");
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        string? read = null;
+        object? shift = "not read yet";
+
+        _database.InOneWrite(write =>
+        {
+            write.SetPreference("made_up_inside", "1");
+            Assert.Throws<InvalidOperationException>(() => _database.SetPreference("made_up_root", "1"));
+            Assert.Throws<InvalidOperationException>(() => _database.AddCapture("made up errand"));
+
+            // Reads on the database itself still work, as bedtime's look at the first shift does.
+            read = _database.GetPreference("made_up_kept");
+            shift = _database.GetFirstShift(new DateOnly(2030, 3, 12));
+        });
+
+        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.Equal("1", read);
+        Assert.Null(shift);
+        Assert.Equal("1", _database.GetPreference("made_up_inside"));
+        Assert.Null(_database.GetPreference("made_up_root"));
+        Assert.Empty(_database.GetPendingCaptures());
+    }
+
+    [Fact]
     public void A_writes_database_kept_after_the_write_is_over_fails_loudly()
     {
         WaypointDatabase? kept = null;

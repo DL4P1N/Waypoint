@@ -68,7 +68,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds a source to a note. Returns its id, or 0 if the note is gone.</summary>
     public long AddNoteSource(long noteId, string kind, string name, string text, DateTime now, string? filePath = null)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         return AddNoteSource(connection, noteId, kind, name, text, now, filePath);
     }
 

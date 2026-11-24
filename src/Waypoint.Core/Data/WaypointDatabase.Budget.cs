@@ -161,7 +161,7 @@ public sealed partial class WaypointDatabase
 
     public void SaveBudgetAccount(BudgetAccount account)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         SaveBudgetAccount(connection, account);
     }
 
