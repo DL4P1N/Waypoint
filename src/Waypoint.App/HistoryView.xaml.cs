@@ -5,6 +5,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Waypoint.Core;
 using Waypoint.Core.Capture;
@@ -36,6 +39,16 @@ public partial class HistoryView : UserControl
     private IHistoryData? _history;
     private Action _changed = null!;
     private bool _menuOpen;
+
+    /// <summary>How long after a delete the rows drawn again still take the keyboard to the row that took its place.</summary>
+    internal static readonly TimeSpan FocusAfterFor = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Where the keyboard goes once the rows are drawn again after a row it was on is deleted, and when that was. A
+    /// drawing that doesn't come soon, because reading failed or nothing changed, lets it go, so a much later one
+    /// never takes the keyboard from wherever it is by then.
+    /// </summary>
+    private (int Index, DateTime At)? _focusAfter;
 
     public HistoryView() => InitializeComponent();
 
@@ -99,6 +112,7 @@ public partial class HistoryView : UserControl
     {
         if (_history is null || (_menuOpen && !force))
         {
+            LetFocusAfterGo();
             return;
         }
 
@@ -110,10 +124,19 @@ public partial class HistoryView : UserControl
         var signature = $"{filter}\n{(rows.Count == 0 ? Column.SearchText.Trim() : "")}\n{string.Join('\n', rows.Select(row => $"{row.Entry.Id}\t{row.Title}\t{row.Details}\t{row.BoxVisibility}"))}";
         if (!_gate.ShouldRebuild(signature, busy: !force && Scroll.IsKeyboardFocusWithin))
         {
+            LetFocusAfterGo();
             return;
         }
 
         Entries.ItemsSource = rows;
+        if (_focusAfter is { } after)
+        {
+            _focusAfter = null;
+            if (DateTime.UtcNow - after.At < FocusAfterFor)
+            {
+                Dispatcher.BeginInvoke(() => FocusRowAt(after.Index), DispatcherPriority.Loaded);
+            }
+        }
         Empty.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         Empty.Text = EmptyText(filter, Column.SearchText);
     }
@@ -143,27 +166,106 @@ public partial class HistoryView : UserControl
     {
         e.Handled = true;
         var element = (FrameworkElement)sender;
-        var row = (HistoryRow)element.DataContext;
+        _menuOpen = true;
+        RowMenu.Open(element, e, MenuFor((HistoryRow)element.DataContext, element.IsKeyboardFocusWithin), () => _menuOpen = false);
+    }
+
+    /// <summary>The ⋯ on a row opens the same menu as a right-click, under the button.</summary>
+    private void OnRowMenuClicked(object sender, RoutedEventArgs e)
+    {
+        var button = (FrameworkElement)sender;
+        _menuOpen = true;
+        RowMenu.Open(button, PlacementMode.Bottom, MenuFor((HistoryRow)button.DataContext, refocus: true), () => _menuOpen = false);
+    }
+
+    /// <summary>Delete on a row's box or ⋯ takes it out of History, as the menu's Delete does, with Undo.</summary>
+    private void OnRowKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None && e.OriginalSource is ButtonBase)
+        {
+            e.Handled = true;
+            Delete((HistoryRow)((FrameworkElement)sender).DataContext, refocus: true);
+        }
+    }
+
+    /// <summary>A delete's wish to move the keyboard ends once it's older than <see cref="FocusAfterFor"/>.</summary>
+    private void LetFocusAfterGo()
+    {
+        if (_focusAfter is { At: var at } && DateTime.UtcNow - at >= FocusAfterFor)
+        {
+            _focusAfter = null;
+        }
+    }
+
+    /// <summary>
+    /// After a row the keyboard was on is deleted, it goes to the row that took its place, or the one above at the end,
+    /// or to Undo when no rows are left, so it isn't lost off the page.
+    /// </summary>
+    private void FocusRowAt(int index)
+    {
+        if (Entries.Items.Count == 0)
+        {
+            if (Bar.FindName("UndoButton") is Button { IsVisible: true } undo)
+            {
+                undo.Focus();
+            }
+
+            return;
+        }
+
+        Entries.UpdateLayout();
+        if (Entries.ItemContainerGenerator.ContainerFromIndex(Math.Min(index, Entries.Items.Count - 1)) is not DependencyObject container)
+        {
+            return;
+        }
+
+        var stops = new List<Control>();
+        Collect(container, stops);
+        stops.FirstOrDefault(stop => stop.IsVisible && stop.Focusable && stop.IsEnabled)?.Focus();
+
+        static void Collect(DependencyObject parent, List<Control> found)
+        {
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is ButtonBase control)
+                {
+                    found.Add(control);
+                }
+                else
+                {
+                    Collect(child, found);
+                }
+            }
+        }
+    }
+
+    private List<RowMenuEntry> MenuFor(HistoryRow row, bool refocus)
+    {
         var entries = new List<RowMenuEntry>();
         if (row.CanReopen)
         {
             entries.Add(new("Reopen", () => Reopen(row)));
         }
 
-        entries.Add(new("Delete", () => Delete(row)));
+        entries.Add(new("Delete", () => Delete(row, refocus)));
         entries.Add(new("Copy title", () => RowMenu.Copy(row.Title)));
-
-        _menuOpen = true;
-        RowMenu.Open(element, e, entries, () => _menuOpen = false);
+        return entries;
     }
 
     /// <summary>Takes the item out of History, and off the list if it's still there. Undo puts both back.</summary>
-    private async void Delete(HistoryRow row)
+    private async void Delete(HistoryRow row, bool refocus = false)
     {
+        var index = Entries.Items.IndexOf(row);
         var (ok, deleted) = await Change(() => _history!.DeleteHistoryItem(row.Entry, DateTime.Now));
         if (!ok || deleted is null)
         {
             return;
+        }
+
+        if (refocus && index >= 0)
+        {
+            _focusAfter = (index, DateTime.UtcNow);
         }
 
         Bar.Show($"Deleted {row.Title}", async () =>
@@ -235,6 +337,9 @@ public partial class HistoryView : UserControl
 
         /// <summary>The box's name, so each one says which item it puts back.</summary>
         public string ReopenName => $"Put {entry.Title} back on the list";
+
+        /// <summary>The ⋯ button's name, so each one says whose menu it opens and what the row is.</summary>
+        public string MenuName => $"More for {entry.Title}, {Details}";
 
         public string Details => $"{Label(entry)} {entry.At.ToString("MMM d", CultureInfo.InvariantCulture)}";
 

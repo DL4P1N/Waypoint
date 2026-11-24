@@ -256,6 +256,7 @@ public static class Api
             server.Database.SetPreference(key, value.Value ?? "");
             return Results.NoContent();
         });
+        api.MapPost("/preferences/{key}/take", (string key, WaypointServer server) => new PreferenceValue(server.Database.TakePreference(key)));
         api.MapGet("/money", (WaypointServer server) => LocalToDoData.ReadSpendSummary(server.Database, DateOnly.FromDateTime(DateTime.Now)));
         api.MapGet("/shifts/{date}", (string date, WaypointServer server) =>
             DateOnly.TryParseExact(date, "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)

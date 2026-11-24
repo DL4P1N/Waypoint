@@ -123,6 +123,9 @@ public sealed class ServerNotesData : INotesData
 
     public void SetPreference(string key, string value) => _server.Send(Put, $"api/preferences/{Uri.EscapeDataString(key)}", new PreferenceValue(value));
 
+    /// <summary>Reads a preference and clears it in one step on the server, so of two PCs only one gets it.</summary>
+    public string? TakePreference(string key) => _server.Send<PreferenceValue>(Post, $"api/preferences/{Uri.EscapeDataString(key)}/take").Value;
+
     // The notes folder sync
 
     public IReadOnlyList<NoteFileState> GetNoteFileStates() => _server.Send<List<NoteFileState>>(Get, "api/notes/file-states");

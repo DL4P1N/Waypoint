@@ -287,6 +287,19 @@ public partial class NotesView
         _pressedAt = e.GetPosition(NotesList);
     }
 
+    /// <summary>
+    /// A click on the note that's open, while the list has taken its place in a narrow window, goes back to it. Any
+    /// other note opens by being picked.
+    /// </summary>
+    private void OnNoteReleased(object sender, MouseButtonEventArgs e)
+    {
+        if (_pressedNote is { } row && row.Id == _draft.Id && NoteSide.Visibility != Visibility.Visible && !ListShown)
+        {
+            _listAskedFor = false;
+            FitList();
+        }
+    }
+
     private void OnNoteMouseMove(object sender, MouseEventArgs e)
     {
         if (_pressedNote is not { } row || e.LeftButton != MouseButtonState.Pressed)

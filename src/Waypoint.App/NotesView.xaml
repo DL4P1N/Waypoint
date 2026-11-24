@@ -12,7 +12,7 @@
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition x:Name="ListColumn" Width="240" />
-            <ColumnDefinition Width="*" />
+            <ColumnDefinition x:Name="NoteColumn" Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- Notes dragged from the list land on a folder here, through the column's DataDropped. The lists sit below the folders. -->
@@ -23,6 +23,18 @@
 
         <Border x:Name="ListPane" Grid.Column="1" BorderBrush="{DynamicResource Rule}" BorderThickness="0,0,1,0">
             <DockPanel>
+                <!-- When the page is too narrow for the list and a note side by side, the list asked for takes the note's
+                     place, and this goes back to the note, which stays open as it was. -->
+                <Button x:Name="BackToNoteButton"
+                        DockPanel.Dock="Top"
+                        Margin="20,16,10,0"
+                        Padding="0,2"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource LinkButton}"
+                        Content="Back to the note ›"
+                        AutomationProperties.Name="Back to the note"
+                        Visibility="Collapsed"
+                        Click="OnBackToNoteClicked" />
                 <!-- A class folder offers its practice questions here, not only on its right-click menu. -->
                 <DockPanel DockPanel.Dock="Top" Margin="20,26,10,14">
                     <Button x:Name="StudyButton"
@@ -55,6 +67,7 @@
                              SelectionChanged="OnNotePicked"
                              LostKeyboardFocus="OnListLeft"
                              PreviewMouseLeftButtonDown="OnNotePressed"
+                             PreviewMouseLeftButtonUp="OnNoteReleased"
                              PreviewMouseMove="OnNoteMouseMove"
                              ContextMenuOpening="OnNoteMenuOpening">
                         <ListBox.ItemTemplate>
@@ -170,8 +183,10 @@
                                        Foreground="{DynamicResource SecondaryText}" />
                         </DockPanel>
                     </Border>
-                    <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0" LastChildFill="True">
                         <TextBlock x:Name="SavedLabel"
+                                   DockPanel.Dock="Left"
+                                   Margin="0,0,12,0"
                                    VerticalAlignment="Center"
                                    FontSize="12"
                                    Foreground="{DynamicResource SecondaryText}" />
@@ -199,7 +214,7 @@
                                     Click="OnAttachClicked" />
                             <Button Padding="10,4" Content="Delete note" Click="OnDeleteClicked" />
                         </WrapPanel>
-                    </Grid>
+                    </DockPanel>
 
                     <!-- The original text of every file the note was made from. Closed each time a note opens, so only the notes show. -->
                     <Expander x:Name="SourcesSection"

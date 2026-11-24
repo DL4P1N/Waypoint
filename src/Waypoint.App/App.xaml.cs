@@ -144,6 +144,13 @@ public partial class App : System.Windows.Application
 
         PcMode.Started(_database, run, DateTimeOffset.Now);
 
+        // Once, before the notes are read: typed headings and lists that were saved as text get their marks back. In
+        // server mode the server does it to its own notes. A problem is only logged, so Waypoint still opens.
+        if (run == PcRun.Local)
+        {
+            Waypoint.Core.Notes.TypedMarkRepair.RunOnce(_database, (message, problem) => LogText(problem is null ? message : $"{message}{Environment.NewLine}{problem}"));
+        }
+
         // Whisper, set up once for lectures, also turns voice notes sent in Discord's capture channel into text.
         var whisper = new Waypoint.Core.Transcription.WhisperSetup(dataDirectory, new Waypoint.Core.Transcription.HttpFileDownloader(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
         var audio = new MediaFoundationAudio();
@@ -185,6 +192,8 @@ public partial class App : System.Windows.Application
             Classes = _schedule,
             CardUpFor = item => _cardsUp.Contains(ItemRef.Format(item)),
         };
+        // Notes whose typed headings and lists were saved as text are repaired when the database opens. Ask says so once.
+        _later.Add(SayTypedMarksRepair);
         _itemsWindow.NotesPage.ConnectStudy(_server is { } connection
             ? new Waypoint.Core.Remote.ServerNoteAudio(connection.Notes, _database, dataDirectory)
             : new Waypoint.Core.Notes.NoteAudio(_database, dataDirectory));

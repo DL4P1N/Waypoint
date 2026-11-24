@@ -6,7 +6,11 @@ using Waypoint.Core.Capture;
 namespace Waypoint.Core.Data;
 
 /// <summary>One saved copy of the database. BeforeRestore marks the copy taken just before a restore.</summary>
-public sealed record BackupFile(string Path, DateTime At, bool BeforeRestore);
+public sealed record BackupFile(string Path, DateTime At, bool BeforeRestore, bool BeforeNoteRepair = false)
+{
+    /// <summary>A copy made for a reason of its own rather than the daily one, so it never counts as that day's.</summary>
+    public bool KeptApart => BeforeRestore || BeforeNoteRepair;
+}
 
 /// <summary>
 /// What came of a restore. SafetyCopy is how things were just before, so the restore can be undone. Warning says what
@@ -54,14 +58,19 @@ public sealed partial class WaypointDatabase
             var name = Path.GetFileNameWithoutExtension(path);
             var stamp = name[BackupPrefix.Length..];
             var beforeRestore = stamp.EndsWith(BeforeRestoreSuffix, StringComparison.OrdinalIgnoreCase);
+            var beforeNoteRepair = stamp.EndsWith(BeforeNoteRepairSuffix, StringComparison.OrdinalIgnoreCase);
             if (beforeRestore)
             {
                 stamp = stamp[..^BeforeRestoreSuffix.Length];
             }
+            else if (beforeNoteRepair)
+            {
+                stamp = stamp[..^BeforeNoteRepairSuffix.Length];
+            }
 
             if (DateTime.TryParseExact(stamp, BackupStamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
             {
-                backups.Add(new BackupFile(path, at, beforeRestore));
+                backups.Add(new BackupFile(path, at, beforeRestore, beforeNoteRepair));
             }
         }
 
@@ -70,7 +79,7 @@ public sealed partial class WaypointDatabase
 
     /// <summary>The daily copy. Returns its path, or null if today already has one.</summary>
     public string? BackUpIfDue(DateTime now) =>
-        GetBackups().Any(backup => !backup.BeforeRestore && backup.At.Date == now.Date) ? null : BackUpNow(now);
+        GetBackups().Any(backup => !backup.KeptApart && backup.At.Date == now.Date) ? null : BackUpNow(now);
 
     /// <summary>
     /// Copies the database with SQLite's online backup, which is safe while the app has it open, then
@@ -97,6 +106,7 @@ public sealed partial class WaypointDatabase
 
         // A copy that fails partway is undone by SQLite, so up to here nothing has changed.
         var safetyCopy = SaveCopy(now, BeforeRestoreSuffix);
+        var repaired = GetPreference(TypedMarksRepairedKey);
         using (var backup = OpenFile(source, SqliteOpenMode.ReadOnly))
         using (Connect(out var live))
         {
@@ -118,6 +128,16 @@ public sealed partial class WaypointDatabase
                 return false;
             }
         }
+
+        // An older copy doesn't know its notes' typed marks were already repaired here, and would repair them and say
+        // so again. Whatever came of the repair carries over, and a copy that has its own answer keeps it.
+        Then(() =>
+        {
+            if (repaired is not null && GetPreference(TypedMarksRepairedKey) is null)
+            {
+                SetPreference(TypedMarksRepairedKey, repaired);
+            }
+        });
 
         // The notes folder still holds the notes from before. Its next sync writes the restored ones over it.
         ForgetChangeStamps();
@@ -333,7 +353,8 @@ public sealed partial class WaypointDatabase
     {
         var cutoff = now.Date.AddDays(-BackupsKept);
         var backups = GetBackups();
-        var old = backups.Where(backup => !backup.BeforeRestore).Skip(BackupsKept).Where(backup => backup.At.Date <= cutoff)
+        // The copy from before the notes' typed marks were repaired is never cleared out, so that repair can always be undone.
+        var old = backups.Where(backup => !backup.KeptApart).Skip(BackupsKept).Where(backup => backup.At.Date <= cutoff)
             .Concat(backups.Where(backup => backup.BeforeRestore).Skip(BeforeRestoreKept))
             .Where(backup => keep is null || !string.Equals(Path.GetFullPath(backup.Path), keep, StringComparison.OrdinalIgnoreCase))
             .ToList();

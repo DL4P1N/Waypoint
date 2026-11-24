@@ -315,6 +315,9 @@ public partial class NotesView : UserControl
     /// <summary>For Find anywhere: saves what's being typed, then opens the note.</summary>
     public void ShowNote(long noteId)
     {
+        // Opening a note is asking to see it, even the one that's open behind a list that took its place.
+        _listAskedFor = false;
+        FitList();
         Flush();
         FoldersChanged(refocus: false);
         OpenSoon(noteId, pickRow: true, keepWhenGone: true);
@@ -519,11 +522,6 @@ public partial class NotesView : UserControl
 
     private sealed class NoteRow(NoteDetail note, string? folder, string? transcribing = null)
     {
-        private static readonly char[] LineBreaks = ['\r', '\n'];
-
-        /// <summary>Heading, list, and quote marks, so the preview line reads as words.</summary>
-        private static readonly char[] MarkdownMarks = ['#', '>', '-', '*', '+', ' '];
-
         public long Id => note.Id;
 
         public long? FolderId => note.FolderId;
@@ -534,9 +532,7 @@ public partial class NotesView : UserControl
         {
             get
             {
-                var first = note.Body.Split(LineBreaks, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Select(line => line.TrimStart(MarkdownMarks))
-                    .FirstOrDefault(line => line.Length > 0 && !note.Title.StartsWith(line, StringComparison.OrdinalIgnoreCase));
+                var first = NoteListing.Preview(note.Title, note.Body) is { Length: > 0 } line ? line : null;
                 var date = note.At.ToString("MMM d", CultureInfo.InvariantCulture);
                 var start = folder is null ? date : $"{date}  ·  {folder}";
                 if (transcribing is { Length: > 0 })

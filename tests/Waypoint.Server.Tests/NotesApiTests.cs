@@ -280,6 +280,27 @@ public sealed partial class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public void What_the_notes_repair_left_to_say_is_taken_once_from_the_server()
+    {
+        var database = _factory.Services.GetRequiredService<WaypointServer>().Database;
+        database.SetPreference(WaypointDatabase.TypedMarksToSayKey, "3 2 waypoint-2026-11-23-090000-before-note-repair.db");
+        var first = Pc().Notes;
+        var second = Pc().Notes;
+
+        Assert.StartsWith("Turned 3 lines in 2 notes", WaypointDatabase.TakeTypedMarksMessage(first.TakePreference), StringComparison.Ordinal);
+        Assert.Null(WaypointDatabase.TakeTypedMarksMessage(second.TakePreference));
+        Assert.Null(database.GetPreference(WaypointDatabase.TypedMarksToSayKey));
+    }
+
+    [Fact]
+    public void The_server_repairs_its_notes_typed_marks_when_it_starts()
+    {
+        var database = _factory.Services.GetRequiredService<WaypointServer>().Database;
+
+        Assert.NotNull(database.GetPreference(WaypointDatabase.TypedMarksRepairedKey));
+    }
+
+    [Fact]
     public void Lists_of_notes_carry_each_notes_first_line_and_opening_one_gives_it_whole()
     {
         var notes = Pc().Notes;

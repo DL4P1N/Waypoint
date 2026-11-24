@@ -25,6 +25,19 @@ public sealed class WaypointServer
         // Before anything reads a statement or an alert, so purchases go under the account names the profiles give.
         Waypoint.Core.Budget.BankProfiles.Load(DataDirectory);
         Database = new WaypointDatabase(Path.Combine(DataDirectory, "waypoint.db"));
+
+        // Once, before anything reads the notes: typed headings and lists that were saved as text get their marks back.
+        Waypoint.Core.Notes.TypedMarkRepair.RunOnce(Database, (message, problem) =>
+        {
+            if (problem is null)
+            {
+                logger.LogInformation("{Message}", message);
+            }
+            else
+            {
+                logger.LogWarning(problem, "{Message}", message);
+            }
+        });
         var file = WaypointSettings.Load(Path.Combine(DataDirectory, "settings.json"));
         Host = host;
         host.Database = Database;
