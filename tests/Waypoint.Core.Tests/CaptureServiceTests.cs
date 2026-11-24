@@ -104,11 +104,58 @@ public sealed class CaptureServiceTests : IDisposable
             await service.ProcessPendingAsync();
         }
 
-        // Each round stops sorting after two throws in a row, and none of the three is let go for the sorter being down.
+        // Each round stops sorting after two throws in a row and the rounds take turns at which goes first, so over
+        // these few rounds none has failed often enough to be let go.
         Assert.Equal(2 * (CaptureService.MaxFailures + 1), asked.Count);
         Assert.Equal(["email advisor", "call the dentist", "pick up stamps"], _database.GetPendingCaptures().Select(capture => capture.Text));
         Assert.Equal([Activation.NothingToPick], answers);
         Assert.Equal("offline", service.LastError);
+    }
+
+    [Fact]
+    public async Task Two_failing_captures_side_by_side_do_not_hold_up_the_ones_behind_them()
+    {
+        var service = new CaptureService(_database, new FakeSorter(text =>
+            text.StartsWith("odd", StringComparison.Ordinal) ? throw new InvalidOperationException("can't read that") : [new SortedItem(ItemKind.Task, text, null, null)]));
+        var answers = new List<string?>();
+        service.Sorted += outcome => answers.Add(outcome.Answer);
+
+        service.Capture("odd one");
+        service.Capture("odd two");
+        service.Capture("pay rent");
+        await service.ProcessPendingAsync();
+        Assert.Equal(3, _database.GetPendingCaptures().Count);
+
+        // The next round starts after the pair, so the one behind them is sorted.
+        await service.ProcessPendingAsync();
+        Assert.Equal("pay rent", _database.GetOpenItems().Single().Title);
+
+        // And the pair are each counted in turn until both are kept as notes.
+        for (var round = 0; round < 4 * CaptureService.MaxFailures && _database.GetPendingCaptures().Count > 0; round++)
+        {
+            await service.ProcessPendingAsync();
+        }
+
+        Assert.Empty(_database.GetPendingCaptures());
+        Assert.Equal(2, answers.Count(answer => answer == CaptureService.Parked));
+    }
+
+    [Fact]
+    public async Task A_capture_failing_alone_is_counted_and_kept_as_a_note()
+    {
+        var service = new CaptureService(_database, new FakeSorter(_ => throw new InvalidOperationException("can't read that")));
+
+        service.Capture("the odd one");
+        for (var round = 0; round < CaptureService.MaxFailures; round++)
+        {
+            await service.ProcessPendingAsync();
+            Assert.Single(_database.GetPendingCaptures());
+        }
+
+        await service.ProcessPendingAsync();
+
+        Assert.Empty(_database.GetPendingCaptures());
+        Assert.Equal("the odd one", _database.GetOpenItems().Single().Title);
     }
 
     [Fact]

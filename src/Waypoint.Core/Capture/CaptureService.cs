@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Waypoint.Core.Budget;
 using Waypoint.Core.Data;
 using Waypoint.Core.Files;
@@ -134,7 +135,7 @@ public sealed class CaptureService(
 
             LastError = null;
             var round = new SortRound();
-            foreach (var capture in database.GetPendingCaptures())
+            foreach (var capture in InTurn(database.GetPendingCaptures()))
             {
                 // One that kept failing is let go as a note, so it can't hold up the ones after it round after round.
                 if (_failures.GetValueOrDefault(capture.Id) >= MaxFailures)
@@ -151,10 +152,19 @@ public sealed class CaptureService(
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
+                    // Trouble with the database, or with reading what the sorter is shown, is the same for every
+                    // capture, so it isn't held against this one.
                     RecordError(exception.Message);
-                    CountFailure(capture.Id);
+                    if (!round.BuildingContext && exception is not SqliteException)
+                    {
+                        CountFailure(capture.Id);
+                    }
+
+                    round.BuildingContext = false;
                 }
             }
+
+            _startAfter = round.LastFailed;
 
             if (LastError is not null)
             {
@@ -190,15 +200,30 @@ public sealed class CaptureService(
     private readonly Dictionary<long, int> _failures = [];
 
     /// <summary>
-    /// One round's view of the sorter. A sort that throws is held as a suspect until another capture sorts, which
-    /// shows the failure was that capture's own. Two in a row means the sorter itself is down, so the rest of the
-    /// round leaves sorting alone, and those captures stay pending without counting against them.
+    /// Where the next round starts: after the last capture the sorter failed on, so the ones behind a failing pair
+    /// get their turn first instead of waiting behind it every round. Null starts from the oldest, as usual.
+    /// </summary>
+    private long? _startAfter;
+
+    /// <summary>The captures in the order this round tries them.</summary>
+    private IEnumerable<PendingCapture> InTurn(IReadOnlyList<PendingCapture> pending) =>
+        _startAfter is { } after ? pending.Where(capture => capture.Id > after).Concat(pending.Where(capture => capture.Id <= after)) : pending;
+
+    /// <summary>
+    /// One round's view of the sorter, fresh each round. A sort that throws counts against its capture. A second
+    /// throw straight after means the sorter itself is down: that one isn't counted, and the rest of the round leaves
+    /// sorting alone, with those captures pending as they were. The next round starts after the last one that failed.
     /// </summary>
     private sealed class SortRound
     {
         public bool SorterDown { get; set; }
 
-        public long? Suspect { get; set; }
+        public bool LastSortFailed { get; set; }
+
+        public long? LastFailed { get; set; }
+
+        /// <summary>Set while what the sorter is shown is read, so a failure there isn't held against the capture.</summary>
+        public bool BuildingContext { get; set; }
     }
 
     private void RecordError(string message)
@@ -220,25 +245,21 @@ public sealed class CaptureService(
         try
         {
             var result = await sorter.SortAsync(text, capture.CreatedAt.ToLocalTime().DateTime, context, cancellationToken);
-            if (round.Suspect is { } suspect)
-            {
-                CountFailure(suspect);
-                round.Suspect = null;
-            }
-
+            round.LastSortFailed = false;
             return result;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             RecordError(exception.Message);
-            if (round.Suspect is null)
+            round.LastFailed = capture.Id;
+            if (round.LastSortFailed)
             {
-                round.Suspect = capture.Id;
+                round.SorterDown = true;
             }
             else
             {
-                round.SorterDown = true;
-                round.Suspect = null;
+                CountFailure(capture.Id);
+                round.LastSortFailed = true;
             }
 
             return null;
@@ -296,7 +317,9 @@ public sealed class CaptureService(
         }
 
         // Built fresh each time, since the capture before this one may have changed things.
+        round.BuildingContext = true;
         var context = BuildContext(Now, capture.Text, capture.Origin);
+        round.BuildingContext = false;
         var wantsSmaller = context.Activation is not null && Activation.ParseWord(capture.Text) == SessionWord.Smaller;
         var wantsStart = !wantsSmaller && Activation.AsksToStart(capture.Text);
         var result = wantsSmaller || wantsStart
@@ -581,7 +604,10 @@ public sealed class CaptureService(
             return;
         }
 
-        var result = await SortAsync(capture, FileNote.Wrap(fileName, capture.Text), BuildContext(now, fileName), round, cancellationToken);
+        round.BuildingContext = true;
+        var context = BuildContext(now, fileName);
+        round.BuildingContext = false;
+        var result = await SortAsync(capture, FileNote.Wrap(fileName, capture.Text), context, round, cancellationToken);
         if (result is null)
         {
             return;
