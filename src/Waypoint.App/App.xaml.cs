@@ -181,6 +181,8 @@ public partial class App : System.Windows.Application
             Classes = _schedule,
             CardUpFor = item => _cardsUp.Contains(ItemRef.Format(item)),
         };
+        // Notes whose typed headings and lists were saved as text are repaired when the database opens. Ask says so once.
+        _later.Add(() => SayTypedMarksRepair(notes));
         _itemsWindow.NotesPage.ConnectStudy(_server is { } connection
             ? new Waypoint.Core.Remote.ServerNoteAudio(connection.Notes, _database, dataDirectory)
             : new Waypoint.Core.Notes.NoteAudio(_database, dataDirectory));
