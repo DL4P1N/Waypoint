@@ -305,6 +305,17 @@ function Test-Start([string]$path = $exe) {
     }
 }
 
+# Renamed to .partial first, so a folder that's only partly removed is never taken for a version to go back to. One
+# that can't be renamed, because a file in it is in use, throws and is left whole.
+function Remove-Version([string]$version) {
+    $folder = Join-Path $versionsDir $version
+    if (-not (Test-Path -LiteralPath $folder)) { return }
+    $doomed = "$version.removing-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).partial"
+    Rename-Item -LiteralPath $folder -NewName $doomed
+    # Whatever is left of it is swept with the other half-made folders after the next install.
+    Remove-Item -LiteralPath (Join-Path $versionsDir $doomed) -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # Keeps the current version and the one that was running just before it, which is what -Rollback goes back to, even
 # when a newer one was gone back from.
 # Runs once the new version is in and running, so a folder that can't be removed is only reported.
@@ -312,7 +323,7 @@ function Remove-OldVersions([string]$runningBefore) {
     $current = Get-Current
     foreach ($old in @(Get-Versions | Where-Object { $_ -ne $current -and $_ -ne $runningBefore })) {
         try {
-            Remove-Item -LiteralPath (Join-Path $versionsDir $old) -Recurse -Force
+            Remove-Version $old
             Write-Host "Removed old version $old"
         } catch {
             Write-Warning "Couldn't remove old version $old ($_). It's left in $versionsDir."
@@ -467,6 +478,8 @@ if ($ownStaging) {
 }
 
 $previous = Get-Current
+# What -Rollback went back to before this install, put back if this install is undone.
+$previousNoted = if (Test-Path -LiteralPath $previousFile) { ([string](Get-Content -LiteralPath $previousFile -Raw)).Trim() } else { $null }
 $script:closeRefused = $false
 $script:switchUndone = $false
 try {
@@ -475,7 +488,9 @@ try {
     # Whatever stopped it, a version that isn't the one in use goes, so -Rollback never moves forward to a build that
     # was never switched in.
     $installedNow = try { Get-Current } catch { $name }
-    if ($installedNow -ne $name) { Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($installedNow -ne $name) {
+        try { Remove-Version $name } catch { Write-Warning "Couldn't remove the folder of version $name ($_)." }
+    }
     throw
 }
 Set-Launchers
@@ -504,12 +519,17 @@ try {
     }
     throw "Version $name didn't stay running, and going back to version $previous failed ($switchBackFailure), so $name is still the one installed and Waypoint isn't running. Run -Rollback to go back to $previous."
 }
-# Waypoint.previous.exe and previous.txt now name the version that failed, and nothing should go back to it. Not
-# being able to remove it doesn't stop the version that was put back from being started.
+# Waypoint.previous.exe and previous.txt now name the version that failed, and nothing should go back to it, so
+# previous.txt goes back to what it said before this install. Not being able to do any of this doesn't stop the
+# version that was put back from being started.
 Remove-Item -LiteralPath $previousExe -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue
 try {
-    Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force
+    if ($previousNoted) { Set-TextFile $previousFile $previousNoted } else { Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue }
+} catch {
+    Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue
+}
+try {
+    Remove-Version $name
 } catch {
     Write-Warning "Couldn't remove the folder of version $name ($_). -Rollback won't go to it, since it's newer than $previous."
 }

@@ -67,6 +67,21 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void An_install_that_was_undone_leaves_rollback_where_it_was()
+    {
+        MakeInstalled(current: "20300101-000002-b", previous: "20300101-000001-a", "20300101-000001-a");
+
+        var (exitCode, output) = RunInstall("-PublishedFolder", MakeBuild("three"));
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("put back", output);
+        Assert.Equal("20300101-000002-b", File.ReadAllText(Path.Combine(_root, "current.txt")).Trim());
+        Assert.Equal("20300101-000001-a", File.ReadAllText(Path.Combine(_root, "previous.txt")).Trim());
+        // The failed version is gone whole, with no half-removed folder left to be taken for a version.
+        Assert.Equal(["20300101-000001-a", "20300101-000002-b"], Versions().Order());
+    }
+
+    [Fact]
     public void Rollback_with_nothing_noted_goes_to_the_newest_older_version()
     {
         MakeInstalled(current: "20300101-000002-b", previous: null, "20300101-000001-a", "20300101-000003-c");
