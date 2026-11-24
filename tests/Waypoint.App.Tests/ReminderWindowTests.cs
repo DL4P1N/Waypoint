@@ -158,6 +158,12 @@ public sealed class ReminderWindowTests
         Assert.True(ReminderWindow.FinishesItem(new DueReminder(2, new StoredItem(2, ItemKind.Deadline, "Made up essay", today, null, false, Source: ItemSource.Calendar), null, null)));
         Assert.False(ReminderWindow.FinishesItem(new DueReminder(3, new StoredItem(3, ItemKind.Exam, "Made up midterm", today, null, false), "Do a practice exam", null)));
 
+        // A repeating deadline offers Done on the PC as on Discord: done for this time, and it says so.
+        var weekly = new StoredItem(4, ItemKind.Deadline, "Made up weekly quiz", today, null, false, Recurs: new Recurrence(RecurrenceUnit.Week));
+        Assert.True(ReminderWindow.FinishesItem(new DueReminder(4, weekly, null, null)));
+        var weeklyCard = new ReminderWindow(new DueReminder(4, weekly, null, null), "Done", 10, () => { }, () => { });
+        Assert.Equal(Activation.DoneThisTime, UiTest.Named<Button>(weeklyCard, "Primary").ToolTip);
+
         // Built the way the app builds it: Done finishes the deadline through the same call as every other card.
         var transition = new ReminderTransition(ReminderWindow.FinishesItem(due), () => { }, () => { }, () => { }, null);
         var card = new ReminderWindow(due, "Done", 10, () => ui.Database.SetDone(report, true), () => { }, start: () => { }, transition: transition);

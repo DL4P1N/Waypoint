@@ -85,7 +85,7 @@ Every card, on the PC and on Discord, keeps the same order and words:
 2. **10 more minutes** on a card you can start, or **Not now** on a plain reminder, which brings it back once, ten minutes later
 3. **Skip**, which clears it with nothing more to come
 
-The main action is filled with the accent. Start, 10 more minutes and Save my spot are only on tasks, deadlines and exams; a plain reminder has Done and Not now. Reminders, tasks and deadlines, an assignment's nudge from the calendar included, always have Done; an exam's alert has Got it, since it comes before the exam.
+The main action is filled with the accent. Start, 10 more minutes and Save my spot are only on tasks, deadlines and exams; a plain reminder has Done and Not now. Reminders, tasks and deadlines, an assignment's nudge from the calendar included, always have Done; an exam's alert has Got it, since it comes before the exam. On something that repeats, such as a weekly deadline, Done means done for this time and moves it to its next date, on the PC and Discord alike.
 
 A card that comes back offers only Start and Skip, so it never turns into a chain. Skip never checks anything off, and the item stays on your list. On the PC, **Save my spot first** opens the Save my spot form, unless you saved a spot in the last hour. Repeating reminders keep Done and a Not now that brings them back after their usual gap.
 

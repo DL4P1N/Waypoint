@@ -83,6 +83,10 @@ public partial class ReminderWindow : Window, ICornerCard
         Kind.Text = KindLabel(item.Kind);
         ItemTitle.Text = reminder.Message ?? item.Title;
         Primary.Content = primaryLabel;
+        if (item.Recurs is not null && dose is null && primaryLabel == "Done")
+        {
+            Primary.ToolTip = Activation.DoneThisTime;
+        }
         Snooze.ToolTip = $"Back in {MinutesText(snoozeMinutes)}";
         Skip.Visibility = skip is null ? Visibility.Collapsed : Visibility.Visible;
         Start.Visibility = start is null ? Visibility.Collapsed : Visibility.Visible;
@@ -144,7 +148,7 @@ public partial class ReminderWindow : Window, ICornerCard
     /// Whether the card's Done finishes its item: repeating reminders, and reminders, tasks and deadlines (an
     /// assignment's nudge from the calendar too). An exam's alert is only an alert, answered with Got it.
     /// </summary>
-    public static bool FinishesItem(DueReminder reminder) => reminder.RepeatMinutes is not null || Activation.CardFinishesKind(reminder.Item.Kind);
+    public static bool FinishesItem(DueReminder reminder) => Activation.CardFinishes(reminder);
 
     /// <summary>The card's main button: the first one on its row, the same as on Discord.</summary>
     public Button? MainButton => Buttons.Children.OfType<Button>().FirstOrDefault(button => button.Visibility == Visibility.Visible);
