@@ -106,7 +106,16 @@ public partial class NotesView
     /// <summary>Set when the list was asked back while narrow. Opening a note puts it away again.</summary>
     private bool _listAskedFor;
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e) => FitList();
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // With room for both again, the list and the note share the page, so a list asked for earlier is spent.
+        if (e.NewSize.Width >= NarrowWidth)
+        {
+            _listAskedFor = false;
+        }
+
+        FitList();
+    }
 
     private void FitList()
     {

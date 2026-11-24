@@ -67,6 +67,7 @@
                              SelectionChanged="OnNotePicked"
                              LostKeyboardFocus="OnListLeft"
                              PreviewMouseLeftButtonDown="OnNotePressed"
+                             PreviewMouseLeftButtonUp="OnNoteReleased"
                              PreviewMouseMove="OnNoteMouseMove"
                              ContextMenuOpening="OnNoteMenuOpening">
                         <ListBox.ItemTemplate>

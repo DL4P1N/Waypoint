@@ -315,6 +315,9 @@ public partial class NotesView : UserControl
     /// <summary>For Find anywhere: saves what's being typed, then opens the note.</summary>
     public void ShowNote(long noteId)
     {
+        // Opening a note is asking to see it, even the one that's open behind a list that took its place.
+        _listAskedFor = false;
+        FitList();
         Flush();
         FoldersChanged(refocus: false);
         OpenSoon(noteId, pickRow: true, keepWhenGone: true);

@@ -243,6 +243,47 @@ public sealed class NotesViewTests
         ui.Pump();
         Assert.Equal(Visibility.Visible, noteSide.Visibility);
         Assert.Equal("Lecture 15", page.Title.Text);
+
+        // So is the note that's already open, from elsewhere or by a click on its row in the list.
+        show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
+        ui.Pump();
+        page.View.ShowNote(other);
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, noteSide.Visibility);
+
+        show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
+        ui.Pump();
+        var row = ui.Container(page.Notes, page.Notes.Items.Cast<object>().Single(item => UiTest.Prop<long>(item, "Id") == other));
+        row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
+        row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseUpEvent });
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, noteSide.Visibility);
+        Assert.Equal(Visibility.Collapsed, list.Visibility);
+    });
+
+    [Fact]
+    public void A_list_asked_for_in_a_small_window_is_spent_once_the_window_has_room_for_both() => Ui.Run(ui =>
+    {
+        var id = ui.Database.CreateNote("Lecture 14", "malloc and free", DateTime.Now);
+        var page = Make(ui);
+        page.View.Width = 1040 - 128 - 260;
+        page.Notes.SelectedItem = page.Notes.Items.Cast<object>().Single(row => UiTest.Prop<long>(row, "Id") == id);
+        ui.Pump();
+        var show = UiTest.Named<Button>(page.View, "ShowListButton");
+        var noteSide = UiTest.Named<DockPanel>(page.View, "NoteSide");
+        show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
+        ui.Pump();
+        Assert.Equal(Visibility.Collapsed, noteSide.Visibility);
+
+        page.View.Width = NotesView.NarrowWidth + 10;
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, noteSide.Visibility);
+
+        // Small again, the open note keeps the page rather than the list asked for long ago.
+        page.View.Width = 1040 - 128 - 260;
+        ui.Pump();
+        Assert.Equal(Visibility.Visible, noteSide.Visibility);
+        Assert.Equal(Visibility.Collapsed, UiTest.Named<Border>(page.View, "ListPane").Visibility);
     });
 
     [Theory]
