@@ -257,11 +257,11 @@
                                        TextWrapping="Wrap"
                                        Foreground="{StaticResource PrimaryText}" />
                             <WrapPanel>
-                                <Button Margin="0,4,6,0" Padding="10,5" Content="Did it" Tag="did it" Click="OnSessionWordClicked" />
-                                <Button Margin="0,4,6,0" Padding="10,5" Content="Make it smaller" Tag="smaller" ToolTip="Asks Claude for a smaller step. If that takes too long, a ready one is used." Click="OnSessionWordClicked" />
+                                <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.DidIt}" Tag="did it" Click="OnSessionWordClicked" />
+                                <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.Smaller}" Tag="smaller" ToolTip="Asks Claude for a smaller step. If that takes too long, a ready one is used." Click="OnSessionWordClicked" />
                                 <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.Pause}" Tag="not now" ToolTip="Your place is kept. Say resume when you're ready." Click="OnSessionWordClicked" />
-                                <Button Margin="0,4,6,0" Padding="10,5" Content="End" ToolTip="Stop this session without marking anything done" Click="OnSessionEndClicked" />
-                                <Button x:Name="TrialButton" Margin="0,4,6,0" Padding="10,5" Content="2 minutes" Tag="2 minutes" Visibility="Collapsed" Click="OnSessionWordClicked" />
+                                <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.End}" ToolTip="Stop this session without marking anything done" Click="OnSessionEndClicked" />
+                                <Button x:Name="TrialButton" Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.Trial}" Tag="2 minutes" Visibility="Collapsed" Click="OnSessionWordClicked" />
                                 <Button x:Name="OpenWorkButton" Margin="0,4,6,0" Padding="10,5" Content="Open the work" Visibility="Collapsed" Click="OnOpenWorkClicked" />
                             </WrapPanel>
                             <local:FeedbackPrompt x:Name="SessionFeedback" />

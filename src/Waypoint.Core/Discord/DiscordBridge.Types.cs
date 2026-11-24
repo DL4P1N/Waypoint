@@ -35,6 +35,9 @@ public enum AlertActionKind
     StartNext,
     MoreTime,
     NotNowReminder,
+
+    /// <summary>Ends a session without marking anything done, the same as typing cancel.</summary>
+    EndSession,
 }
 
 /// <summary>

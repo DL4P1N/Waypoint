@@ -269,13 +269,13 @@ public sealed partial class WaypointWorker
                 var time = TypedDates.ParseTime(Option("time"));
                 if (Option("time") is not null && time is null)
                 {
-                    return Problem("I couldn't read that time. Try 3pm or 15:30.");
+                    return Problem(CardLabels.TimeHint);
                 }
 
                 // With only a time it stays on its day, or goes on today if it had none.
                 if ((Option("date") is null ? moving.DueDate ?? today : TypedDates.ParseDate(Option("date"), today)) is not { } date)
                 {
-                    return Problem("I couldn't read that date. Try today, tomorrow, friday, 11/14, or 2026-11-14.");
+                    return Problem(CardLabels.DateHint);
                 }
 
                 return Done(ItemGroups.ChangeSummary(_database.RescheduleItem(moving, date, time, now)));
@@ -284,7 +284,7 @@ public sealed partial class WaypointWorker
                 {
                     return Activation.PickTask(_database.WithoutQuietWaiting(_database.GetOpenItems(), today), null) is { } next
                         ? new CommandReply(StartFromDiscord(next))
-                        : Done("Nothing to start right now");
+                        : Done(CardLabels.NothingToStart);
                 }
 
                 if (FindOpenItem(Option("item"), out var startMatches) is not { } starting)
@@ -360,13 +360,13 @@ public sealed partial class WaypointWorker
         var date = TypedDates.ParseDate(dateText, today);
         if (dateText is not null && date is null)
         {
-            return new CommandReply(DiscordText.Notice("That didn't work", "I couldn't read that date. Try today, tomorrow, friday, 11/14, or 2026-11-14.", CardTone.Attention), true);
+            return new CommandReply(DiscordText.Notice("That didn't work", CardLabels.DateHint, CardTone.Attention), true);
         }
 
         var time = TypedDates.ParseTime(timeText);
         if (timeText is not null && time is null)
         {
-            return new CommandReply(DiscordText.Notice("That didn't work", "I couldn't read that time. Try 3pm or 15:30.", CardTone.Attention), true);
+            return new CommandReply(DiscordText.Notice("That didn't work", CardLabels.TimeHint, CardTone.Attention), true);
         }
 
         var kind = Enum.TryParse<ItemKind>(kindText, ignoreCase: true, out var chosen) ? chosen : time is not null ? ItemKind.Reminder : ItemKind.Task;

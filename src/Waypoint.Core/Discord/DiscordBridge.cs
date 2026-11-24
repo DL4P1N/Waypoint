@@ -29,6 +29,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private const string SmallerButton = "waypoint:smaller";
     private const string NotNowButton = "waypoint:not-now";
     private const string TrialButton = "waypoint:trial";
+    private const string EndSessionButton = "waypoint:end-session";
     private const string WindDownStepDoneButton = "waypoint:wind-down-step-done";
     private const string EveningStepDoneButton = "waypoint:evening-step-done";
     private const string SnoozeBedtimeButton = "waypoint:snooze-bedtime";
@@ -90,6 +91,7 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         [SmallerButton] = AlertActionKind.Smaller,
         [NotNowButton] = AlertActionKind.NotNow,
         [TrialButton] = AlertActionKind.Trial,
+        [EndSessionButton] = AlertActionKind.EndSession,
         [WindDownStepDoneButton] = AlertActionKind.WindDownStepDone,
         [EveningStepDoneButton] = AlertActionKind.EveningStepDone,
         [SnoozeBedtimeButton] = AlertActionKind.SnoozeBedtime,

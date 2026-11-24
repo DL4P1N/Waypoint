@@ -66,7 +66,7 @@ public sealed partial class WaypointWorker
         var escaped = DiscordText.Escape(words);
         var description = words.Trim().Length < FindAnywhere.MinLength
             ? "Type at least two letters to search."
-            : found.Count == 0 ? $"Nothing found for {escaped}." : string.Join("\n", shown.Select(row => SearchLine(row.Thing)));
+            : found.Count == 0 ? CardLabels.NothingMatches("on any page", escaped) : string.Join("\n", shown.Select(row => SearchLine(row.Thing)));
         return new DiscordCard(Shorten(DiscordPages.Titled($"Found for {escaped}", page, pages.Count), 256), description, [], CardTone.Reminder)
         {
             Menu = new DiscordMenu(OpenMenu, "Open one", shown.Where(row => row.Value is not null).Select(row => new MenuChoice(row.Thing.Title, row.Value!, row.Thing.Where)).ToList()),
@@ -203,7 +203,7 @@ public sealed partial class WaypointWorker
         var end = TypedDates.ParseTime(Box("end"));
         if (Box("end") is not null && end is null)
         {
-            return new CommandReply(DiscordText.Notice("That didn't work", "I couldn't read the end time. Try 3pm or 15:30.", CardTone.Attention), true);
+            return new CommandReply(DiscordText.Notice("That didn't work", "Try an end time like 3pm or 15:30.", CardTone.Attention), true);
         }
 
         return AddFromPhone(Box("title") ?? "", Box("date"), Box("time"), kindText, _clock(), new HandAddedItem(ItemKind.Task, "", null, EndTime: end, Course: course, FilterId: filterId));

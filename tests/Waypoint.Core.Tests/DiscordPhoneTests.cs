@@ -706,7 +706,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
 
         var date = worker.OnDiscordCommand(new SlashCommand("add", Options(("title", "x"), ("date", "someday"))));
         Assert.True(date.Private);
-        Assert.Contains("couldn't read that date", date.Card.Description);
+        Assert.Equal(CardLabels.DateHint, date.Card.Description);
         Assert.True(worker.OnDiscordCommand(new SlashCommand("spent", Options(("amount", "-3"), ("what", "coffee")))).Private);
         Assert.Empty(_database.GetOpenItems());
     }
@@ -769,6 +769,32 @@ public sealed partial class DiscordPhoneTests : IDisposable
         Assert.False(result.Card!.HasSessionButtons);
         await Task.Delay(100);
         Assert.DoesNotContain(_discord.Of(HttpMethod.Post), post => post.Url.Contains("/channels/capture/") && post.Body.Contains("said again"));
+    }
+
+    [Fact]
+    public async Task End_on_the_session_card_stops_the_session_without_marking_it_done()
+    {
+        AddTask("Read chapter 4", Today);
+        var worker = await Started(toDo: null, lists: null);
+        worker.OnDiscordCommand(new SlashCommand("start", Options()));
+        Assert.NotNull(_database.GetActiveSession(_now));
+
+        var result = await worker.OnButtonActedAsync(new ButtonPress("waypoint:end-session", AlertActionKind.EndSession, "m5", "c"));
+
+        Assert.NotNull(result);
+        Assert.Null(_database.GetActiveSession(_now));
+        Assert.Contains(_database.GetOpenItems(), item => item.Title == "Read chapter 4");
+    }
+
+    [Fact]
+    public void Help_names_the_words_a_session_understands()
+    {
+        var help = DiscordViews.HelpCard().Description!;
+
+        foreach (var word in new[] { "did it", "smaller", "pause", "resume" })
+        {
+            Assert.Contains(word, help);
+        }
     }
 
     [Fact]

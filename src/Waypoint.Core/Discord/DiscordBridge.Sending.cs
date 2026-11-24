@@ -169,14 +169,16 @@ public sealed partial class DiscordBridge
 
         if (card.HasSessionButtons)
         {
-            buttons.Add((ButtonRole.Main, "Did it", DidItButton));
-            buttons.Add((ButtonRole.Other, "Make it smaller", SmallerButton));
+            buttons.Add((ButtonRole.Main, CardLabels.DidIt, DidItButton));
+            buttons.Add((ButtonRole.Other, CardLabels.Smaller, SmallerButton));
             if (card.CanTrial)
             {
-                buttons.Add((ButtonRole.Other, "Try 2 minutes", TrialButton));
+                buttons.Add((ButtonRole.Other, CardLabels.Trial, TrialButton));
             }
 
+            // Pause keeps the place, and End, last like Skip, stops it with nothing marked done, the same as on the PC.
             buttons.Add((ButtonRole.NotNow, CardLabels.Pause, NotNowButton));
+            buttons.Add((ButtonRole.Skip, CardLabels.End, EndSessionButton));
         }
 
         switch (card.BedtimeButton)

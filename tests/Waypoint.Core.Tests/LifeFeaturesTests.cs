@@ -535,7 +535,7 @@ public sealed class LifeFeaturesTests : IDisposable
 
         Assert.Equal([("Done", true), ("Not now", false)], Buttons(fake.Requests[0].Body));
         Assert.Equal([("Start", true), ("Done", false), ("10 more minutes", false), ("Skip", false)], Buttons(fake.Requests[1].Body));
-        Assert.Equal([("Did it", true), ("Make it smaller", false), ("Try 2 minutes", false), ("Pause", false)], Buttons(fake.Requests[2].Body));
+        Assert.Equal([("Did it", true), ("Make it smaller", false), ("Try 2 minutes", false), ("Pause", false), ("End", false)], Buttons(fake.Requests[2].Body));
         Assert.Equal([("Not now", false)], Buttons(fake.Requests[3].Body));
         Assert.Equal([("Bought", true), ("Skip", false)], Buttons(fake.Requests[4].Body));
     }
@@ -562,6 +562,7 @@ public sealed class LifeFeaturesTests : IDisposable
     [InlineData("waypoint:smaller", AlertActionKind.Smaller)]
     [InlineData("waypoint:not-now", AlertActionKind.NotNow)]
     [InlineData("waypoint:trial", AlertActionKind.Trial)]
+    [InlineData("waypoint:end-session", AlertActionKind.EndSession)]
     public async Task Session_buttons_reach_the_app(string button, AlertActionKind expected)
     {
         AlertActionKind? applied = null;

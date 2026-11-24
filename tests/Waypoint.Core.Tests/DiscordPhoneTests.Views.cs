@@ -193,7 +193,7 @@ public sealed partial class DiscordPhoneTests
         var list = worker.OnViewPicked(WaypointWorker.OpenMenu, "private", [found.Menu.Choices.Single(choice => choice.Label == "biology book").Value])!;
         Assert.Equal("Errands", list.Title);
 
-        Assert.Contains("Nothing found", worker.OnDiscordCommand(new SlashCommand("search", Options(("words", "zebra")))).Card.Description);
+        Assert.Contains("Nothing on any page matches", worker.OnDiscordCommand(new SlashCommand("search", Options(("words", "zebra")))).Card.Description);
     }
 
     [Fact]

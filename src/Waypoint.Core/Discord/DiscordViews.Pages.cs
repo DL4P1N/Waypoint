@@ -97,7 +97,7 @@ public static partial class DiscordViews
             .ToList());
         var name = DiscordText.Escape(list.Name);
         var title = DiscordPages.Titled(name.Length > MaxTitle - 20 ? name[..(MaxTitle - 20)] : name, page, pages.Count);
-        return new DiscordCard(title, list.Entries.Count == 0 ? "Nothing on this list." : string.Join("\n", shown.Select(line => line.Line)), [], CardTone.Reminder)
+        return new DiscordCard(title, list.Entries.Count == 0 ? CardLabels.EmptyList : string.Join("\n", shown.Select(line => line.Line)), [], CardTone.Reminder)
         {
             Menu = menu,
             MoreRows = Rows(DiscordPages.Pager(target, page, pages.Count)),

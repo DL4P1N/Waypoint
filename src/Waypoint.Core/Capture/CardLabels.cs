@@ -20,6 +20,12 @@ public static class CardLabels
     /// <summary>Stops a session with its place kept. Nothing comes back on its own.</summary>
     public const string Pause = "Pause";
 
+    /// <summary>The session card's buttons, the same on the PC and Discord. End stops it without marking anything done.</summary>
+    public const string DidIt = "Did it";
+    public const string Smaller = "Make it smaller";
+    public const string Trial = "Try 2 minutes";
+    public const string End = "End";
+
     /// <summary>Opens the short Save my spot form.</summary>
     public const string SaveSpot = "Save my spot";
 
@@ -37,4 +43,16 @@ public static class CardLabels
 
     /// <summary>Skip for a Tailspin Pay payment: it wasn't paying anything back, so nothing more is asked about it.</summary>
     public const string NotARepayment = "Not a repayment";
+
+    /// <summary>What's said when a typed time or date can't be used, the same wherever one is typed.</summary>
+    public const string TimeHint = "Try a time like 3pm or 15:30.";
+    public const string DateHint = "Try a day like today, tomorrow, friday, 11/14, or 2026-11-14.";
+
+    /// <summary>The empty states that read the same on the PC and Discord.</summary>
+    public const string NothingToStart = Activation.NothingToPick;
+    public const string EmptyList = "Nothing on this list yet.";
+    public const string NothingYet = "Nothing here yet.";
+
+    /// <summary>"Nothing in History matches "essay"." A search that found nothing, named for where it looked.</summary>
+    public static string NothingMatches(string where, string words) => $"Nothing {where} matches \"{words}\".";
 }
