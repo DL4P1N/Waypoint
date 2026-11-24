@@ -463,7 +463,7 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
-    public void Bedtime_has_a_late_night_check_ins_switch_that_starts_on_and_no_dim_switch() => Ui.Run(ui =>
+    public void Bedtime_has_a_late_night_check_ins_switch_that_starts_off_and_no_dim_switch() => Ui.Run(ui =>
     {
         var settings = new MemorySettings();
         var view = new SettingsView();
@@ -473,13 +473,14 @@ public sealed class SettingsViewTests
         view.ShowSection("bedtime");
         ui.Pump();
 
+        // Off for a new setup, until turned on here.
         var lateCheckIns = UiTest.Named<CheckBox>(view, "LateCheckInsOn");
-        Assert.True(lateCheckIns.IsChecked);
+        Assert.False(lateCheckIns.IsChecked);
         Assert.Null(view.FindName("DimOn"));
 
-        lateCheckIns.IsChecked = false;
+        lateCheckIns.IsChecked = true;
         UiTest.Call(view, "OnBedtimeSaved", view, new RoutedEventArgs());
-        Assert.False(settings.SavedBedtime!.LateCheckIns);
+        Assert.True(settings.SavedBedtime!.LateCheckIns);
     });
 
     [Fact]
