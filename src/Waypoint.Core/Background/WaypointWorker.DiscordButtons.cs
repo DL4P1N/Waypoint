@@ -63,7 +63,6 @@ public sealed partial class WaypointWorker
             AlertActionKind.Smaller => "smaller",
             AlertActionKind.NotNow => "not now",
             AlertActionKind.Trial => "2 minutes",
-            AlertActionKind.EndSession => "cancel",
             AlertActionKind.EveningStepDone => BedtimeRoutine.DoneText(BedtimeSchedule.Settings.EveningStepLabel()),
             AlertActionKind.WindDownStepDone => BedtimeRoutine.DoneText(BedtimeSchedule.Settings.WindDownStepLabel()),
             AlertActionKind.SnoozeBedtime => BedtimeRoutine.SnoozeWord,
@@ -160,7 +159,7 @@ public sealed partial class WaypointWorker
     /// <summary>The next step with the session's buttons while one is going, or a plain gray card once it's over.</summary>
     private static DiscordCard SessionCard(string text, ActivationSession? session) =>
         session is { } running
-            ? DiscordText.Reply(text.Length > 0 ? text : "Saved.") with { HasSessionButtons = true, CanTrial = running.CanTrial, FeedbackFeature = Feedback.Session, FeedbackRef = running.TaskRef }
+            ? DiscordText.Reply(text.Length > 0 ? text : "Saved.") with { HasSessionButtons = true, CanTrial = running.CanTrial, SessionId = running.Id, FeedbackFeature = Feedback.Session, FeedbackRef = running.TaskRef }
             : DiscordText.Reply(text.Length > 0 ? text : "Saved.", CardTone.Finished);
 
     /// <summary>Starts a session from Discord and hands back its first step with the session's buttons.</summary>
@@ -174,13 +173,19 @@ public sealed partial class WaypointWorker
         _host.Changed();
         var session = _database.GetActiveSession(_clock());
         return session is { } running
-            ? DiscordText.Reply($"{running.TaskTitle}\n{reply.Text}") with { HasSessionButtons = true, CanTrial = running.CanTrial, FeedbackFeature = Feedback.Session, FeedbackRef = running.TaskRef }
+            ? DiscordText.Reply($"{running.TaskTitle}\n{reply.Text}") with { HasSessionButtons = true, CanTrial = running.CanTrial, SessionId = running.Id, FeedbackFeature = Feedback.Session, FeedbackRef = running.TaskRef }
             : DiscordText.Reply(reply.Text, CardTone.Attention);
     }
 
     /// <summary>A button that carries what it acts on. Unknown or stale ones say so rather than doing anything.</summary>
     private ButtonResult OnCarriedAction(string action, string messageId)
     {
+        // End only ends the session its card was posted for, and is never handed to the sorter.
+        if (TakeId(action, DiscordBridge.EndSessionAction) is { } ending)
+        {
+            return new ButtonResult(Outcome: _database.EndSessionFromCard(ending, _clock()));
+        }
+
         if (OnThreadAction(action) is { } thread)
         {
             return thread;

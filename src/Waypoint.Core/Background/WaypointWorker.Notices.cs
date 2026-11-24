@@ -118,7 +118,6 @@ public sealed partial class WaypointWorker
             AlertActionKind.Smaller => "smaller",
             AlertActionKind.NotNow => "not now",
             AlertActionKind.Trial => "2 minutes",
-            AlertActionKind.EndSession => "cancel",
             AlertActionKind.EveningStepDone => BedtimeRoutine.DoneText(BedtimeSchedule.Settings.EveningStepLabel()),
             AlertActionKind.WindDownStepDone => BedtimeRoutine.DoneText(BedtimeSchedule.Settings.WindDownStepLabel()),
             AlertActionKind.SnoozeBedtime => BedtimeRoutine.SnoozeWord,

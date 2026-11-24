@@ -178,7 +178,10 @@ public sealed partial class DiscordBridge
 
             // Pause keeps the place, and End, last like Skip, stops it with nothing marked done, the same as on the PC.
             buttons.Add((ButtonRole.NotNow, CardLabels.Pause, NotNowButton));
-            buttons.Add((ButtonRole.Skip, CardLabels.End, EndSessionButton));
+            if (card.SessionId is { } sessionId)
+            {
+                buttons.Add((ButtonRole.Skip, CardLabels.End, ActionPrefix + EndSessionAction + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
         }
 
         switch (card.BedtimeButton)

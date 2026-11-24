@@ -29,7 +29,6 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     private const string SmallerButton = "waypoint:smaller";
     private const string NotNowButton = "waypoint:not-now";
     private const string TrialButton = "waypoint:trial";
-    private const string EndSessionButton = "waypoint:end-session";
     private const string WindDownStepDoneButton = "waypoint:wind-down-step-done";
     private const string EveningStepDoneButton = "waypoint:evening-step-done";
     private const string SnoozeBedtimeButton = "waypoint:snooze-bedtime";
@@ -67,6 +66,9 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
     /// <summary>Buttons that carry what they act on, such as a wait-list purchase or an item to put back.</summary>
     public const string ActionPrefix = "waypoint:act:";
 
+    /// <summary>End on a session card, carried with the session's ID so an old card can't end a later session.</summary>
+    public const string EndSessionAction = "end-session:";
+
     /// <summary>Menus on pinned views. They're told apart from alert buttons, since using one keeps the view.</summary>
     public const string ViewPrefix = "waypoint:view-";
     private const int OnlySeenByPresser = 64;
@@ -91,7 +93,6 @@ public sealed partial class DiscordBridge(HttpClient http, WaypointDatabase data
         [SmallerButton] = AlertActionKind.Smaller,
         [NotNowButton] = AlertActionKind.NotNow,
         [TrialButton] = AlertActionKind.Trial,
-        [EndSessionButton] = AlertActionKind.EndSession,
         [WindDownStepDoneButton] = AlertActionKind.WindDownStepDone,
         [EveningStepDoneButton] = AlertActionKind.EveningStepDone,
         [SnoozeBedtimeButton] = AlertActionKind.SnoozeBedtime,
