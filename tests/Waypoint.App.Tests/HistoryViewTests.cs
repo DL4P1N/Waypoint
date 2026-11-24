@@ -86,6 +86,39 @@ public sealed class HistoryViewTests
         Assert.True(ui.Press(more, Key.Delete));
         Assert.Empty(ui.Database.SearchHistory("return books", 10, HistoryFilter.Reopened));
         Assert.Contains("Deleted return books", UiTest.Descendants<TextBlock>(UiTest.Named<UndoBar>(view, "Bar")).Select(text => text.Text));
+
+        // With no rows left, the keyboard goes to Undo rather than off the page.
+        ui.Pump();
+        Assert.True(UiTest.Named<Button>(UiTest.Named<UndoBar>(view, "Bar"), "UndoButton").IsKeyboardFocused);
+    });
+
+    [Fact]
+    public void Tab_reaches_a_rows_box_before_its_menu_and_delete_moves_the_keyboard_to_the_next_row() => Ui.Run(ui =>
+    {
+        foreach (var title in new[] { "return books", "pay rent", "water plants" })
+        {
+            var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, title, DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+            ui.Database.SetDone(item, true);
+        }
+
+        var view = Make(ui);
+        var entries = UiTest.Named<ItemsControl>(view, "Entries");
+        var first = ui.Container(entries, entries.Items[0]!);
+        var stops = UiTest.Descendants<Control>(first).Where(control => control is CheckBox or Button).ToList();
+        Assert.IsType<CheckBox>(stops[0]);
+        Assert.IsType<Button>(stops[1]);
+
+        var title0 = UiTest.Prop<string>(entries.Items[0]!, "Title");
+        var title1 = UiTest.Prop<string>(entries.Items[1]!, "Title");
+        ui.Focus(stops[0]);
+        Assert.True(ui.Press(stops[0], Key.Delete));
+        ui.Pump();
+
+        Assert.Equal(2, entries.Items.Count);
+        var focused = Keyboard.FocusedElement as FrameworkElement;
+        Assert.IsType<CheckBox>(focused);
+        Assert.Equal(title1, UiTest.Prop<string>(focused!.DataContext, "Title"));
+        Assert.DoesNotContain(entries.Items.Cast<object>(), row => UiTest.Prop<string>(row, "Title") == title0);
     });
 
     [Fact]

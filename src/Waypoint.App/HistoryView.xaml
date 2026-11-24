@@ -32,6 +32,16 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="0,0,0,10" Background="Transparent" ContextMenuOpening="OnRowMenuOpening" PreviewKeyDown="OnRowKey">
+                                    <!-- First, so Tab reaches a row's box before its menu. -->
+                                    <CheckBox DockPanel.Dock="Left"
+                                              Style="{StaticResource DoneBox}"
+                                              Margin="0,2,11,0"
+                                              VerticalAlignment="Top"
+                                              IsChecked="True"
+                                              AutomationProperties.Name="{Binding ReopenName}"
+                                              ToolTip="Uncheck to put it back on To do"
+                                              Visibility="{Binding BoxVisibility}"
+                                              Unchecked="OnRowUnchecked" />
                                     <!-- The row's menu without a right-click, and a stop for the keyboard on every row, even one
                                          that can't be put back and so has no box. Shows while the row is pointed at or has focus. -->
                                     <Button DockPanel.Dock="Right"
@@ -59,15 +69,6 @@
                                             </Style>
                                         </Button.Style>
                                     </Button>
-                                    <CheckBox DockPanel.Dock="Left"
-                                              Style="{StaticResource DoneBox}"
-                                              Margin="0,2,11,0"
-                                              VerticalAlignment="Top"
-                                              IsChecked="True"
-                                              AutomationProperties.Name="{Binding ReopenName}"
-                                              ToolTip="Uncheck to put it back on To do"
-                                              Visibility="{Binding BoxVisibility}"
-                                              Unchecked="OnRowUnchecked" />
                                     <StackPanel>
                                         <TextBlock FontSize="14"
                                                    TextWrapping="Wrap"

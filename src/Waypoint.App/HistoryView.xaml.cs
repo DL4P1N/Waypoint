@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Waypoint.Core;
 using Waypoint.Core.Capture;
@@ -38,6 +39,9 @@ public partial class HistoryView : UserControl
     private IHistoryData? _history;
     private Action _changed = null!;
     private bool _menuOpen;
+
+    /// <summary>Where the keyboard goes once the rows are drawn again after a row it was on is deleted.</summary>
+    private int? _focusAfter;
 
     public HistoryView() => InitializeComponent();
 
@@ -116,6 +120,11 @@ public partial class HistoryView : UserControl
         }
 
         Entries.ItemsSource = rows;
+        if (_focusAfter is { } index)
+        {
+            _focusAfter = null;
+            Dispatcher.BeginInvoke(() => FocusRowAt(index), DispatcherPriority.Loaded);
+        }
         Empty.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         Empty.Text = EmptyText(filter, Column.SearchText);
     }
@@ -146,7 +155,7 @@ public partial class HistoryView : UserControl
         e.Handled = true;
         var element = (FrameworkElement)sender;
         _menuOpen = true;
-        RowMenu.Open(element, e, MenuFor((HistoryRow)element.DataContext), () => _menuOpen = false);
+        RowMenu.Open(element, e, MenuFor((HistoryRow)element.DataContext, element.IsKeyboardFocusWithin), () => _menuOpen = false);
     }
 
     /// <summary>The ⋯ on a row opens the same menu as a right-click, under the button.</summary>
@@ -154,7 +163,7 @@ public partial class HistoryView : UserControl
     {
         var button = (FrameworkElement)sender;
         _menuOpen = true;
-        RowMenu.Open(button, PlacementMode.Bottom, MenuFor((HistoryRow)button.DataContext), () => _menuOpen = false);
+        RowMenu.Open(button, PlacementMode.Bottom, MenuFor((HistoryRow)button.DataContext, refocus: true), () => _menuOpen = false);
     }
 
     /// <summary>Delete on a row's box or ⋯ takes it out of History, as the menu's Delete does, with Undo.</summary>
@@ -163,11 +172,54 @@ public partial class HistoryView : UserControl
         if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None && e.OriginalSource is ButtonBase)
         {
             e.Handled = true;
-            Delete((HistoryRow)((FrameworkElement)sender).DataContext);
+            Delete((HistoryRow)((FrameworkElement)sender).DataContext, refocus: true);
         }
     }
 
-    private List<RowMenuEntry> MenuFor(HistoryRow row)
+    /// <summary>
+    /// After a row the keyboard was on is deleted, it goes to the row that took its place, or the one above at the end,
+    /// or to Undo when no rows are left, so it isn't lost off the page.
+    /// </summary>
+    private void FocusRowAt(int index)
+    {
+        if (Entries.Items.Count == 0)
+        {
+            if (Bar.FindName("UndoButton") is Button { IsVisible: true } undo)
+            {
+                undo.Focus();
+            }
+
+            return;
+        }
+
+        Entries.UpdateLayout();
+        if (Entries.ItemContainerGenerator.ContainerFromIndex(Math.Min(index, Entries.Items.Count - 1)) is not DependencyObject container)
+        {
+            return;
+        }
+
+        var stops = new List<Control>();
+        Collect(container, stops);
+        stops.FirstOrDefault(stop => stop.IsVisible && stop.Focusable && stop.IsEnabled)?.Focus();
+
+        static void Collect(DependencyObject parent, List<Control> found)
+        {
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is ButtonBase control)
+                {
+                    found.Add(control);
+                }
+                else
+                {
+                    Collect(child, found);
+                }
+            }
+        }
+    }
+
+    private List<RowMenuEntry> MenuFor(HistoryRow row, bool refocus)
     {
         var entries = new List<RowMenuEntry>();
         if (row.CanReopen)
@@ -175,18 +227,24 @@ public partial class HistoryView : UserControl
             entries.Add(new("Reopen", () => Reopen(row)));
         }
 
-        entries.Add(new("Delete", () => Delete(row)));
+        entries.Add(new("Delete", () => Delete(row, refocus)));
         entries.Add(new("Copy title", () => RowMenu.Copy(row.Title)));
         return entries;
     }
 
     /// <summary>Takes the item out of History, and off the list if it's still there. Undo puts both back.</summary>
-    private async void Delete(HistoryRow row)
+    private async void Delete(HistoryRow row, bool refocus = false)
     {
+        var index = Entries.Items.IndexOf(row);
         var (ok, deleted) = await Change(() => _history!.DeleteHistoryItem(row.Entry, DateTime.Now));
         if (!ok || deleted is null)
         {
             return;
+        }
+
+        if (refocus && index >= 0)
+        {
+            _focusAfter = index;
         }
 
         Bar.Show($"Deleted {row.Title}", async () =>
