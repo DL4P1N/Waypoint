@@ -87,13 +87,16 @@ public sealed partial class WaypointDatabase
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Whether any post still has a notice to clear away, or one noted as being sent under <paramref name="sendPrefix"/>.</summary>
+    /// <summary>
+    /// Whether any live post still has a notice to clear away, or one noted as being sent under
+    /// <paramref name="sendPrefix"/>. Only live posts are brought up to date, so a notice left in any other never counts.
+    /// </summary>
     public bool HasDiscordNotices(string sendPrefix)
     {
         using var lease = Connect(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT EXISTS (SELECT 1 FROM discord_post_notices)
+            SELECT EXISTS (SELECT 1 FROM discord_post_notices n JOIN discord_posts p ON p.thread_id = n.thread_id AND p.state = 'live')
                 OR EXISTS (SELECT 1 FROM discord_sends WHERE substr(send_key, 1, length($prefix)) = $prefix)
             """;
         command.Parameters.AddWithValue("$prefix", sendPrefix);
@@ -115,6 +118,21 @@ public sealed partial class WaypointDatabase
         }
 
         return notices;
+    }
+
+    /// <summary>
+    /// Forgets the notices of posts retired, replaced or gone, which are never brought up to date again, so they'd
+    /// never be cleared away. What's in those posts stays as it is. Returns how many went.
+    /// </summary>
+    public int ForgetDiscordNoticesOfEndedPosts()
+    {
+        using var lease = Connect(out var connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM discord_post_notices
+            WHERE thread_id IN (SELECT thread_id FROM discord_posts WHERE state IN ('retired', 'gone'))
+            """;
+        return command.ExecuteNonQuery();
     }
 
     public void RemoveDiscordNotice(string messageId)

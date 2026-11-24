@@ -546,10 +546,11 @@ public sealed partial class WaypointWorker
     /// <summary>
     /// A part or a notice noted for a post that's no longer live, such as one retired or made again, is let go, since
     /// that post is never brought up to date again. What's in it stays as it is. A notice that never went out shows
-    /// on this PC first, once.
+    /// on this PC first, once. A notice already in such a post is forgotten too, so it never keeps the rounds coming.
     /// </summary>
     private void ForgetSendsOfRetiredPosts()
     {
+        _database.ForgetDiscordNoticesOfEndedPosts();
         foreach (var send in _database.GetDiscordSends("part:").Concat(_database.GetDiscordSends(NoticeSends)))
         {
             var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
