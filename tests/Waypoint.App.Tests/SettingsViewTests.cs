@@ -316,8 +316,15 @@ public sealed class SettingsViewTests
             return "Removed. Nothing more is read from the feed, and what it already added stays.";
         }
 
+        public bool RefusePutBack { get; set; }
+
         public string PutBackCalendarFeed()
         {
+            if (RefusePutBack)
+            {
+                throw new ServerRefusedException(500, "The server turned that down (500).");
+            }
+
             Link = _removed;
             return "Put the feed link back.";
         }
@@ -641,6 +648,14 @@ public sealed class SettingsViewTests
         Assert.Equal("https://example.test/feed.ics", settings.Link);
         Assert.Equal(Visibility.Visible, remove.Visibility);
         Assert.Equal("Put the feed link back.", UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
+
+        // A server that turns Undo down is said plainly rather than left unanswered.
+        settings.RefusePutBack = true;
+        UiTest.Call(view, "OnCalendarFeedRemoved", view, new RoutedEventArgs());
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Null(settings.Link);
+        Assert.Equal(Waypoint.Core.PlainProblem.Report(new ServerRefusedException(500, "")), UiTest.Named<TextBlock>(view, "CalendarStatus").Text);
     });
 
     [Fact]

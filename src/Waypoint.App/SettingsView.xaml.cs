@@ -1328,6 +1328,11 @@ public partial class SettingsView : UserControl
             show(slow.Message);
             return (false, default!);
         }
+        catch (ServerRefusedException refused)
+        {
+            show(Waypoint.Core.PlainProblem.Report(refused));
+            return (false, default!);
+        }
     }
 
     private void ShowShiftDate() => ShiftDate.Content = _shiftDate.ToString("ddd, MMM d", CultureInfo.InvariantCulture);

@@ -237,7 +237,20 @@ public sealed class ServerSettingsData(ServerClient server) : ISettingsData
 
     public string RemoveCalendarFeed() => server.Send<TextValue>(HttpMethod.Delete, "api/settings/calendar").Value ?? "";
 
-    public string PutBackCalendarFeed() => server.Send<TextValue>(Post, "api/settings/calendar/put-back").Value ?? "";
+    /// <summary>A server from before Undo was added doesn't know the call, so it says the server needs updating.</summary>
+    public string PutBackCalendarFeed()
+    {
+        try
+        {
+            return server.Send<TextValue>(Post, "api/settings/calendar/put-back").Value ?? "";
+        }
+        catch (ServerRefusedException refused) when (refused.Status is 404 or 405)
+        {
+            return PutBackNeedsNewerServer;
+        }
+    }
+
+    public const string PutBackNeedsNewerServer = "The server needs updating before Undo can put the feed link back. Paste the link again to use it.";
 
     public AlertEmailForm GetAlertEmail() => server.GetOr("api/settings/email", new AlertEmailForm(null, null));
 
