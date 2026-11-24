@@ -378,7 +378,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
     {
         var worker = Worker();
         const string csv = "Posted On,Purchase Date,Category,Description,Amount\n"
-            + "10/02/2026,10/01/2026,Restaurants,LUNCH SPOT,12.00\n10/02/2026,soon,Restaurants,DINER,8.00\n10/03/2026,10/03/2026,Shopping,KIOSK,n/a\n";
+            + "10/02/2026,10/01/2026,Restaurants,LUNCH SPOT,12.00\n10/02/2026,10/32/2026,Restaurants,DINER,8.00\n10/03/2026,10/03/2026,Shopping,KIOSK,n/a\n";
 
         Assert.Equal("Added 1 purchase to Budget. 2 rows couldn't be read, so they were left out.", worker.ImportStatementsReply([csv]));
     }

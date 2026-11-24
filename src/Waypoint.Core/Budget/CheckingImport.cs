@@ -39,17 +39,17 @@ public static class CheckingImport
     {
         var rows = new List<CheckingRow>();
         var unreadable = 0;
-        foreach (var cells in CsvImport.Rows(csv))
+        foreach (var record in CsvImport.DataRecords(csv))
         {
-            if (cells.Count >= 3
-                && DateOnly.TryParse(cells[0], CultureInfo.InvariantCulture, out var day)
-                && CsvImport.TryReadAmount(cells[2], out var value))
+            // Date, details, then amount. Totals and summary lines are passed over without counting as unreadable.
+            switch (CsvImport.ReadRow(record, 0, 2, 1, out var day, out var value))
             {
-                rows.Add(Classify(day, cells[1].Trim(), (long)Math.Round(value * 100)));
-            }
-            else
-            {
-                unreadable++;
+                case CsvImport.RowRead.Transaction:
+                    rows.Add(Classify(day, record.Cells[1].Trim(), (long)Math.Round(value * 100)));
+                    break;
+                case CsvImport.RowRead.Unreadable:
+                    unreadable++;
+                    break;
             }
         }
 
