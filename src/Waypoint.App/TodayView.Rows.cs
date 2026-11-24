@@ -33,10 +33,19 @@ public partial class TodayView
             return;
         }
 
+        // A dose is kept once for its day, the same as its menu's Took it, so checking one that's already been taken
+        // changes nothing and offers no Undo that would put back the real dose from earlier.
+        if (done && item.Dose)
+        {
+            TookIt(item);
+            return;
+        }
+
         _doneWanted[key] = (item, done);
+        bool saved;
         try
         {
-            await Work.Run(() => _database.SetDone(item, done));
+            saved = await Try(() => _database.SetDone(item, done), nameof(OnItemChecked));
         }
         finally
         {
@@ -46,7 +55,24 @@ public partial class TodayView
             }
         }
 
-        Bar.Forget(About(item));
+        // While the server is away nothing was saved and the bar says so. The rows are built again below from what
+        // was kept, so the box goes back to how it was.
+        if (saved)
+        {
+            Bar.Forget(About(item));
+            if (done)
+            {
+                // With Hide done on, the row leaves the list, so this says what happened and how to bring it back.
+                Bar.Show(DoneMessage(item.Title), async () =>
+                {
+                    if (await Try(() => _database.SetDone(item, false), "UndoDone"))
+                    {
+                        Acted();
+                    }
+                }, About(item));
+            }
+        }
+
         Work.ShowAfterChanges(nameof(OnItemChecked), () =>
         {
             ShowFilters();
@@ -60,6 +86,56 @@ public partial class TodayView
         });
     }
 
+    /// <summary>What the bar says when a row's box is checked, with Undo beside it.</summary>
+    internal static string DoneMessage(string title) => $"Marked {title} done";
+
+    /// <summary>
+    /// Runs a change after the page's earlier ones. If the server is away, busy, turns it down, or is too slow to
+    /// answer, the bar says so, the rows are read and drawn again so they show what was really kept, and Ok is false.
+    /// A slow answer may still have gone through, which its message says rather than that nothing was saved.
+    /// </summary>
+    private async System.Threading.Tasks.Task<(bool Ok, T Result)> Try<T>(Func<T> change, string what)
+    {
+        try
+        {
+            return (true, await Work.Run(change, what));
+        }
+        catch (ServerUnavailableException away)
+        {
+            Bar.Show(PageMessages.CantChange(away));
+        }
+        catch (ServerTimedOutException slow)
+        {
+            Bar.Show(slow.Message);
+        }
+        catch (Exception problem) when (problem is ServerBusyException or ServerRefusedException)
+        {
+            Bar.Show($"{problem.Message} Nothing was changed.");
+        }
+
+        Redraw();
+        return (false, default!);
+    }
+
+    /// <summary>Reads the rows again and draws them, after a change that may not have been kept.</summary>
+    private void Redraw() => Work.ShowAfterChanges(nameof(Redraw), () =>
+    {
+        ShowFilters();
+        ShowItems(force: true);
+        ShowSuggestion();
+    }, () =>
+    {
+        ShowFilters();
+        ShowItems();
+        ShowSuggestion();
+    });
+
+    private async System.Threading.Tasks.Task<bool> Try(Action change, string what) => (await Try<object?>(() =>
+    {
+        change();
+        return null;
+    }, what)).Ok;
+
     private void OnRowMenuOpening(object sender, ContextMenuEventArgs e)
     {
         var box = (FrameworkElement)sender;
@@ -67,7 +143,7 @@ public partial class TodayView
         if (_selected.Count > 1 && _selected.Contains(row.Key))
         {
             e.Handled = true;
-            OpenSeveralMenu(box, e);
+            OpenSeveralMenu(box, e.CursorLeft < 0 ? PlacementMode.Bottom : PlacementMode.MousePoint);
             return;
         }
 
@@ -104,7 +180,7 @@ public partial class TodayView
         var today = DateOnly.FromDateTime(DateTime.Now);
         var canFile = item.Source == ItemSource.Capture && ToDoFilters.CourseOf(item, Placement(item)) is null && _filters.Any(filter => filter.Source == FilterSource.Custom);
         var actions = RowActions.For(item, today, moved, canFile);
-        IEnumerable<RowMenuEntry> Part(RowActionGroup group) => actions.Where(action => RowActions.GroupOf(action) == group).Select(action => Entry(action, item, today));
+        IEnumerable<RowMenuEntry> Part(RowActionGroup group) => actions.Where(action => RowActions.GroupOf(action) == group).Select(action => Entry(action, item, today, moved));
         var waiting = WaitingMenu(item, today).ToList();
         // "Waiting on someone..." is one more way to change it. A wait's own follow-up lines get a part of their own.
         List<RowMenuEntry> markWaiting = waiting.Count == 1 ? waiting : [];
@@ -191,7 +267,29 @@ public partial class TodayView
         var shift = modifiers.HasFlag(ModifierKeys.Shift);
         if (!ctrl && !shift)
         {
-            ClearSelection();
+            if (!OnTitle(box, e.OriginalSource))
+            {
+                ClearSelection();
+                return;
+            }
+
+            // Only the box marks a row done, so a click on its words can't finish it by mistake. It picks the row
+            // instead, which shows a long capture's whole text, and a second click lets it go.
+            e.Handled = true;
+            box.Focus();
+            var only = _selected.Count == 1 && _selected.Contains(row.Key);
+            _selected.Clear();
+            if (only)
+            {
+                _anchor = null;
+            }
+            else
+            {
+                _selected.Add(row.Key);
+                _anchor = row.Key;
+            }
+
+            MarkSelected();
             return;
         }
 
@@ -219,6 +317,25 @@ public partial class TodayView
         MarkSelected();
     }
 
+    /// <summary>Whether a press landed on a row's words rather than its box or the gap beside the box.</summary>
+    private static bool OnTitle(CheckBox box, object source)
+    {
+        if (box.Content is not DependencyObject words)
+        {
+            return false;
+        }
+
+        for (var at = source as DependencyObject; at is not null && !ReferenceEquals(at, box); at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
+        {
+            if (ReferenceEquals(at, words))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Ctrl+Space selects the focused row, and Escape lets go of the selection.</summary>
     private void OnRowsKeyDown(object sender, KeyEventArgs e)
     {
@@ -234,6 +351,94 @@ public partial class TodayView
             MarkSelected();
             e.Handled = true;
         }
+        else if (e.Key == System.Windows.Input.Key.Delete && Keyboard.Modifiers == ModifierKeys.None
+            && (e.OriginalSource as FrameworkElement)?.DataContext is ItemRow focused)
+        {
+            // A held key repeats, and each repeat would delete the same row again, so only the first press counts.
+            e.Handled = true;
+            if (!e.IsRepeat)
+            {
+                DeleteByKey(focused);
+            }
+        }
+    }
+
+    /// <summary>Rows whose Delete is on its way, so a second press or menu choice can't run it again on the same item.</summary>
+    private readonly HashSet<string> _deleting = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rows deleted but still on screen until the list is next built, which in server mode waits for the server. Kept
+    /// so their Delete isn't run again on what's now a stale row, which would replace the first Undo.
+    /// </summary>
+    private readonly HashSet<string> _deleted = new(StringComparer.Ordinal);
+
+    private bool Deleting(string key) => _deleting.Contains(key) || _deleted.Contains(key);
+
+    /// <summary>Runs a row's Delete once at a time. False when it's already on its way or done, so the caller does nothing.</summary>
+    private async System.Threading.Tasks.Task<bool> DeleteOnce(IReadOnlyList<string> keys, Func<System.Threading.Tasks.Task<bool>> delete)
+    {
+        if (keys.Any(Deleting))
+        {
+            return false;
+        }
+
+        _deleting.UnionWith(keys);
+        try
+        {
+            var gone = await delete();
+            if (gone)
+            {
+                _deleted.UnionWith(keys);
+            }
+
+            return gone;
+        }
+        finally
+        {
+            _deleting.ExceptWith(keys);
+        }
+    }
+
+    /// <summary>
+    /// Delete on a focused row does what its menu's Delete does: an open item goes to History as canceled, a finished
+    /// one is deleted, each with Undo on the bar. On a row in a selection of several, it's the selection's Delete.
+    /// </summary>
+    private async void DeleteByKey(ItemRow row)
+    {
+        if (_selected.Count > 1 && _selected.Contains(row.Key))
+        {
+            var items = SelectedItems;
+            if (RowActions.ForSeveral(items, DateOnly.FromDateTime(DateTime.Now)).Contains(RowAction.Delete))
+            {
+                RemoveSeveral(items);
+            }
+
+            return;
+        }
+
+        if (row.Item.Done)
+        {
+            Delete(row.Item);
+        }
+        else
+        {
+            Remove(row.Item);
+        }
+    }
+
+    /// <summary>The "⋯" button on a row opens the same menu as right-clicking it, under the button.</summary>
+    private void OnRowMoreClicked(object sender, RoutedEventArgs e)
+    {
+        var button = (FrameworkElement)sender;
+        var row = (ItemRow)button.DataContext;
+        if (_selected.Count > 1 && _selected.Contains(row.Key))
+        {
+            OpenSeveralMenu(button, PlacementMode.Bottom);
+            return;
+        }
+
+        ClearSelection();
+        OpenItemMenu(button, PlacementMode.Bottom, row.Item);
     }
 
     private void Toggle(ItemRow row)
@@ -275,6 +480,9 @@ public partial class TodayView
             .SelectMany(row => row.Steps.Prepend(row))
             .ToList();
         var shown = _rowOrder.Select(row => row.Key).ToHashSet();
+
+        // A change reads the rows again before it's done, so these rows show whether a delete went through.
+        _deleted.Clear();
         _selected.IntersectWith(shown);
         _expanded.IntersectWith(shown);
         if (_anchor is not null && !shown.Contains(_anchor))
@@ -288,14 +496,20 @@ public partial class TodayView
     private IReadOnlyList<StoredItem> SelectedItems => _rowOrder.Where(row => _selected.Contains(row.Key)).Select(row => row.Item).ToList();
 
     /// <summary>Done, Reschedule, Drop, and Delete for every selected row, each through the same path as its own menu, with one undo for all of them.</summary>
-    private void OpenSeveralMenu(FrameworkElement box, ContextMenuEventArgs e)
+    private void OpenSeveralMenu(FrameworkElement box, PlacementMode placement)
     {
         var items = SelectedItems;
         var today = DateOnly.FromDateTime(DateTime.Now);
         var count = items.Count;
         var entries = RowActions.ForSeveral(items, today).Select(action => action switch
         {
-            RowAction.Done => new RowMenuEntry($"Mark {count} done", async () => Several(await Work.Run(() => SeveralRows.Finish(_database, items)), $"Marked {count} done.")),
+            RowAction.Done => new RowMenuEntry($"Mark {count} done", async () =>
+            {
+                if (await Try(() => SeveralRows.Finish(_database, items), "FinishSeveral") is (true, { } finished))
+                {
+                    Several(finished, $"Marked {count} done.");
+                }
+            }),
             RowAction.Reschedule => new RowMenuEntry($"Reschedule {count}", Children:
             [
                 new("Today", () => MoveSeveral(items, today)),
@@ -303,18 +517,18 @@ public partial class TodayView
                 new("Next week", () => MoveSeveral(items, today.AddDays(7))),
                 new("Pick a date...", () => PickDateForSeveral(items, today)),
             ]),
-            _ => new RowMenuEntry($"Delete {count}", async () => Several(await Work.Run(() => SeveralRows.Remove(_database, items, DateTime.Now)), $"Deleted {count}.")),
+            _ => new RowMenuEntry($"Delete {count}", () => RemoveSeveral(items)),
         }).ToList();
 
         if (entries.Count == 0)
         {
-            entries.Add(new RowMenuEntry("Some of these are finished, so they can only be changed one at a time"));
+            entries.Add(new RowMenuEntry("Some of these are done, so they can only be changed one at a time"));
         }
 
         entries.Add(RowMenuEntry.Separator);
         entries.Add(new RowMenuEntry("Clear selection", ClearSelection));
         _menuOpen = true;
-        RowMenu.Open(box, e, entries, MenuClosed);
+        RowMenu.Open(box, placement, entries, MenuClosed);
     }
 
     private void PickDateForSeveral(IReadOnlyList<StoredItem> items, DateOnly today)
@@ -328,9 +542,25 @@ public partial class TodayView
         }
     }
 
+    /// <summary>The selection's Delete, from its menu or the Delete key, run once however often it's pressed.</summary>
+    private async void RemoveSeveral(IReadOnlyList<StoredItem> items) => await DeleteOnce(items.Select(ItemRef.Format).ToList(), async () =>
+    {
+        if (await Try(() => SeveralRows.Remove(_database, items, DateTime.Now), nameof(RemoveSeveral)) is not (true, { } result))
+        {
+            return false;
+        }
+
+        Several(result, $"Deleted {items.Count}.");
+        return true;
+    });
+
     private async void MoveSeveral(IReadOnlyList<StoredItem> items, DateOnly date)
     {
-        var result = await Work.Run(() => SeveralRows.Move(_database, items, date, DateTime.Now));
+        if (await Try(() => SeveralRows.Move(_database, items, date, DateTime.Now), nameof(MoveSeveral)) is not (true, { } result))
+        {
+            return;
+        }
+
         var day = date.ToString("dddd, MMM d", CultureInfo.CurrentCulture);
         Several(result, result.Undo is null
             ? $"Moved {result.Changed} to {day}. Undo isn't available, because some had no date before."
@@ -342,13 +572,15 @@ public partial class TodayView
         ClearSelection();
         Bar.Show(message, result.Undo is { } undo ? async () =>
         {
-            await Work.Run(undo);
-            Acted();
+            if (await Try(undo, "UndoSeveral"))
+            {
+                Acted();
+            }
         } : null);
         Acted();
     }
 
-    private RowMenuEntry Entry(RowAction action, StoredItem item, DateOnly today) => action switch
+    private RowMenuEntry Entry(RowAction action, StoredItem item, DateOnly today, bool moved) => action switch
     {
         RowAction.Done => item.Dose ? new(CardLabels.TookIt, () => TookIt(item)) : new("Mark done", () => SetDone(item, true)),
         RowAction.Reopen => new("Reopen", () => SetDone(item, false)),
@@ -357,10 +589,10 @@ public partial class TodayView
         RowAction.Study => new("Study for this exam", () => StudyRequested?.Invoke(item)),
         RowAction.Reschedule => new("Reschedule", Children:
         [
-            new("Today", () => Move(item, today, null)),
-            new("Tomorrow", () => Move(item, today.AddDays(1), null)),
-            new("Next week", () => Move(item, today.AddDays(7), null)),
-            new("Pick a date...", () => PickDate(item, today)),
+            new("Today", () => Move(item, today, null, moved)),
+            new("Tomorrow", () => Move(item, today.AddDays(1), null, moved)),
+            new("Next week", () => Move(item, today.AddDays(7), null, moved)),
+            new("Pick a date...", () => PickDate(item, today, moved)),
         ]),
         RowAction.UseFeedDate => new("Use feed date", () => Change(item, ChangeAction.UseFeedDate)),
         RowAction.Rename => new("Rename", () => Rename(item)),
@@ -374,39 +606,50 @@ public partial class TodayView
     };
 
     /// <summary>An open item's Delete. It's kept in History as canceled, and the bar's Undo reopens it.</summary>
-    private async void Remove(StoredItem item)
+    private async void Remove(StoredItem item) => await DeleteOnce([ItemRef.Format(item)], async () =>
     {
         Bar.Forget(About(item));
-        var applied = await Work.Run(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.Cancel), DateTime.Now));
+        var (ok, applied) = await Try(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.Cancel), DateTime.Now), nameof(Remove));
+        if (!ok)
+        {
+            return false;
+        }
+
         if (!applied.Applied)
         {
             Report(applied);
-            return;
+            return false;
         }
 
         Bar.Show($"Deleted {item.Title}", async () =>
         {
-            await Work.Run(() => _database.SetDone(item, false));
-            Acted();
+            if (await Try(() => _database.SetDone(item, false), "UndoRemove"))
+            {
+                Acted();
+            }
         });
         Acted();
-    }
+        return true;
+    });
 
     /// <summary>A finished item's Delete, which takes it out of History too.</summary>
-    private async void Delete(StoredItem item)
+    private async void Delete(StoredItem item) => await DeleteOnce([ItemRef.Format(item)], async () =>
     {
-        if (await Work.Run(() => _database.DeleteItem(item, DateTime.Now)) is not { } deleted)
+        if (await Try(() => _database.DeleteItem(item, DateTime.Now), nameof(Delete)) is not (true, { } deleted))
         {
-            return;
+            return false;
         }
 
         Bar.Show($"Deleted {item.Title}", async () =>
         {
-            await Work.Run(() => _database.UndoDelete(deleted, DateTime.Now));
-            Acted();
+            if (await Try(() => _database.UndoDelete(deleted, DateTime.Now), "UndoDelete"))
+            {
+                Acted();
+            }
         });
         Acted();
-    }
+        return true;
+    });
 
     /// <summary>Every filter it could go in except the one it's in now.</summary>
     private IEnumerable<RowMenuEntry> FileChoices(StoredItem item)
@@ -428,24 +671,45 @@ public partial class TodayView
         FiltersChanged();
     }
 
+    /// <summary>The menu's Mark done and Reopen. Mark done says so on the bar with Undo, the same as checking the box.</summary>
     private async void SetDone(StoredItem item, bool done)
     {
-        await Work.Run(() => _database.SetDone(item, done));
+        if (!await Try(() => _database.SetDone(item, done), nameof(SetDone)))
+        {
+            return;
+        }
+
         Bar.Forget(About(item));
+        if (done)
+        {
+            Bar.Show(DoneMessage(item.Title), () => SetDone(item, false), About(item));
+        }
+
         Acted();
     }
 
     /// <summary>A dose's Took it. It's kept once for its day, so a second one says when it was already marked.</summary>
+    /// <remarks>It has no Undo: there's no taking a dose back, and Reopen would undo the real one from earlier.</remarks>
     private async void TookIt(StoredItem item)
     {
         Bar.Forget(About(item));
-        _reply((await Work.Run(() => _database.TakeDose(item, DateTime.Now))).Text);
+        if (await Try(() => _database.TakeDose(item, DateTime.Now), nameof(TookIt)) is not (true, { } reply))
+        {
+            return;
+        }
+
+        _reply(reply.Text);
         Acted();
     }
 
     private async void MarkDose(StoredItem item, bool dose)
     {
-        _reply(await Work.Run(() => _database.SetDose(item, dose))
+        if (await Try(() => _database.SetDose(item, dose), nameof(MarkDose)) is not (true, var marked))
+        {
+            return;
+        }
+
+        _reply(marked
             ? dose ? $"{item.Title} is now a dose. Its reminder says {CardLabels.TookIt}." : $"{item.Title} is a plain reminder again."
             : "Only a repeating reminder can be a dose.");
         Acted();
@@ -457,26 +721,99 @@ public partial class TodayView
     private async void Start(StoredItem item)
     {
         var reference = ItemRef.Format(item);
-        _reply((await Work.Run(() => _database.StartActivation(reference, StartMethod, DateTime.Now))).Text);
-        Acted();
+        if (await Try(() => _database.StartActivation(reference, StartMethod, DateTime.Now), nameof(Start)) is (true, { } started))
+        {
+            _reply(started.Text);
+            Acted();
+        }
     }
 
     /// <summary>Uses the fixed actions, so it works offline and never waits on the sorter.</summary>
     private async void StartSmaller(StoredItem item)
     {
-        _reply((await Work.Run(() => _database.StartSmaller(item, StartMethod, DateTime.Now))).Text);
-        Acted();
+        if (await Try(() => _database.StartSmaller(item, StartMethod, DateTime.Now), nameof(StartSmaller)) is (true, { } started))
+        {
+            _reply(started.Text);
+            Acted();
+        }
     }
 
-    private async void Move(StoredItem item, DateOnly date, TimeOnly? time) => Report(await Work.Run(() => _database.RescheduleItem(item, date, time, DateTime.Now)));
+    /// <summary>
+    /// Moves one row, and the bar's Undo moves it back to its day and time, when that can be put back. A feed item
+    /// that was on its feed's date goes back to following the feed.
+    /// </summary>
+    private async void Move(StoredItem item, DateOnly date, TimeOnly? time, bool movedFromFeed)
+    {
+        Bar.Forget(About(item));
+        var (ok, applied) = await Try(() => _database.RescheduleItem(item, date, time, DateTime.Now), nameof(Move));
+        if (!ok)
+        {
+            return;
+        }
 
-    private void PickDate(StoredItem item, DateOnly today)
+        bool StillMoved(StoredItem now) => now.DueDate == date && (time is null || item.Recurs is not null || (now.DueAt is { } at && TimeOnly.FromDateTime(at.LocalDateTime) == time));
+        if (applied.Applied && item.Source == ItemSource.Calendar && !movedFromFeed)
+        {
+            Report(applied, () => UndoIfUnchanged(item, StillMoved, () => _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.UseFeedDate), DateTime.Now)));
+            return;
+        }
+
+        var back = MoveBack(item, time);
+        if (!applied.Applied || back.Why is not null)
+        {
+            Report(applied, note: applied.Applied ? back.Why : null);
+            return;
+        }
+
+        Report(applied, () => UndoIfUnchanged(item, StillMoved, () => _database.RescheduleItem(item with { DueDate = date }, back.Date, back.Time, DateTime.Now)));
+    }
+
+    /// <summary>
+    /// Puts a change back only while the item is still as that change left it. If it's been changed or finished since,
+    /// it's left alone and this says so, so an Undo never writes over something newer.
+    /// </summary>
+    private string? UndoIfUnchanged(StoredItem item, Func<StoredItem, bool> stillAsLeft, Action undo)
+    {
+        var now = _database.GetOpenItems().FirstOrDefault(found => found.Source == item.Source && found.Id == item.Id);
+        if (now is null || now.Done || !stillAsLeft(now))
+        {
+            return ChangedSince(item.Title);
+        }
+
+        undo();
+        return null;
+    }
+
+    /// <summary>What the bar says when an Undo finds the item changed since.</summary>
+    internal static string ChangedSince(string title) => $"{title} has changed since, so it was left as it is.";
+
+    /// <summary>
+    /// Where Undo moves an item back to. A move only ever sets a day or a time, never clears one, so an item that had
+    /// no day, or no time before one was picked, can't be put back, and Why says so.
+    /// </summary>
+    internal static (DateOnly Date, TimeOnly? Time, string? Why) MoveBack(StoredItem item, TimeOnly? time)
+    {
+        if (item.DueDate is not { } was)
+        {
+            return (default, null, ". Undo isn't available, because it had no date before.");
+        }
+
+        var wasTime = item.Recurs is null && item.DueAt is { } at ? TimeOnly.FromDateTime(at.LocalDateTime) : (TimeOnly?)null;
+        if (item.Recurs is null && time is not null && wasTime is null)
+        {
+            return (was, null, ". Undo isn't available, because it had no time before.");
+        }
+
+        return (was, wasTime, null);
+    }
+
+    private void PickDate(StoredItem item, DateOnly today, bool moved)
     {
         var time = item.DueAt is { } dueAt ? TimeOnly.FromDateTime(dueAt.LocalDateTime) : (TimeOnly?)null;
         var picker = new PickDateWindow(Window.GetWindow(this), item.Title, item.DueDate ?? today, time, asksForTime: item.Recurs is null);
         if (picker.ShowDialog() == true)
         {
-            Move(item, picker.Date, picker.Time);
+            Move(item, picker.Date, picker.Time, moved);
         }
     }
 
@@ -489,15 +826,41 @@ public partial class TodayView
         }
     }
 
+    /// <summary>A change from the row's menu. A rename can be undone from the bar by renaming it back.</summary>
     private async void Change(StoredItem item, ChangeAction action, string? title = null)
     {
         Bar.Forget(About(item));
-        Report(await Work.Run(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, action, title), DateTime.Now)));
+        var (ok, applied) = await Try(() => _database.ChangeItem(new ItemChange(item.Source, item.Id, action, title), DateTime.Now), nameof(Change));
+        if (!ok)
+        {
+            return;
+        }
+
+        var renamed = action == ChangeAction.Update && title is not null && applied.Applied && title != item.Title;
+        Report(applied, renamed
+            ? () => UndoIfUnchanged(item, now => now.Title == applied.Title, () => _database.ChangeItem(new ItemChange(item.Source, item.Id, ChangeAction.Update, item.Title), DateTime.Now))
+            : null);
     }
 
-    private void Report(AppliedChange applied)
+    /// <summary>
+    /// Says on the page's bar what a row's change did, with Undo when there's a way back. The undo answers what to
+    /// say when it couldn't put things back, or null when it did.
+    /// </summary>
+    private void Report(AppliedChange applied, Func<string?>? undo = null, string? note = null)
     {
-        _reply(ItemGroups.ChangeSummary(applied));
+        var about = (applied.Change.Source, applied.Change.ItemId);
+        Bar.Show(ItemGroups.ChangeSummary(applied) + note, undo is null ? null : async () =>
+        {
+            if (await Try(undo, "UndoChange") is (true, var left))
+            {
+                if (left is not null)
+                {
+                    Bar.Show(left);
+                }
+
+                Acted();
+            }
+        }, about);
         Acted();
     }
 

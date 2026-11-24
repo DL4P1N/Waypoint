@@ -26,7 +26,7 @@ public partial class HistoryView : UserControl
     private static readonly (HistoryFilter Filter, string Label)[] Views =
     [
         (HistoryFilter.All, "All"),
-        (HistoryFilter.Completed, "Completed"),
+        (HistoryFilter.Completed, "Done"),
         (HistoryFilter.Canceled, "Canceled"),
         (HistoryFilter.Reopened, "Reopened"),
         (HistoryFilter.Past, "Past"),
@@ -236,7 +236,10 @@ public partial class HistoryView : UserControl
         /// <summary>The box's name, so each one says which item it puts back.</summary>
         public string ReopenName => $"Put {entry.Title} back on the list";
 
-        public string Details => $"{entry.Label} {entry.At.ToString("MMM d", CultureInfo.InvariantCulture)}";
+        public string Details => $"{Label(entry)} {entry.At.ToString("MMM d", CultureInfo.InvariantCulture)}";
+
+        /// <summary>Done, the one word the PC uses for a finished item, as on To do and History's filter.</summary>
+        internal static string Label(HistoryEntry entry) => entry.Action == HistoryAction.Done ? "Done" : entry.Label;
 
         /// <summary>What a screen reader says for the row, rather than the class name.</summary>
         public override string ToString() => $"{Title}, {Details}";

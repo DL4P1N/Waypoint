@@ -94,7 +94,10 @@ public partial class WeekView : UserControl
             {
                 Text = day.Date.ToString("ddd d", CultureInfo.InvariantCulture),
                 FontSize = 12,
-                Margin = new Thickness(6, 0, 4, 6),
+
+                // In a narrow day the number goes under the name, rather than being cut off.
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(4, 0, 2, 6),
                 FontWeight = day.Date == today ? FontWeights.SemiBold : FontWeights.Normal,
             };
             name.SetResourceReference(TextBlock.ForegroundProperty, day.Date == today ? "Accent" : "SecondaryText");
