@@ -50,6 +50,7 @@ public sealed class ServerClientTests : IDisposable
             {
                 "/api/items/open" => JsonSerializer.Serialize(Items.Select((title, index) => new StoredItem(index + 1, ItemKind.Task, title, null, null, false)), RemoteJson.Options),
                 "/api/captures" => JsonSerializer.Serialize(new CaptureAccepted(false), RemoteJson.Options),
+                var path when path.EndsWith("/restore-body", StringComparison.Ordinal) => "",
                 _ => "{}",
             };
             return new HttpResponseMessage(Answer) { Content = new StringContent(body) };
@@ -71,6 +72,14 @@ public sealed class ServerClientTests : IDisposable
         Assert.Equal("Read chapter 4", Assert.Single(data.GetOpenItems()).Title);
         Assert.Equal(ServerState.Offline, client.State);
         Assert.Contains("Can't reach the server", client.Problem);
+    }
+
+    [Fact]
+    public void Undo_of_written_notes_on_an_older_server_that_answers_with_nothing_counts_as_put_back()
+    {
+        _fake.Answer = HttpStatusCode.NoContent;
+
+        Assert.True(new ServerNotesData(Client()).RestoreNoteBody(5, new Notes.NoteBodyState("Made up text", null, null), DateTime.Now));
     }
 
     [Fact]

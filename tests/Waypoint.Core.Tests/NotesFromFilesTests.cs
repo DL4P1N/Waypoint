@@ -345,6 +345,10 @@ public sealed class NotesFromFilesTests : IDisposable
         Assert.True(_database.RestoreNoteBody(id, replaced.Before, Now));
         Assert.Equal("My edited version", _database.GetNote(id)!.Body);
         Assert.True(_database.GetNoteGeneration(id)!.EditedSince);
+
+        // Undo sent again, as after an answer that was lost, finds it already back.
+        Assert.True(_database.RestoreNoteBody(id, replaced.Before, Now));
+        Assert.Equal("My edited version", _database.GetNote(id)!.Body);
     }
 
     [Fact]

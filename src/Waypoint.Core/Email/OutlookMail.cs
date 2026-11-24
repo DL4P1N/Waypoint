@@ -97,8 +97,9 @@ public sealed class OutlookMail(HttpClient http, WaypointDatabase database, Outl
 
             if (document.RootElement.TryGetProperty("refresh_token", out var refresh))
             {
-                tokens.Save(refresh.GetString()!);
+                // Cleared first, so a new sign-in can never be kept with the old one's signed-out mark still on it.
                 database.SetPreference(SignedOutKey, "");
+                tokens.Save(refresh.GetString()!);
                 return true;
             }
 

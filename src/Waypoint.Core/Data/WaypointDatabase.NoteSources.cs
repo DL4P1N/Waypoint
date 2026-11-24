@@ -181,13 +181,24 @@ public sealed partial class WaypointDatabase
     /// <summary>
     /// Puts back the text written notes replaced, as undo. Only while the note is still just what was written, so
     /// anything added since, such as from Discord or the note's .md file, is never undone with it. False, with
-    /// nothing changed, when it was changed since or is gone.
+    /// nothing changed, when it was changed since or is gone. True with nothing to do when the text is already back,
+    /// as when undo is sent again after an answer that was lost.
     /// </summary>
     public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now)
     {
         using var lease = Connect(out var connection);
         using var transaction = Begin(connection);
-        if (ReadBodyState(connection, noteId) is not { GeneratedHash: { } written } current || BodyHash(current.Body) != written)
+        if (ReadBodyState(connection, noteId) is not { } current)
+        {
+            return false;
+        }
+
+        if (Normalize(current.Body) == Normalize(state.Body))
+        {
+            return true;
+        }
+
+        if (current.GeneratedHash is not { } written || BodyHash(current.Body) != written)
         {
             return false;
         }

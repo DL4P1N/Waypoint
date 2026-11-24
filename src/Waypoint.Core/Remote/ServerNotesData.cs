@@ -443,7 +443,8 @@ public sealed class ServerNotesData : INotesData
     public NoteGeneration? GetNoteGeneration(long noteId) =>
         Real(noteId) is var id and > 0 ? Read($"api/notes/{id}/generation", new Found<NoteGeneration>(null)).Value : new NoteGeneration(null, true, 0);
 
-    public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => _server.Send<FlagValue>(Post, $"api/notes/{Real(noteId)}/restore-body", state).Value;
+    // A server from before undo could be refused answers with nothing, and for it that always meant it was put back.
+    public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now) => _server.SendOr(Post, $"api/notes/{Real(noteId)}/restore-body", state, new FlagValue(true)).Value;
 
     public string? GetNoteCourse(long noteId) => Real(noteId) is var id and > 0 ? Read($"api/notes/{id}/course", new TextValue(null)).Value : null;
 

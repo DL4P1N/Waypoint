@@ -500,6 +500,10 @@ public sealed partial class ServerClient
 
     public void Send(HttpMethod method, string path, object? body = null) => SendRaw(method, path, body);
 
+    /// <summary>The same, for a reply an older server sent with no body: <paramref name="whenEmpty"/> stands in for it.</summary>
+    public T SendOr<T>(HttpMethod method, string path, object? body, T whenEmpty) =>
+        SendRaw(method, path, body) is { Length: > 0 } json && !string.IsNullOrWhiteSpace(json) ? Parse<T>(json) : whenEmpty;
+
     /// <summary>A change with a large body, such as a lecture's transcript, sent with the longer wait files get.</summary>
     public T SendLong<T>(HttpMethod method, string path, object? body = null) => Parse<T>(SendRaw(method, path, body, slow: true));
 
