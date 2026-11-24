@@ -66,12 +66,31 @@ public sealed class CheckingAlertTests : IDisposable
     {
         _database.SaveBudgetAccount(new BudgetAccount("Northwind Bank checking", AccountKind.Checking, 61000, new DateOnly(2026, 11, 2)));
 
-        Assert.True(_database.SetCheckingFromAlert(4000, new DateOnly(2026, 11, 2)));
+        Assert.True(_database.SetCheckingFromAlert(4000, At(2026, 11, 2, 9)));
         Assert.Equal(4000, _database.GetBudgetAccounts().Single().BalanceCents);
 
-        Assert.False(_database.SetCheckingFromAlert(50000, new DateOnly(2026, 11, 1)));
+        Assert.False(_database.SetCheckingFromAlert(50000, At(2026, 11, 1, 23)));
         Assert.Equal(4000, _database.GetBudgetAccounts().Single().BalanceCents);
     }
+
+    [Fact]
+    public void Alerts_on_the_same_day_keep_the_newest_balance_even_when_read_out_of_order()
+    {
+        _database.SaveBudgetAccount(new BudgetAccount("Northwind Bank checking", AccountKind.Checking, 61000, new DateOnly(2026, 11, 1)));
+
+        Assert.True(_database.SetCheckingFromAlert(3000, At(2026, 11, 2, 15)));
+        Assert.False(_database.SetCheckingFromAlert(9000, At(2026, 11, 2, 8)));
+        Assert.Equal(3000, _database.GetBudgetAccounts().Single().BalanceCents);
+
+        // A balance typed in that day stands against an alert from before it, and gives way to one from after.
+        _database.SaveBudgetAccount(_database.GetBudgetAccounts().Single() with { BalanceCents = 2500, SetAt = At(2026, 11, 2, 16) });
+        Assert.False(_database.SetCheckingFromAlert(7000, At(2026, 11, 2, 15, 30)));
+        Assert.True(_database.SetCheckingFromAlert(2000, At(2026, 11, 2, 17)));
+        Assert.Equal(2000, _database.GetBudgetAccounts().Single().BalanceCents);
+    }
+
+    private static DateTimeOffset At(int year, int month, int day, int hour, int minute = 0) =>
+        new DateTimeOffset(new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Local));
 
     [Fact]
     public void A_card_payment_from_the_summary_lowers_the_card_once()

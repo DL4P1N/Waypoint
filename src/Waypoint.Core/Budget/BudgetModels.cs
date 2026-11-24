@@ -23,7 +23,8 @@ public sealed record BudgetCategory(string Name, long? MonthlyCents, BudgetPerio
 
 /// <summary>
 /// A balance the user keeps up to date. Limit, close day, and autopay day are only for cards. SetAt is the moment a
-/// balance was typed, when it was typed for that day, and null for one from before it was kept or from an alert.
+/// balance was typed, when it was typed for that day, or for checking the time of the alert it came from, and null
+/// for one from before it was kept.
 /// </summary>
 public sealed record BudgetAccount(
     string Name,
@@ -139,7 +140,8 @@ public sealed record WaitItem(string Description, long PriceCents, DateTime Adde
 /// <summary>Money from something other than the main paycheck.</summary>
 public sealed record OtherIncome(DateOnly Date, string Source, long AmountCents);
 
-public sealed record ImportResult(int Added, int Skipped, int WaitsResolved = 0);
+/// <summary>What an import did. Unreadable counts the rows that had no date or amount that could be read.</summary>
+public sealed record ImportResult(int Added, int Skipped, int WaitsResolved = 0, int Unreadable = 0);
 
 public enum BudgetOpKind
 {

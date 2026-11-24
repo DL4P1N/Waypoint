@@ -98,6 +98,9 @@ public partial class NotesView
         }
     }
 
+    /// <summary>Said when undo of written notes is refused because the note changed after they were written.</summary>
+    internal const string NotUndone = "The note changed after the notes were written, so it was left as it is to keep those changes.";
+
     private async Task Finish(long noteId, NoteWriteOutcome outcome)
     {
         var title = (await Work.Read(() => _notes.GetNote(noteId)))?.Title ?? "The note";
@@ -150,10 +153,17 @@ public partial class NotesView
         ShowSoon(force: true);
     }
 
-    /// <summary>Undo for notes written over a note: its text from before goes back, after anything saved ahead of it.</summary>
+    /// <summary>
+    /// Undo for notes written over a note: its text from before goes back, after anything saved ahead of it. Not if
+    /// the note was changed since, so nothing added after is lost, and the bar says so.
+    /// </summary>
     private async void RestoreBody(long noteId, NoteBodyState before)
     {
-        await Work.Run(() => _notes.RestoreNoteBody(noteId, before, DateTime.Now));
+        if (!await Work.Run(() => _notes.RestoreNoteBody(noteId, before, DateTime.Now)))
+        {
+            Bar.Show(NotUndone);
+        }
+
         ReloadIfOpen(noteId);
         ShowSoon(force: true);
     }

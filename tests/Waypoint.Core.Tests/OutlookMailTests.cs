@@ -28,7 +28,7 @@ public sealed class OutlookMailTests : IDisposable
         public void Save(string value) => Token = value;
     }
 
-    private sealed class FakeServer(string messages, HttpStatusCode mailStatus = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class FakeServer(string messages, HttpStatusCode mailStatus = HttpStatusCode.OK, string? tokenError = null) : HttpMessageHandler
     {
         public List<string> Urls { get; } = [];
 
@@ -37,7 +37,9 @@ public sealed class OutlookMailTests : IDisposable
             var url = request.RequestUri!.ToString();
             Urls.Add(url);
             return Task.FromResult(url.Contains("/token")
-                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"access_token":"a","refresh_token":"new"}""") }
+                ? tokenError is null
+                    ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"access_token":"a","refresh_token":"new"}""") }
+                    : new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent($$"""{"error":"{{tokenError}}","error_description":"Made up description."}""") }
                 : new HttpResponseMessage(mailStatus) { Content = new StringContent(messages) });
         }
     }
@@ -216,6 +218,24 @@ public sealed class OutlookMailTests : IDisposable
     }
 
     [Fact]
+    public async Task An_email_that_cannot_be_read_is_skipped_and_the_rest_still_are()
+    {
+        var body = "{\"value\":[" + string.Join(",",
+            """{"id":"m1","subject":"No sender here","receivedDateTime":"2026-11-02T17:00:00Z","body":{"content":"Just text"}}""",
+            Message("m2", "alerts@lucerne.example.com", "New charge on your card", "A charge of $999999999999999999999999999999.00 at Panera was made.", "2026-11-02T17:30:00Z"),
+            """{"id":"m3","subject":"No time","from":{"emailAddress":{"address":"alerts@lucerne.example.com"}}}""",
+            Message("m4", "alerts@lucerne.example.com", "New charge on your card", "A charge of $12.00 at Panera was made.")) + "]}";
+        var mail = new OutlookMail(new HttpClient(new FakeServer(body)), _database, new OutlookSettings("id"), new MemoryTokens("old"));
+        var purchases = new List<EmailPurchase>();
+
+        await mail.PollAsync(purchases.Add, _ => { });
+
+        Assert.Equal(1200, Assert.Single(purchases).Transaction.AmountCents);
+        Assert.Equal(OutlookMail.UnreadableEmail, mail.LastError);
+        Assert.Equal("2026-11-02T18:00:00Z", _database.GetPreference("outlook_last_received"));
+    }
+
+    [Fact]
     public async Task Two_identical_purchases_in_different_emails_both_count()
     {
         var day = new DateOnly(2026, 11, 2);
@@ -238,6 +258,41 @@ public sealed class OutlookMailTests : IDisposable
 
         Assert.NotNull(mail.LastError);
         Assert.Equal("2026-11-01T00:00:00Z", _database.GetPreference("outlook_last_received"));
+    }
+
+    [Fact]
+    public async Task A_sign_in_microsoft_ended_shows_as_needing_sign_in_until_it_is_done_again()
+    {
+        var tokens = new MemoryTokens("old");
+        var dead = new FakeServer("{\"value\":[]}", tokenError: "invalid_grant");
+        var mail = new OutlookMail(new HttpClient(dead), _database, new OutlookSettings("id"), tokens);
+        Assert.True(mail.IsConnected);
+
+        await mail.PollAsync(_ => { }, _ => { });
+        await mail.PollAsync(_ => { }, _ => { });
+
+        // Told once, and not tried again with the same sign-in, even by a fresh copy after a restart.
+        Assert.Single(dead.Urls);
+        Assert.Equal(OutlookMail.SignInEnded, mail.LastError);
+        var restarted = new OutlookMail(new HttpClient(dead), _database, new OutlookSettings("id"), tokens);
+        Assert.False(restarted.IsConnected);
+        Assert.True(restarted.NeedsSignIn);
+
+        var signIn = new OutlookMail(new HttpClient(new FakeServer("{\"value\":[]}")), _database, new OutlookSettings("id"), tokens);
+        Assert.True(await signIn.FinishSignInAsync(new DeviceCode("ABC", "https://example.test", "code", 0, 60)));
+        Assert.True(signIn.IsConnected);
+        Assert.False(signIn.NeedsSignIn);
+    }
+
+    [Fact]
+    public async Task Another_sign_in_error_is_one_failed_try_and_stays_connected()
+    {
+        var mail = new OutlookMail(new HttpClient(new FakeServer("{\"value\":[]}", tokenError: "temporarily_unavailable")), _database, new OutlookSettings("id"), new MemoryTokens("old"));
+
+        await mail.PollAsync(_ => { }, _ => { });
+
+        Assert.Equal("Made up description.", mail.LastError);
+        Assert.True(mail.IsConnected);
     }
 
     [Fact]

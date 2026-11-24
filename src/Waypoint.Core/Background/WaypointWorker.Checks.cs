@@ -97,13 +97,20 @@ public sealed partial class WaypointWorker
             return;
         }
 
-        _database.SetPreference(LastBriefingKey, today);
+        // Built before it's marked sent, so one that fails partway is tried again on the next check instead of
+        // leaving the day without one. Marking it and taking the held item are one write, then it goes out, so it
+        // can't go out twice.
         var safeToSpend = _database.GetSafeToSpend(DateOnly.FromDateTime(now));
         var attention = BudgetReport.Attention(_database.GetBudgetReport(DateOnly.FromDateTime(now)));
         var open = _database.GetOpenItems();
         var study = StudyWindows.ForToday(now, open, Schedule, _database.GetShifts(DateOnly.FromDateTime(now)), BedtimeSchedule)?.Line;
-        var held = TakeAfterThisLine();
-        var briefing = string.Join("\n", new[] { Briefing.Build(now, open, Schedule, safeToSpend, _database.GetStaleBalances(DateOnly.FromDateTime(now))), study, held.Line }.OfType<string>().Concat(attention));
+        var body = Briefing.Build(now, open, Schedule, safeToSpend, _database.GetStaleBalances(DateOnly.FromDateTime(now)));
+        var held = _database.InOneWrite(write =>
+        {
+            write.SetPreference(LastBriefingKey, today);
+            return TakeAfterThisLine(write);
+        });
+        var briefing = string.Join("\n", new[] { body, study, held.Line }.OfType<string>().Concat(attention));
 
         // One ping a morning. Safe to spend is already a line in it, and the Budget view keeps the number too.
         _ = NotifyAsync("Today", briefing, actions: held.Actions);
@@ -123,10 +130,12 @@ public sealed partial class WaypointWorker
             return;
         }
 
-        _database.SetPreference(LastWeeklyResetKey, week);
+        // Built before it's marked sent, so one that fails partway is tried again on the next check, and marked
+        // before it goes out, so it can't go out twice.
         var attention = BudgetReport.Attention(_database.GetBudgetReport(today));
         var review = _database.GetSpendingReview(today).Rows.Take(ReviewLinesInReset).Select(row => row.Label);
         var reset = string.Join("\n", new[] { Briefing.BuildWeek(now, _database.GetOpenItems()) }.Concat(attention).Concat(review));
+        _database.SetPreference(LastWeeklyResetKey, week);
         _host.ShowWeeklyReset(reset);
         _ = NotifyAsync("Your week", reset);
     }

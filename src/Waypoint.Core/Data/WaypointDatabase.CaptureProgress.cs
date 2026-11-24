@@ -29,13 +29,13 @@ public sealed partial class WaypointDatabase
 
     public void SetCaptureProgress(long captureId, string progress)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         WriteProgress(connection, captureId, progress);
     }
 
     public void ClearCaptureProgress(long captureId)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM capture_progress WHERE capture_id = $id";
         command.Parameters.AddWithValue("$id", captureId);

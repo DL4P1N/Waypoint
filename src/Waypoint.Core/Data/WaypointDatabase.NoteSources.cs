@@ -68,7 +68,7 @@ public sealed partial class WaypointDatabase
     /// <summary>Adds a source to a note. Returns its id, or 0 if the note is gone.</summary>
     public long AddNoteSource(long noteId, string kind, string name, string text, DateTime now, string? filePath = null)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         return AddNoteSource(connection, noteId, kind, name, text, now, filePath);
     }
 
@@ -178,11 +178,34 @@ public sealed partial class WaypointDatabase
         return new GeneratedSave(GeneratedSaveResult.Saved, before);
     }
 
-    /// <summary>Puts back the text written notes replaced, as undo.</summary>
-    public void RestoreNoteBody(long noteId, NoteBodyState state, DateTime now)
+    /// <summary>
+    /// Puts back the text written notes replaced, as undo. Only while the note is still just what was written, so
+    /// anything added since, such as from Discord or the note's .md file, is never undone with it. False, with
+    /// nothing changed, when it was changed since or is gone. True with nothing to do when the text is already back,
+    /// as when undo is sent again after an answer that was lost.
+    /// </summary>
+    public bool RestoreNoteBody(long noteId, NoteBodyState state, DateTime now)
     {
         using var lease = Connect(out var connection);
+        using var transaction = Begin(connection);
+        if (ReadBodyState(connection, noteId) is not { } current)
+        {
+            return false;
+        }
+
+        if (Normalize(current.Body) == Normalize(state.Body))
+        {
+            return true;
+        }
+
+        if (current.GeneratedHash is not { } written || BodyHash(current.Body) != written)
+        {
+            return false;
+        }
+
         WriteBody(connection, noteId, state.Body, now, state.GeneratedAt, state.GeneratedHash);
+        transaction.Commit();
+        return true;
     }
 
     /// <summary>The class a note is for: the course of the class folder it's in, if it's in one.</summary>

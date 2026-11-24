@@ -216,6 +216,44 @@ public sealed class WorkerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(2026, 11, 4, 8, "Today")]
+    [InlineData(2026, 11, 8, 18, "Your week")]
+    public void A_briefing_that_fails_to_build_is_not_marked_sent_and_goes_out_once_it_can(int year, int month, int day, int hour, string title)
+    {
+        // Problems are kept rather than thrown, as the app logs them, so every check still runs each round.
+        var problems = new List<Exception>();
+        var worker = new WaypointWorker(_database, new WaypointSettings(), _folder, _host, problems.Add, new WorkerParts(
+            _ => new NoTokens(),
+            Clock: () => _now,
+            Http: () => new HttpClient(new FakeDiscord(works: false)),
+            CaptureSorter: new NullSorter(),
+            NudgePlanner: null,
+            ConnectGateway: false));
+        _now = new DateTime(year, month, day, hour, 30, 0);
+        _database.AddByHand(new HandAddedItem(ItemKind.Task, "Made up essay", new DateOnly(2026, 11, 20)), _now);
+        SetDueDate("not a date");
+
+        worker.CheckAlerts();
+        Assert.DoesNotContain(_host.Notices, notice => notice.Title == title);
+        Assert.NotEmpty(problems);
+
+        SetDueDate("2026-11-20");
+        worker.CheckAlerts();
+        worker.CheckAlerts();
+        Assert.Single(_host.Notices, notice => notice.Title == title);
+
+        void SetDueDate(string value)
+        {
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(_folder, "waypoint.db")};Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE items SET due_date = $value";
+            command.Parameters.AddWithValue("$value", value);
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Fact]
     public void The_weekly_reset_shows_on_the_host_and_goes_out_on_Sunday_evening()
     {

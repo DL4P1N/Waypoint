@@ -327,7 +327,9 @@ public sealed partial class WaypointWorker
             ? "Not set up. Add its app ID below."
             : outlook.IsConnected
                 ? $"Connected. Purchase alerts are read every few minutes.{Problem(outlook.LastError)}{(outlook.SkippedSender is { } skipped ? $" {skipped}" : "")}"
-                : "Set up, but not signed in yet. Use Connect alert email in the tray menu.";
+                : outlook.NeedsSignIn
+                    ? "Signed out. Microsoft ended the sign-in, so use Connect alert email in the tray menu to sign in again."
+                    : "Set up, but not signed in yet. Use Connect alert email in the tray menu.";
 
         return
         [

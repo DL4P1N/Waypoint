@@ -331,6 +331,104 @@ public sealed class BudgetTests : IDisposable
     }
 
     [Fact]
+    public void Payment_wording_on_a_purchase_is_still_a_purchase()
+    {
+        const string plain = """
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Payments,ONLINE PAYMENT THANK YOU,-300.00
+            10/02/2026,10/02/2026,Shopping,QUICKPAYMENT KIOSK,25.00
+            10/03/2026,10/03/2026,Entertainment,STREAMCO AUTOPAY,12.99
+            """;
+        Assert.Equal([30000L], CsvImport.ParsePayments(plain).Select(row => row.AmountCents));
+        Assert.Equal([2500L, 1299L], CsvImport.Parse(plain).Select(row => row.AmountCents));
+
+        // A type column file shows purchases as negative, so its payments are the positive rows.
+        const string typed = """
+            Date,Type,Description,Amount
+            2026-10-04,CREDIT,PAYMENT RECEIVED,100.00
+            2026-10-05,DEBIT,GYM AUTOPAY,-40.00
+            """;
+        Assert.Equal([10000L], CsvImport.ParsePayments(typed).Select(row => row.AmountCents));
+        Assert.Equal([4000L], CsvImport.Parse(typed).Select(row => row.AmountCents));
+    }
+
+    [Fact]
+    public void A_quoted_line_break_stays_in_its_row_and_unreadable_rows_are_counted()
+    {
+        var export = CsvImport.Read(
+            "Posted On,Purchase Date,Category,Description,Amount\r\n"
+            + "10/01/2026,10/01/2026,Shopping,\"MEGAMART\r\nONLINE \"\"SALE\"\"\",\"1,020.50\"\r\n"
+            + "10/02/2026,10/32/2026,Shopping,CORNER MART,5.00\r\n"
+            + "10/03/2026,10/03/2026,Shopping,BOOKSTORE,five\r\n"
+            + ",,,,\r\n"
+            + "10/04/2026,10/04/2026\r\n"
+            + "10/05/2026,10/05/2026,Shopping,CAFE,4.25\r\n"
+            + "Total,,,,1029.75\r\n");
+
+        // A line with no amount and the total are passed over, and only the two with a bad date or amount count.
+        Assert.Equal([("MEGAMART\r\nONLINE \"SALE\"", 102050L), ("CAFE", 425L)], export.Purchases.Select(row => (row.Description, row.AmountCents)));
+        Assert.Equal(2, export.Unreadable);
+
+        var (rows, unreadable) = CheckingImport.Read("Date,Details,Amount,Balance\n10/26/2026,\"PURCHASE\nCAFE\",-4.00,10.00\n13/45/2026,FEE,-1.00,9.00\nEnding balance,,,9.00\n");
+        Assert.Equal("PURCHASE\nCAFE", rows.Single().Description);
+        Assert.Equal(1, unreadable);
+    }
+
+    [Fact]
+    public void A_quote_inside_a_cell_is_just_a_character()
+    {
+        var export = CsvImport.Read("""
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Restaurants,12" SUB,9.50
+            10/02/2026,10/02/2026,Gas,GAS,40.00
+            10/03/2026,10/03/2026,Restaurants,6" SUB,5.25
+            """);
+
+        Assert.Equal(
+            [(new DateOnly(2026, 10, 1), "12\" SUB", 950L), (new DateOnly(2026, 10, 2), "GAS", 4000L), (new DateOnly(2026, 10, 3), "6\" SUB", 525L)],
+            export.Purchases.Select(row => (row.Date, row.Description, row.AmountCents)));
+        Assert.Equal(0, export.Unreadable);
+    }
+
+    [Fact]
+    public void A_stray_opening_quote_breaks_only_its_own_line()
+    {
+        // Never closed: the line is read on its own and counted, and the rows after it still go in.
+        var unclosed = CsvImport.Read("""
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Shopping,"BROKEN,5.00
+            10/02/2026,10/02/2026,Gas,GAS,40.00
+            10/03/2026,10/03/2026,Shopping,CAFE,4.25
+            """);
+        Assert.Equal(["GAS", "CAFE"], unclosed.Purchases.Select(row => row.Description));
+        Assert.Equal(1, unclosed.Unreadable);
+
+        // Closed by a quote a few lines on: the record doesn't have the header's number of cells, so the same.
+        var closedLater = CsvImport.Read("""
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Shopping,"BROKEN,5.00
+            10/02/2026,10/02/2026,Gas,GAS,40.00
+            10/03/2026,10/03/2026,Shopping,"CAFE",4.25
+            """);
+        Assert.Equal(["GAS", "CAFE"], closedLater.Purchases.Select(row => row.Description));
+        Assert.Equal(1, closedLater.Unreadable);
+    }
+
+    [Fact]
+    public void A_payment_sent_back_puts_the_balance_back_up_and_is_not_spending()
+    {
+        const string csv = """
+            Posted On,Purchase Date,Category,Description,Amount
+            10/01/2026,10/01/2026,Payments,ONLINE PAYMENT THANK YOU,-300.00
+            10/04/2026,10/04/2026,Payments,PAYMENT RETURNED,300.00
+            10/05/2026,10/05/2026,Shopping,QUICKPAYMENT KIOSK,25.00
+            """;
+
+        Assert.Equal([30000L, -30000L], CsvImport.ParsePayments(csv).Select(row => row.AmountCents));
+        Assert.Equal([2500L], CsvImport.Parse(csv).Select(row => row.AmountCents));
+    }
+
+    [Fact]
     public void Type_column_csv_flips_the_sign()
     {
         var csv = """

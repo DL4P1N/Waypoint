@@ -9,7 +9,7 @@ public sealed partial class WaypointDatabase
 {
     public long AddCapture(string text, DateTimeOffset? createdAt = null, CaptureOrigin origin = CaptureOrigin.App, string? fileName = null)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO captures (text, created_at, origin, file_name) VALUES ($text, $createdAt, $origin, $fileName) RETURNING id";
         command.Parameters.AddWithValue("$fileName", (object?)fileName ?? DBNull.Value);
@@ -25,7 +25,7 @@ public sealed partial class WaypointDatabase
     /// </summary>
     public long? AddSentCapture(string clientId, string text, DateTimeOffset? createdAt, string? fileName)
     {
-        using var lease = Connect(out var connection);
+        using var lease = ConnectForWrite(out var connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR IGNORE INTO captures (text, created_at, origin, file_name, client_id)

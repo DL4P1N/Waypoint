@@ -73,7 +73,7 @@ public sealed partial class WaypointDatabase
     /// own begun on one of those on the same thread could only wait for the write, which can't land until that call
     /// returns, so it would stall for the whole busy wait and then fail. It's refused straight away instead. Reads
     /// there are fine: they read what's landed on a connection of their own. A write of a single statement with no
-    /// transaction can't be told apart from a read here, so it still waits out the busy wait before it fails.
+    /// transaction of its own is refused the same way when it opens with <see cref="ConnectForWrite"/>.
     /// </summary>
     [ThreadStatic]
     private static List<WaypointDatabase>? _writingOnThread;
@@ -106,6 +106,22 @@ public sealed partial class WaypointDatabase
 
         connection = Open();
         return new Lease(connection);
+    }
+
+    /// <summary>
+    /// The same, for a call that writes a single statement with no transaction of its own. On the database itself
+    /// inside a single write on the same thread, it's refused straight away, as <see cref="Begin"/> is, rather than
+    /// waiting out the busy wait for a write that can't land until the call returns. Reads keep using
+    /// <see cref="Connect"/>, which works there.
+    /// </summary>
+    internal Lease ConnectForWrite(out SqliteConnection connection)
+    {
+        if (_write is null)
+        {
+            RefuseIfWritingOnThisThread();
+        }
+
+        return Connect(out connection);
     }
 
     /// <summary>

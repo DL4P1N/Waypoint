@@ -19,22 +19,22 @@ public sealed partial class WaypointDatabase
     {
         if (CheckingImport.IsChecking(csv))
         {
-            return ImportChecking(CheckingImport.Parse(csv));
+            var (rows, unreadable) = CheckingImport.Read(csv);
+            return ImportChecking(rows) with { Unreadable = unreadable };
         }
 
         var profiles = BankProfiles.Current;
         var account = CsvImport.IsTypeColumnExport(csv) ? profiles.RewardsCard.Name : profiles.Card.Name;
-        var purchases = CsvImport.Parse(csv);
-        var payments = CsvImport.ParsePayments(csv);
+        var export = CsvImport.Read(csv);
         var waiting = GetWaitList().ToList();
 
         // The purchases and the payments are one write, so a failure partway leaves neither and the file can be imported again.
         using var lease = Connect(out var connection);
         using var transaction = Begin(connection);
-        var result = ImportTransactions(connection, account, purchases, waiting);
-        AddCardPayments(connection, account, payments);
+        var result = ImportTransactions(connection, account, export.Purchases, waiting);
+        AddCardPayments(connection, account, export.Payments);
         transaction.Commit();
-        return result;
+        return result with { Unreadable = export.Unreadable };
     }
 
     /// <summary>Holds pay dates until the user says yes, since they replace what the forecast expects.</summary>

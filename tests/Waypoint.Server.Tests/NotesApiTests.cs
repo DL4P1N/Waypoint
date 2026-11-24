@@ -229,6 +229,23 @@ public sealed partial class NotesApiTests : IDisposable
     }
 
     [Fact]
+    public void Undo_of_written_notes_through_the_server_says_when_the_note_changed_since()
+    {
+        var notes = Elsewhere();
+        var database = _factory.Services.GetRequiredService<WaypointServer>().Database;
+        var id = notes.CreateNote("Made up lecture", "My own lines", DateTime.Now);
+        var before = database.SaveGeneratedNotes(id, "Written lines", "My own lines", DateTime.Now).Before!;
+
+        Assert.True(notes.RestoreNoteBody(id, before, DateTime.Now));
+        Assert.Equal("My own lines", notes.GetNote(id)!.Body);
+
+        before = database.SaveGeneratedNotes(id, "Written lines", "My own lines", DateTime.Now).Before!;
+        notes.SaveNote(id, "Made up lecture", "Written lines\n\nAdded later", DateTime.Now);
+        Assert.False(notes.RestoreNoteBody(id, before, DateTime.Now));
+        Assert.Equal("Written lines\n\nAdded later", notes.GetNote(id)!.Body);
+    }
+
+    [Fact]
     public void A_note_round_trips_through_the_server()
     {
         INotesData notes = Pc().Notes;
