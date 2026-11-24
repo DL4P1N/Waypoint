@@ -163,24 +163,35 @@ restore_units() {
     systemctl daemon-reload || true
 }
 
-# Goes back to the release from before, with its unit files, and the copy of waypoint.db from just before the new
-# version started, since the new version may have changed the database for itself. Starts it again if it was stopped.
+# True when the two paths name the same folder, even when /opt or a folder in it is a symlink.
+same_folder() {
+    [ -n "$1" ] && [ -n "$2" ] && [ "$(readlink -f -- "$1" 2> /dev/null)" = "$(readlink -f -- "$2" 2> /dev/null)" ]
+}
+
+# Goes back to the release from before, with its unit files, and starts it again if it was stopped. With
+# restore_db=yes, which is only given once the new version has clearly failed to start, the copy of waypoint.db from
+# just before it started goes back too, since it may have changed the database for itself.
 go_back() {
+    local restore_db="${1:-no}"
     if [ "$started_new" = "yes" ]; then
         systemctl stop waypoint.service || true
     fi
     restore_units
     if [ -n "$previous" ] && [ -d "$previous" ]; then
         point_at "$previous"
-        if [ "$started_new" = "yes" ] && [ -n "$backup" ]; then
+        if [ "$restore_db" = "yes" ] && [ -n "$backup" ]; then
+            echo "   The new version never answered, so waypoint.db goes back to the copy made just before it started." >&2
             install -m 600 -o waypoint -g waypoint "$backup" "$data/upgrade-restore.db"
-            runuser -u waypoint -- sqlite3 "$db" ".restore '$data/upgrade-restore.db'"
+            if runuser -u waypoint -- sqlite3 "$db" ".restore '$data/upgrade-restore.db'"; then
+                echo "   waypoint.db put back from $backup" >&2
+            else
+                echo "   waypoint.db couldn't be put back from $backup, so it was left as it was." >&2
+            fi
             rm -f -- "$data/upgrade-restore.db"
-            echo "   waypoint.db put back from $backup" >&2
         fi
     fi
     rm -f -- "$data/upgrade-backup.db"
-    if [ "$release_made" = "yes" ] && [ "$(readlink -f "$current" 2> /dev/null)" != "$release" ]; then
+    if [ "$release_made" = "yes" ] && [ -d "$release" ] && ! same_folder "$current" "$release"; then
         rm -rf -- "$release"
     fi
     if [ "$stopped" = "yes" ] && [ -L "$current" ]; then
@@ -188,15 +199,40 @@ go_back() {
     fi
 }
 
+# Goes back from the script's own steps rather than from the trap: with errors and Ctrl+C no longer able to stop it
+# partway, and only counted as finished once it's done, so a failure inside it still ends in the trap.
+go_back_now() {
+    trap '' INT TERM HUP
+    set +e
+    go_back "$@"
+    finished=yes
+}
+
 on_exit() {
     local status=$?
-    trap - EXIT INT TERM HUP
+    trap - EXIT
+    # A second Ctrl+C, or the SSH session closing, mustn't stop putting things back partway.
+    trap '' INT TERM HUP
     # With the SSH session gone, writing to it can fail, and that mustn't stop the steps below.
     trap '' PIPE
     set +e
     if [ "$finished" != "yes" ]; then
-        if [ "$started_new" = "yes" ] && systemctl is-active --quiet waypoint.service && healthy_now; then
-            echo "The install stopped partway, but the new version is running and answering, so it was left in." >&2
+        if [ "$started_new" = "yes" ]; then
+            # Stopped while the new version was starting, so it may only have been slow. It's left running, and
+            # nothing is put back, since the database may already hold what it wrote.
+            systemctl start waypoint.service > /dev/null 2>&1 || true
+            if healthy_now; then
+                echo "The install stopped partway, but the new version is running and answering, so it was left in." >&2
+            else
+                echo "The install stopped while the new version was starting, so it was left running rather than undone." >&2
+                echo "Check it with: systemctl status waypoint && journalctl -u waypoint -n 50" >&2
+                if [ -n "$previous" ]; then
+                    echo "To go back by hand: sudo ln -sfn $previous $current && sudo systemctl restart waypoint" >&2
+                fi
+                if [ -n "$backup" ]; then
+                    echo "The copy of waypoint.db from just before it started is $backup" >&2
+                fi
+            fi
         elif [ "$release_made" = "yes" ] || [ -n "$units_saved" ] || [ "$stopped" = "yes" ]; then
             echo "The install stopped partway, so the server is being put back the way it was." >&2
             go_back
@@ -290,8 +326,7 @@ if [ -f "$db" ]; then
     rm -f -- "$data/upgrade-backup.db"
     if ! runuser -u waypoint -- sqlite3 "$db" ".backup '$data/upgrade-backup.db'"; then
         echo "waypoint.db couldn't be copied, so the new version wasn't started. The one before is started again." >&2
-        finished=yes
-        go_back
+        go_back_now
         exit 1
     fi
     mv -- "$data/upgrade-backup.db" "$saved/waypoint-$stamp.db"
@@ -312,14 +347,13 @@ if healthy; then
     echo "   Running $stamp."
     # The new release and the one before it are kept, so the next install can go back to this one.
     for old in "$releases"/*; do
-        if [ "$old" != "$release" ] && [ "$old" != "$previous" ]; then
+        if ! same_folder "$old" "$release" && ! same_folder "$old" "$previous"; then
             rm -rf -- "$old"
         fi
     done
 elif [ -n "$previous" ] && [ -d "$previous" ]; then
     echo "The new version didn't answer /health, so the previous one is going back in. See: journalctl -u waypoint -n 50" >&2
-    finished=yes
-    go_back
+    go_back_now yes
     if healthy; then
         echo "   The previous version is running again. Nothing else was changed by this install." >&2
     else
