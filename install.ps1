@@ -61,6 +61,9 @@ $firstInstall = -not (Test-Path -LiteralPath $exe)
 $previousExe = Join-Path $InstallRoot 'Waypoint.previous.exe'
 $versionsDir = Join-Path $InstallRoot 'versions'
 $currentFile = Join-Path $InstallRoot 'current.txt'
+# The version that was running before the current one, written each time one is switched in, so -Rollback goes back
+# to a version that really ran rather than to whatever is newest in versions\.
+$previousFile = Join-Path $InstallRoot 'previous.txt'
 
 function Get-RelativeFiles([string]$folder) {
     $full = (Resolve-Path -LiteralPath $folder).ProviderPath.TrimEnd('\') + '\'
@@ -144,17 +147,32 @@ function Get-Current {
     if (Test-Path -LiteralPath $currentFile) { (Get-Content -LiteralPath $currentFile -Raw).Trim() } else { $null }
 }
 
-function Set-Current([string]$name) {
-    $temporary = "$currentFile.new"
-    [IO.File]::WriteAllText($temporary, $name)
-    Move-Item -LiteralPath $temporary -Destination $currentFile -Force
+function Set-TextFile([string]$path, [string]$text) {
+    $temporary = "$path.new"
+    [IO.File]::WriteAllText($temporary, $text)
+    Move-Item -LiteralPath $temporary -Destination $path -Force
 }
+
+function Set-Current([string]$name) { Set-TextFile $currentFile $name }
 
 # Version folders, newest first. A half-made one (still .partial) isn't a version.
 function Get-Versions {
     if (-not (Test-Path -LiteralPath $versionsDir)) { return @() }
     @(Get-ChildItem -LiteralPath $versionsDir -Directory | Where-Object { $_.Name -notlike '*.partial' } |
         Sort-Object Name -Descending | ForEach-Object { $_.Name })
+}
+
+# What -Rollback goes back to: the version that was running before the current one. Without that written down, the
+# newest version older than the current one, never a newer one, which may be a build that was never switched in.
+function Get-RollbackTarget {
+    $current = Get-Current
+    $versions = @(Get-Versions)
+    if (Test-Path -LiteralPath $previousFile) {
+        $recorded = ([string](Get-Content -LiteralPath $previousFile -Raw)).Trim()
+        if ($recorded -and $recorded -ne $current -and $versions -contains $recorded) { return $recorded }
+    }
+    $versions | Where-Object { $_ -ne $current -and (-not $current -or [string]::CompareOrdinal($_, $current) -lt 0) } |
+        Select-Object -First 1
 }
 
 # Makes the files at the install root the given version's. Each file is copied beside its old one as .new and checked
@@ -198,7 +216,7 @@ function Switch-To([string]$name, [bool]$restartAfterUndo = $true) {
             Move-Item -LiteralPath "$target.new" -Destination $target
         }
 
-        $keep = @($files) + @('Waypoint.previous.exe', 'current.txt') + @($movedAside | ForEach-Object { "$_.old" })
+        $keep = @($files) + @('Waypoint.previous.exe', 'current.txt', 'previous.txt') + @($movedAside | ForEach-Object { "$_.old" })
         $stray = @(Get-ChildItem -LiteralPath $InstallRoot -Recurse -File |
             Where-Object { -not $_.FullName.StartsWith($versionsDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
             Where-Object { $realInstall -or -not $_.FullName.StartsWith($DataDir + '\', [StringComparison]::OrdinalIgnoreCase) } |
@@ -243,7 +261,15 @@ function Switch-To([string]$name, [bool]$restartAfterUndo = $true) {
         throw "Version $name couldn't be switched in ($failure), and the files that were there were put back, but Waypoint didn't start again. Run -Rollback, or start Waypoint.exe in $InstallRoot."
     }
 
-    # Switched. The old Waypoint.exe stays as Waypoint.previous.exe, and the rest of the old files go.
+    # Switched, so the version that was running is what -Rollback goes back to. Only a note, so not writing it is
+    # reported rather than undoing the switch.
+    try {
+        if ($oldCurrent) { Set-TextFile $previousFile $oldCurrent } else { Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Warning "Couldn't note $oldCurrent as the version to go back to ($_)."
+    }
+
+    # The old Waypoint.exe stays as Waypoint.previous.exe, and the rest of the old files go.
     foreach ($relative in $movedAside) {
         $old = (Join-Path $InstallRoot $relative) + '.old'
         if ($relative -eq 'Waypoint.exe') {
@@ -255,7 +281,8 @@ function Switch-To([string]$name, [bool]$restartAfterUndo = $true) {
     }
 }
 
-# Starts Waypoint.exe, or another copy given, and checks it's still running after a while.
+# Starts Waypoint.exe, or another copy given, and checks it's still running after a while. One that can't be started
+# at all, such as a file held back by antivirus, counts as not staying running, so the version before it goes back.
 function Test-Start([string]$path = $exe) {
     # Start-Process passes this session's environment on, so it's set for the moment of starting and then put back.
     $saved = @{}
@@ -264,22 +291,47 @@ function Test-Start([string]$path = $exe) {
         [Environment]::SetEnvironmentVariable($variable, $childEnvironment[$variable], 'Process')
     }
     try {
-        $process = Start-Process -FilePath $path -WorkingDirectory (Split-Path $path) -PassThru
-    } finally {
-        foreach ($variable in $saved.Keys) { [Environment]::SetEnvironmentVariable($variable, $saved[$variable], 'Process') }
+        try {
+            $process = Start-Process -FilePath $path -WorkingDirectory (Split-Path $path) -PassThru
+        } finally {
+            foreach ($variable in $saved.Keys) { [Environment]::SetEnvironmentVariable($variable, $saved[$variable], 'Process') }
+        }
+        Start-Sleep -Seconds $StartCheckSeconds
+        $process.Refresh()
+        return -not $process.HasExited
+    } catch {
+        Write-Warning "Couldn't start ${path}: $_"
+        return $false
     }
-    Start-Sleep -Seconds $StartCheckSeconds
-    $process.Refresh()
-    -not $process.HasExited
+}
+
+# Renamed to .partial first, so a folder that's only partly removed is never taken for a version to go back to. One
+# that can't be renamed, because a file in it is in use, throws and is left whole.
+function Remove-Version([string]$version) {
+    $folder = Join-Path $versionsDir $version
+    if (-not (Test-Path -LiteralPath $folder)) { return }
+    $doomed = "$version.removing-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).partial"
+    Rename-Item -LiteralPath $folder -NewName $doomed
+    # Whatever is left of it is swept with the other half-made folders after the next install.
+    Remove-Item -LiteralPath (Join-Path $versionsDir $doomed) -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Keeps the current version and the one that was running just before it, which is what -Rollback goes back to, even
 # when a newer one was gone back from.
+# Runs once the new version is in and running, so a folder that can't be removed is only reported.
 function Remove-OldVersions([string]$runningBefore) {
     $current = Get-Current
-    Get-Versions | Where-Object { $_ -ne $current -and $_ -ne $runningBefore } | ForEach-Object {
-        Remove-Item -LiteralPath (Join-Path $versionsDir $_) -Recurse -Force
-        Write-Host "Removed old version $_"
+    foreach ($old in @(Get-Versions | Where-Object { $_ -ne $current -and $_ -ne $runningBefore })) {
+        try {
+            Remove-Version $old
+            Write-Host "Removed old version $old"
+        } catch {
+            Write-Warning "Couldn't remove old version $old ($_). It's left in $versionsDir."
+        }
+    }
+    # Half-made copies left by an install that was stopped partway.
+    Get-ChildItem -LiteralPath $versionsDir -Directory -Filter '*.partial' -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -321,7 +373,7 @@ function Save-UnversionedInstall {
     Remove-Item -LiteralPath $partial -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $partial | Out-Null
     Get-ChildItem -LiteralPath $InstallRoot -File |
-        Where-Object { $_.Name -ne 'Waypoint.previous.exe' -and $_.Name -notlike '*.new' } |
+        Where-Object { $_.Name -ne 'Waypoint.previous.exe' -and $_.Name -ne 'previous.txt' -and $_.Name -notlike '*.new' } |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $partial }
     Assert-SameFiles $partial $InstallRoot
     Rename-Item -LiteralPath $partial -NewName $name
@@ -331,7 +383,7 @@ function Save-UnversionedInstall {
 
 if ($Rollback) {
     $current = Get-Current
-    $previous = Get-Versions | Where-Object { $_ -ne $current } | Select-Object -First 1
+    $previous = Get-RollbackTarget
     if (-not $previous) { throw "There's no previous version in $versionsDir to go back to. Nothing was changed." }
     Switch-To $previous
     Set-Launchers
@@ -407,23 +459,38 @@ try {
 }
 New-Item -ItemType Directory -Force $versionsDir | Out-Null
 Save-UnversionedInstall
+# Two installs in the same second don't share a folder.
+$baseName = $name
+for ($n = 2; Test-Path -LiteralPath (Join-Path $versionsDir $name); $n++) { $name = "$baseName-$n" }
 $partial = Join-Path $versionsDir "$name.partial"
 Remove-Item -LiteralPath $partial -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $partial | Out-Null
-Copy-Item -Path (Join-Path $staging '*') -Destination $partial -Recurse -Force
-Assert-SameFiles $staging $partial
-Rename-Item -LiteralPath $partial -NewName $name
-if ($ownStaging) { Remove-Item -Recurse -Force $staging }
+try {
+    New-Item -ItemType Directory -Force $partial | Out-Null
+    Copy-Item -Path (Join-Path $staging '*') -Destination $partial -Recurse -Force
+    Assert-SameFiles $staging $partial
+    Rename-Item -LiteralPath $partial -NewName $name
+} catch {
+    Remove-Item -LiteralPath $partial -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+}
+if ($ownStaging) {
+    try { Remove-Item -Recurse -Force $staging } catch { Write-Warning "Couldn't remove the build folder $staging ($_)." }
+}
 
 $previous = Get-Current
+# What -Rollback went back to before this install, put back if this install is undone.
+$previousNoted = if (Test-Path -LiteralPath $previousFile) { ([string](Get-Content -LiteralPath $previousFile -Raw)).Trim() } else { $null }
 $script:closeRefused = $false
 $script:switchUndone = $false
 try {
     Switch-To $name
 } catch {
-    # The running copy wasn't switched, or was put back, so the new version goes too, and -Rollback still goes back
-    # from the running one.
-    if ($script:closeRefused -or $script:switchUndone) { Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force -ErrorAction SilentlyContinue }
+    # Whatever stopped it, a version that isn't the one in use goes, so -Rollback never moves forward to a build that
+    # was never switched in.
+    $installedNow = try { Get-Current } catch { $name }
+    if ($installedNow -ne $name) {
+        try { Remove-Version $name } catch { Write-Warning "Couldn't remove the folder of version $name ($_)." }
+    }
     throw
 }
 Set-Launchers
@@ -452,9 +519,20 @@ try {
     }
     throw "Version $name didn't stay running, and going back to version $previous failed ($switchBackFailure), so $name is still the one installed and Waypoint isn't running. Run -Rollback to go back to $previous."
 }
-# Waypoint.previous.exe is now the version that failed, and nothing should go back to it.
+# Waypoint.previous.exe and previous.txt now name the version that failed, and nothing should go back to it, so
+# previous.txt goes back to what it said before this install. Not being able to do any of this doesn't stop the
+# version that was put back from being started.
 Remove-Item -LiteralPath $previousExe -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $versionsDir $name) -Recurse -Force
+try {
+    if ($previousNoted) { Set-TextFile $previousFile $previousNoted } else { Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue }
+} catch {
+    Remove-Item -LiteralPath $previousFile -Force -ErrorAction SilentlyContinue
+}
+try {
+    Remove-Version $name
+} catch {
+    Write-Warning "Couldn't remove the folder of version $name ($_). -Rollback won't go to it, since it's newer than $previous."
+}
 if (Test-Start) {
     throw "Version $name didn't stay running, so it was removed and version $previous was put back. It's running."
 }

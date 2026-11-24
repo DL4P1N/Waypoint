@@ -101,7 +101,7 @@ public sealed class ServerClientTests : IDisposable
     }
 
     [Fact]
-    public void Once_away_reads_stop_trying_until_a_check_finds_the_server()
+    public async Task Once_away_reads_stop_trying_until_a_check_finds_the_server()
     {
         var client = Client();
         var data = new ServerToDoData(client);
@@ -114,7 +114,7 @@ public sealed class ServerClientTests : IDisposable
         _fake.Items.Add("Something new");
         Assert.Single(data.GetOpenItems());
 
-        Assert.NotNull(client.CheckAsync().GetAwaiter().GetResult());
+        Assert.NotNull(await client.CheckAsync());
         Assert.Equal(ServerState.Online, client.State);
         Assert.Equal(2, data.GetOpenItems().Count);
     }
@@ -131,12 +131,12 @@ public sealed class ServerClientTests : IDisposable
     }
 
     [Fact]
-    public void A_refused_token_needs_pairing_again()
+    public async Task A_refused_token_needs_pairing_again()
     {
         _fake.Answer = HttpStatusCode.Unauthorized;
         var client = Client();
 
-        Assert.Null(client.CheckAsync().GetAwaiter().GetResult());
+        Assert.Null(await client.CheckAsync());
 
         Assert.Equal(ServerState.NotPaired, client.State);
     }
@@ -182,14 +182,14 @@ public sealed class ServerClientTests : IDisposable
     }
 
     [Fact]
-    public void A_capture_keeps_one_id_so_the_server_can_tell_a_resend()
+    public async Task A_capture_keeps_one_id_so_the_server_can_tell_a_resend()
     {
         var queue = new CaptureQueue(Path.Combine(_folder, "queue.json"));
         var capture = queue.Add("first", DateTimeOffset.Now);
         var seen = new List<string>();
 
-        queue.SendAsync(next => { seen.Add(next.Id); return Task.FromResult(false); }).GetAwaiter().GetResult();
-        queue.SendAsync(next => { seen.Add(next.Id); return Task.FromResult(false); }).GetAwaiter().GetResult();
+        await queue.SendAsync(next => { seen.Add(next.Id); return Task.FromResult(false); });
+        await queue.SendAsync(next => { seen.Add(next.Id); return Task.FromResult(false); });
 
         Assert.All(seen, id => Assert.Equal(capture.Id, id));
     }

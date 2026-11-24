@@ -8,7 +8,8 @@ namespace Waypoint.Core.Tests;
 
 public sealed class CalendarFeedSyncTests : IDisposable
 {
-    private static readonly DateOnly Tomorrow = DateOnly.FromDateTime(DateTime.Now.AddDays(1));
+    // Read once per test rather than once per run, so a run that goes past midnight still sees one day in each test.
+    private readonly DateOnly Tomorrow = DateOnly.FromDateTime(DateTime.Now.AddDays(1));
 
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid()}.db");
     private readonly WaypointDatabase _database;
@@ -29,7 +30,7 @@ public sealed class CalendarFeedSyncTests : IDisposable
 
     private CalendarFeedSync Sync(Func<string> body) => new(new HttpClient(new FakeFeed(body)), _database, "https://example.test/feed.ics");
 
-    private static string Feed(params string[] titles) =>
+    private string Feed(params string[] titles) =>
         "BEGIN:VCALENDAR\r\n"
         + string.Concat(titles.Select(title =>
             $"BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:{Tomorrow:yyyyMMdd}\r\nUID:{title}\r\nSUMMARY:{title}\r\nEND:VEVENT\r\n"))

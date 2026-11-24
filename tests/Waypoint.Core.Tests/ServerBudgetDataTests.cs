@@ -58,11 +58,11 @@ public sealed class ServerBudgetDataTests
     }
 
     [Fact]
-    public void A_month_never_read_before_the_server_went_away_shows_empty()
+    public async Task A_month_never_read_before_the_server_went_away_shows_empty()
     {
         var client = Client();
         _fake.Up = false;
-        client.CheckAsync().GetAwaiter().GetResult();
+        await client.CheckAsync();
 
         var page = new ServerBudgetData(client).GetPage(ThisMonth.AddMonths(-3), Today);
 
