@@ -44,6 +44,15 @@ public static class PartFiles
         return removed;
     }
 
+    /// <summary>
+    /// The extension a kept, finished file gets. One that would make it look like a working file, such as ".part", is
+    /// renamed, so a sweep can never take a finished file for an unfinished one.
+    /// </summary>
+    public static string FinishedExtension(string extension) =>
+        extension.Equals(".part", StringComparison.OrdinalIgnoreCase) || extension.Equals(".partial", StringComparison.OrdinalIgnoreCase)
+            ? extension + "-file"
+            : extension;
+
     /// <summary>True for a name ending in <paramref name="suffix"/>, such as ".part".</summary>
     public static Func<string, bool> EndingIn(string suffix) => name => name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
 

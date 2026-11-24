@@ -221,7 +221,12 @@ public sealed class TranscriptionQueue : IDisposable
             return false;
         }
 
-        _database.SaveTranscriptionJob(job with { Status = TranscriptionStatus.Canceled }, _clock());
+        // Transcribing is already done once it's writing notes, and the transcript is saved on the note. Stopping then
+        // only stops the notes, so the job is done, and a recording it came from is cleaned up like any other.
+        var transcribed = job.Status == TranscriptionStatus.Writing;
+        _database.SaveTranscriptionJob(
+            transcribed ? job with { Status = TranscriptionStatus.Done, Error = StoppedWritingText } : job with { Status = TranscriptionStatus.Canceled },
+            _clock());
         bool running;
         lock (_lock)
         {
@@ -233,14 +238,16 @@ public sealed class TranscriptionQueue : IDisposable
         }
 
         // A running job cleans up after itself once Whisper has stopped and let go of the files.
-        if (!running)
+        if (!running && !transcribed)
         {
             CleanUpCanceled(jobId);
         }
 
-        Raise(new TranscriptionChange(jobId, job.NoteId, "Stopped transcribing."));
+        Raise(new TranscriptionChange(jobId, job.NoteId, transcribed ? StoppedWritingText : "Stopped transcribing."));
         return true;
     }
+
+    private const string StoppedWritingText = "Stopped writing notes. The transcript is saved in Sources, so notes can be written from it later.";
 
     /// <summary>Starts a failed job over. A converted WAV that's still there is used again.</summary>
     public bool Retry(long jobId)
@@ -690,8 +697,10 @@ public sealed class TranscriptionQueue : IDisposable
         Platform.PartFiles.SweepStale(_workFolder, name => name.Contains(".part", StringComparison.OrdinalIgnoreCase), Platform.PartFiles.StaleAfter);
     }
 
+    /// <summary>A free name for a kept copy, which never ends in .part, so the start-up sweep can't take it.</summary>
     private string FreeAudioPath(string stem, string extension)
     {
+        extension = Platform.PartFiles.FinishedExtension(extension);
         var target = Path.Combine(_audioFolder, stem + extension);
         for (var n = 2; File.Exists(target); n++)
         {

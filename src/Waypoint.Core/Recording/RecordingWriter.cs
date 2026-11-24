@@ -95,32 +95,52 @@ public sealed class RecordingWriter : IDisposable
     /// </summary>
     public void WriteSilence(long samples)
     {
-        if (samples <= 0)
+        lock (_lock)
+        {
+            SilenceLocked(samples);
+        }
+    }
+
+    /// <summary>
+    /// Silence up to <paramref name="expectedSamples"/> in all, when what's written is more than
+    /// <paramref name="minimumGap"/> samples short of it. The gap is worked out while holding the file, so sound that
+    /// came in meanwhile counts and silence never lands after newer sound. Returns how many samples were written.
+    /// </summary>
+    public long FillSilenceTo(long expectedSamples, long minimumGap)
+    {
+        lock (_lock)
+        {
+            var behind = expectedSamples - _dataBytes / 2;
+            if (behind <= minimumGap)
+            {
+                return 0;
+            }
+
+            SilenceLocked(behind);
+            return behind;
+        }
+    }
+
+    private void SilenceLocked(long samples)
+    {
+        if (samples <= 0 || _closed)
         {
             return;
         }
 
-        lock (_lock)
+        _stream.Position = WavFile.HeaderBytes + _dataBytes;
+        for (var left = samples * 2; left > 0;)
         {
-            if (_closed)
-            {
-                return;
-            }
+            var bytes = (int)Math.Min(left, Zeros.Length);
+            _stream.Write(Zeros, 0, bytes);
+            _dataBytes += bytes;
+            _sinceFlush += bytes;
+            left -= bytes;
+        }
 
-            _stream.Position = WavFile.HeaderBytes + _dataBytes;
-            for (var left = samples * 2; left > 0;)
-            {
-                var bytes = (int)Math.Min(left, Zeros.Length);
-                _stream.Write(Zeros, 0, bytes);
-                _dataBytes += bytes;
-                _sinceFlush += bytes;
-                left -= bytes;
-            }
-
-            if (_sinceFlush >= _flushBytes)
-            {
-                FlushLocked();
-            }
+        if (_sinceFlush >= _flushBytes)
+        {
+            FlushLocked();
         }
     }
 

@@ -65,6 +65,39 @@ public sealed class NoteFiles(INoteFileStore database, string root)
     /// <summary>What the notes and the folder's files were when a pass started that left nothing to try again.</summary>
     private (string Notes, string Files)? _settled;
 
+    /// <summary>Set once the first sync has looked for writes left unfinished by a crash.</summary>
+    private bool _swept;
+
+    /// <summary>
+    /// A note is written to ".Name.md.tmp" beside its file and moved over it. One left by a crash before it could be
+    /// moved is never finished, so it goes, an hour after it was last written so no write under way is ever taken.
+    /// Other apps' dot folders are left alone.
+    /// </summary>
+    private static void SweepStaleWrites(string root)
+    {
+        try
+        {
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
+            var folders = new Stack<string>([root]);
+            while (folders.TryPop(out var folder))
+            {
+                Platform.PartFiles.SweepStale(folder, name => name.StartsWith('.') && name.EndsWith(Extension + ".tmp", StringComparison.OrdinalIgnoreCase), Platform.PartFiles.StaleAfter);
+                foreach (var child in Directory.EnumerateDirectories(folder).Where(child => !Path.GetFileName(child).StartsWith('.')))
+                {
+                    folders.Push(child);
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Tried again the next time Waypoint starts.
+        }
+    }
+
     /// <summary>
     /// One pass at a time, since two at once could both take the same new file as a new note. A pass isn't made when
     /// nothing changed since one that left nothing to try again and no file waiting out its grace: the notes' change
@@ -74,6 +107,12 @@ public sealed class NoteFiles(INoteFileStore database, string root)
     {
         lock (_gate)
         {
+            if (!_swept)
+            {
+                _swept = true;
+                SweepStaleWrites(root);
+            }
+
             var notes = database.NotesChangeStamp();
             var files = notes is null ? null : FilesStamp(root);
             if (notes is not null && files is not null && _settled == (notes, files))
@@ -709,7 +748,7 @@ public sealed class NoteFiles(INoteFileStore database, string root)
             var full = Full(path);
             var dir = Path.GetDirectoryName(full)!;
             Directory.CreateDirectory(dir);
-            Platform.DurableFile.WriteAllText(full, note.Body, Utf8, Path.Combine(dir, $".{Path.GetFileName(full)}.tmp"));
+            Platform.DurableFile.WriteAllText(full, note.Body, Utf8, Path.Combine(dir, $".{Path.GetFileName(full)}.tmp"), keepCreationTime: true);
             _files[path] = new FileInfo(full);
             _owners[path] = note.Id;
             Remember(note, path);

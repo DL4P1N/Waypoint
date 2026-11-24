@@ -220,6 +220,8 @@ public sealed class LectureRecorder : IDisposable
             return;
         }
 
+        // Told when the PC sleeps and wakes, so the time asleep is left out of the recording.
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
         _markKey = new GlobalHotkey(() => Mark(null), GlobalHotkey.VkM);
         _markKeyWorks = _markKey.Register();
         _lastMarked = null;
@@ -344,8 +346,23 @@ public sealed class LectureRecorder : IDisposable
         _window.ShowRecording(_core.Elapsed, _core.Level, warning, note);
     }
 
+    /// <summary>From Windows' own thread, so it's handed to the window's, with the time it happened.</summary>
+    private void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        var at = DateTime.Now;
+        if (e.Mode == Microsoft.Win32.PowerModes.Suspend)
+        {
+            _window.Dispatcher.BeginInvoke(() => _core.Suspending(at));
+        }
+        else if (e.Mode == Microsoft.Win32.PowerModes.Resume)
+        {
+            _window.Dispatcher.BeginInvoke(() => _core.Resumed(at));
+        }
+    }
+
     private void StopDevices()
     {
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _tick.Stop();
         _capture?.Dispose();
         _capture = null;

@@ -393,6 +393,88 @@ public sealed class RecorderTests : IDisposable
     }
 
     [Fact]
+    public async Task Only_the_time_windows_says_it_slept_is_left_out()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.ComputerAudio, false);
+        recorder.WriteComputerAudio(Seconds(1));
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        // Asleep for two hours, three seconds after that check, and awake again for four before the next one.
+        recorder.Suspending(_now.AddSeconds(3));
+        recorder.Resumed(_now.AddSeconds(3).AddHours(2));
+        _now = _now.AddSeconds(7).AddHours(2);
+        recorder.Check(PowerReading.PluggedIn, null);
+        var stopped = recorder.Stop()!;
+
+        Assert.Equal(12, stopped.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task A_long_wait_between_checks_keeps_the_time_that_sound_came_in()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.ComputerAudio, false);
+        recorder.WriteComputerAudio(Seconds(1));
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        // The window was busy for 75 seconds, with 70 of them playing sound, so only 5 can have been asleep.
+        recorder.WriteComputerAudio(Seconds(70));
+        _now = _now.AddSeconds(75);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        Assert.Equal(TimeSpan.FromSeconds(75), recorder.Elapsed);
+        recorder.Stop();
+    }
+
+    [Fact]
+    public void Waking_up_doesnt_say_the_microphone_heard_nothing()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, false);
+        recorder.WriteMicrophone(Seconds(1));
+        _now = _now.AddSeconds(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        recorder.Suspending(_now.AddSeconds(1));
+        recorder.Resumed(_now.AddHours(3));
+        _now = _now.AddHours(3).AddSeconds(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        // Asleep with no word from Windows, found from the long wait with no sound coming in.
+        _now = _now.AddHours(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        // Still said when it's really quiet while awake, with the microphone sending sound too faint to count.
+        recorder.WriteMicrophone(Seconds(70, 0.0001f));
+        _now = _now.AddSeconds(70);
+        Assert.Equal([RecordingWarning.SilentMicrophone], recorder.Check(PowerReading.PluggedIn, null));
+        recorder.Stop();
+    }
+
+    [Fact]
+    public void Silence_is_only_written_for_what_sound_since_hasnt_already_covered()
+    {
+        using var stream = new MemoryStream();
+        var writer = new RecordingWriter(stream, TimeSpan.FromSeconds(1));
+        writer.Write(Seconds(1));
+        var gap = RecordingWriter.SampleRate / 2;
+
+        // Sound came in after the check worked out the gap and before the silence went in.
+        writer.Write(Seconds(2.8));
+        Assert.Equal(0, writer.FillSilenceTo(4L * RecordingWriter.SampleRate, gap));
+        Assert.Equal(TimeSpan.FromSeconds(3.8), writer.Length);
+
+        Assert.Equal(2L * RecordingWriter.SampleRate + 3200, writer.FillSilenceTo(6L * RecordingWriter.SampleRate, gap));
+        Assert.Equal(TimeSpan.FromSeconds(6), writer.Length);
+    }
+
+    [Fact]
     public void A_long_stretch_of_silence_is_written_a_second_at_a_time()
     {
         using var stream = new LargestWrite();
@@ -516,6 +598,47 @@ public sealed class RecorderTests : IDisposable
         Assert.True(File.Exists(copying));
         Assert.True(File.Exists(kept));
         Assert.True(File.Exists(converted));
+    }
+
+    [Fact]
+    public void Stopping_once_the_transcript_is_saved_finishes_the_recording_instead_of_offering_it_again()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        var job = recorder.HandOff(stopped, queue);
+        _database.AddTranscriptSource(job.NoteId, "Transcript of the lecture", "Recursion calls itself.", null, _now);
+        Assert.True(_database.SaveTranscriptionJob(_database.GetTranscriptionJob(job.Id)! with { Status = TranscriptionStatus.Writing, Progress = 100 }, _now));
+
+        Assert.True(queue.Cancel(job.Id));
+
+        Assert.Equal(TranscriptionStatus.Done, _database.GetTranscriptionJob(job.Id)!.Status);
+        Assert.Empty(recorder.TakeBackStopped());
+        Assert.Equal(1, recorder.CleanUp());
+        Assert.False(File.Exists(stopped.Path));
+        Assert.Equal(RecordingStatus.Done, _database.GetRecording(stopped.Id)!.Status);
+        Assert.NotNull(_database.GetNote(job.NoteId));
+    }
+
+    [Fact]
+    public void A_job_stopped_just_as_its_transcript_was_saved_is_cleaned_up_not_offered_again()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        var job = recorder.HandOff(stopped, queue);
+        _database.AddTranscriptSource(job.NoteId, "Transcript of the lecture", "Recursion calls itself.", null, _now);
+        Assert.True(_database.SaveTranscriptionJob(_database.GetTranscriptionJob(job.Id)! with { Status = TranscriptionStatus.Canceled }, _now));
+
+        Assert.Empty(recorder.TakeBackStopped());
+
+        Assert.False(File.Exists(stopped.Path));
+        Assert.Equal(RecordingStatus.Done, _database.GetRecording(stopped.Id)!.Status);
+        Assert.Empty(recorder.Recover());
     }
 
     [Fact]

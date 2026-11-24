@@ -173,27 +173,37 @@ public sealed class Recorder
         }
 
         var now = _clock();
-        var sinceLast = now - session.LastCheck;
-        session.LastCheck = now;
-        if (sinceLast > SuspendGap)
+        var written = session.Writer.SamplesWritten;
+        if (session.SuspendedAt is { } suspended)
         {
-            // Asleep since the last check, so the recording carries on from where it was, without the time away.
-            session.StartedAt += sinceLast;
+            // Asleep, and this check came before word of waking did. The time since it went to sleep is left out.
+            Skip(session, now - suspended);
+        }
+        else if (now - session.LastCheck is var sinceLast && sinceLast > SuspendGap)
+        {
+            // No check for a long while and no word from Windows: the PC was most likely asleep. Only what the sound
+            // since the last check doesn't account for is taken as asleep, so time that was recorded is never lost.
+            var heard = TimeSpan.FromSeconds(Math.Max(0, written - session.CheckedSamples) / (double)RecordingWriter.SampleRate);
+            Skip(session, sinceLast - heard);
         }
 
+        session.LastCheck = now;
+        session.CheckedSamples = written;
         if (session.Info.Input == AudioInput.ComputerAudio && session.Filling.IsCompleted)
         {
             var expected = (long)((now - session.StartedAt).TotalSeconds * RecordingWriter.SampleRate);
-            var behind = expected - session.Writer.SamplesWritten;
-            if (behind > SilenceGap.TotalSeconds * RecordingWriter.SampleRate)
+            var gap = (long)(SilenceGap.TotalSeconds * RecordingWriter.SampleRate);
+            session.CheckedSamples = Math.Max(written, expected);
+            if (expected - written > gap)
             {
-                // Written off this thread, which is the window's, so a slow disk never holds it up.
+                // Written off this thread, which is the window's, so a slow disk never holds it up. The gap is worked
+                // out again while holding the file, so sound that came in meanwhile is never followed by silence.
                 var writer = session.Writer;
                 session.Filling = Task.Run(() =>
                 {
                     try
                     {
-                        writer.WriteSilence(behind);
+                        writer.FillSilenceTo(expected, gap);
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -204,6 +214,41 @@ public sealed class Recorder
         }
 
         return session.Watch.Check(now, power, freeBytes, microphoneMuted);
+    }
+
+    /// <summary>The PC is going to sleep, from Windows. Nothing is recorded until it wakes, and that time is left out.</summary>
+    public void Suspending(DateTime at)
+    {
+        if (_session is { } session)
+        {
+            session.SuspendedAt ??= at;
+        }
+    }
+
+    /// <summary>The PC woke up, from Windows. The time it was asleep is left out of the recording and its warnings.</summary>
+    public void Resumed(DateTime at)
+    {
+        if (_session is { SuspendedAt: { } suspended } session)
+        {
+            Skip(session, at - suspended);
+            session.LastCheck = at;
+        }
+    }
+
+    /// <summary>
+    /// Leaves time the PC was asleep out of the recording: computer audio isn't filled with silence for it, and the
+    /// microphone isn't taken as silent for it, so waking up never says it hasn't heard anything.
+    /// </summary>
+    private static void Skip(Session session, TimeSpan asleep)
+    {
+        session.SuspendedAt = null;
+        if (asleep <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        session.StartedAt += asleep;
+        session.Watch.Slept(asleep);
     }
 
     /// <summary>The sound device stopped. Returns true the first time, so it's said once.</summary>
@@ -353,6 +398,18 @@ public sealed class Recorder
                 continue;
             }
 
+            // Stopped just as its transcript was saved on the note, so it's done with, and cleaned up like one that
+            // finished: its file goes, since a copy asked to be kept was made before transcribing, and it isn't offered again.
+            if (recording.NoteId is { } noteId && _database.GetNoteSources(noteId).Any(source => source.Kind == NoteSourceKind.Transcript))
+            {
+                if (Delete(recording.Path))
+                {
+                    _database.SetRecordingStatus(recording.Id, RecordingStatus.Done);
+                }
+
+                continue;
+            }
+
             if (!File.Exists(recording.Path))
             {
                 _database.SetRecordingStatus(recording.Id, RecordingStatus.Done);
@@ -496,6 +553,12 @@ public sealed class Recorder
         public DateTime StartedAt { get; set; } = startedAt;
 
         public DateTime LastCheck { get; set; } = startedAt;
+
+        /// <summary>How much was written, or due to be with silence, at the last check.</summary>
+        public long CheckedSamples { get; set; }
+
+        /// <summary>When Windows said it was going to sleep, until it says it woke.</summary>
+        public DateTime? SuspendedAt { get; set; }
 
         public Task Filling { get; set; } = Task.CompletedTask;
 

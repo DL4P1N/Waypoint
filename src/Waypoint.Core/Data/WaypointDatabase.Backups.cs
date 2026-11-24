@@ -293,8 +293,8 @@ public sealed partial class WaypointDatabase
             path = BackupPath(at, suffix);
         }
 
-        // A copy cut off by a crash before, at any time, is never finished, so it goes rather than fill the disk.
-        Platform.PartFiles.SweepStale(BackupFolder, Platform.PartFiles.EndingIn(".partial"), Platform.PartFiles.StaleAfter);
+        // A copy cut off by a crash before, at any time, is never finished, so it goes with its journal rather than fill the disk.
+        Platform.PartFiles.SweepStale(BackupFolder, name => name.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".partial-journal", StringComparison.OrdinalIgnoreCase), Platform.PartFiles.StaleAfter);
         var partial = $"{path}.partial";
         File.Delete(partial);
         try

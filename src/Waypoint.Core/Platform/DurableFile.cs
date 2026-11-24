@@ -15,10 +15,11 @@ public static class DurableFile
     /// Writes <paramref name="text"/> to <paramref name="path"/>. <paramref name="temporary"/> is where it goes first,
     /// beside the file, and is <c>.tmp</c> after the file's name when not given.
     /// </summary>
-    public static void WriteAllText(string path, string text, Encoding? encoding = null, string? temporary = null) =>
-        WriteAllBytes(path, (encoding ?? Utf8).GetBytes(text), temporary);
+    public static void WriteAllText(string path, string text, Encoding? encoding = null, string? temporary = null, bool keepCreationTime = false) =>
+        WriteAllBytes(path, (encoding ?? Utf8).GetBytes(text), temporary, keepCreationTime);
 
-    public static void WriteAllBytes(string path, byte[] bytes, string? temporary = null)
+    /// <param name="keepCreationTime">The new file keeps the old one's creation time, as an edit in place would.</param>
+    public static void WriteAllBytes(string path, byte[] bytes, string? temporary = null, bool keepCreationTime = false)
     {
         temporary ??= path + ".tmp";
         try
@@ -27,6 +28,11 @@ public static class DurableFile
             {
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
+            }
+
+            if (keepCreationTime && File.Exists(path))
+            {
+                File.SetCreationTimeUtc(temporary, File.GetCreationTimeUtc(path));
             }
 
             File.Move(temporary, path, overwrite: true);

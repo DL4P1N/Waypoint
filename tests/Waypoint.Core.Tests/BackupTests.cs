@@ -39,10 +39,14 @@ public sealed class BackupTests : IDisposable
         var stale = Path.Combine(_database.BackupFolder, "waypoint-2026-11-01-100000.db.partial");
         File.WriteAllText(stale, "half a copy");
         File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-2));
+        var journal = stale + "-journal";
+        File.WriteAllText(journal, "its journal");
+        File.SetLastWriteTimeUtc(journal, DateTime.UtcNow.AddDays(-2));
 
         _database.BackUpNow(Now);
 
         Assert.False(File.Exists(stale));
+        Assert.False(File.Exists(journal));
         Assert.Single(_database.GetBackups());
     }
 

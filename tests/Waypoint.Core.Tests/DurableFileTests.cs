@@ -58,6 +58,15 @@ public sealed class DurableFileTests : IDisposable
         Assert.Equal(0, PartFiles.SweepStale(Path.Combine(_folder, "missing"), PartFiles.EndingIn(".part"), TimeSpan.Zero));
     }
 
+    [Fact]
+    public void A_finished_file_never_gets_a_working_files_extension()
+    {
+        Assert.Equal(".part-file", PartFiles.FinishedExtension(".part"));
+        Assert.Equal(".PARTIAL-file", PartFiles.FinishedExtension(".PARTIAL"));
+        Assert.Equal(".m4a", PartFiles.FinishedExtension(".m4a"));
+        Assert.Equal("", PartFiles.FinishedExtension(""));
+    }
+
     private string Make(string name, DateTime writtenUtc)
     {
         var path = Path.Combine(_folder, name);

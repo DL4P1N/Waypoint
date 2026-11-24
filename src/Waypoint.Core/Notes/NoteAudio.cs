@@ -156,7 +156,8 @@ public sealed class NoteAudio(WaypointDatabase database, string dataDirectory, F
     {
         Directory.CreateDirectory(_audioFolder);
         var stem = $"{_clock():yyyy-MM-dd HHmm} {Path.GetFileNameWithoutExtension(source)}";
-        var extension = Path.GetExtension(source);
+        // Never ending in .part, so the start-up sweep of the audio folder can't take it for a copy cut short.
+        var extension = Platform.PartFiles.FinishedExtension(Path.GetExtension(source));
         var target = Path.Combine(_audioFolder, stem + extension);
         for (var n = 2; File.Exists(target); n++)
         {
