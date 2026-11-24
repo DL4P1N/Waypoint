@@ -40,8 +40,15 @@ public partial class HistoryView : UserControl
     private Action _changed = null!;
     private bool _menuOpen;
 
-    /// <summary>Where the keyboard goes once the rows are drawn again after a row it was on is deleted.</summary>
-    private int? _focusAfter;
+    /// <summary>How long after a delete the rows drawn again still take the keyboard to the row that took its place.</summary>
+    internal static readonly TimeSpan FocusAfterFor = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Where the keyboard goes once the rows are drawn again after a row it was on is deleted, and when that was. A
+    /// drawing that doesn't come soon, because reading failed or nothing changed, lets it go, so a much later one
+    /// never takes the keyboard from wherever it is by then.
+    /// </summary>
+    private (int Index, DateTime At)? _focusAfter;
 
     public HistoryView() => InitializeComponent();
 
@@ -105,6 +112,7 @@ public partial class HistoryView : UserControl
     {
         if (_history is null || (_menuOpen && !force))
         {
+            LetFocusAfterGo();
             return;
         }
 
@@ -116,14 +124,18 @@ public partial class HistoryView : UserControl
         var signature = $"{filter}\n{(rows.Count == 0 ? Column.SearchText.Trim() : "")}\n{string.Join('\n', rows.Select(row => $"{row.Entry.Id}\t{row.Title}\t{row.Details}\t{row.BoxVisibility}"))}";
         if (!_gate.ShouldRebuild(signature, busy: !force && Scroll.IsKeyboardFocusWithin))
         {
+            LetFocusAfterGo();
             return;
         }
 
         Entries.ItemsSource = rows;
-        if (_focusAfter is { } index)
+        if (_focusAfter is { } after)
         {
             _focusAfter = null;
-            Dispatcher.BeginInvoke(() => FocusRowAt(index), DispatcherPriority.Loaded);
+            if (DateTime.UtcNow - after.At < FocusAfterFor)
+            {
+                Dispatcher.BeginInvoke(() => FocusRowAt(after.Index), DispatcherPriority.Loaded);
+            }
         }
         Empty.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         Empty.Text = EmptyText(filter, Column.SearchText);
@@ -173,6 +185,15 @@ public partial class HistoryView : UserControl
         {
             e.Handled = true;
             Delete((HistoryRow)((FrameworkElement)sender).DataContext, refocus: true);
+        }
+    }
+
+    /// <summary>A delete's wish to move the keyboard ends once it's older than <see cref="FocusAfterFor"/>.</summary>
+    private void LetFocusAfterGo()
+    {
+        if (_focusAfter is { At: var at } && DateTime.UtcNow - at >= FocusAfterFor)
+        {
+            _focusAfter = null;
         }
     }
 
@@ -244,7 +265,7 @@ public partial class HistoryView : UserControl
 
         if (refocus && index >= 0)
         {
-            _focusAfter = index;
+            _focusAfter = (index, DateTime.UtcNow);
         }
 
         Bar.Show($"Deleted {row.Title}", async () =>

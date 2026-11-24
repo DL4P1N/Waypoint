@@ -93,6 +93,35 @@ public sealed class HistoryViewTests
     });
 
     [Fact]
+    public void A_delete_whose_rows_arent_drawn_again_soon_doesnt_take_the_keyboard_later() => Ui.Run(ui =>
+    {
+        var item = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "return books", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        ui.Database.SetDone(item, true);
+        var view = Make(ui);
+        var field = typeof(HistoryView).GetField("_focusAfter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        // Drawn again with nothing changed, so the rows weren't rebuilt: a fresh wish waits, an old one is let go.
+        field.SetValue(view, ((int, DateTime)?)(0, DateTime.UtcNow));
+        view.Refresh();
+        Assert.NotNull(field.GetValue(view));
+
+        field.SetValue(view, ((int, DateTime)?)(0, DateTime.UtcNow - HistoryView.FocusAfterFor));
+        view.Refresh();
+        Assert.Null(field.GetValue(view));
+
+        // An old one met by a rebuild is let go too, without moving the keyboard.
+        var search = UiTest.Named<TextBox>(UiTest.Named<NestedColumn>(view, "Column"), "SearchBox");
+        ui.Focus(search);
+        field.SetValue(view, ((int, DateTime)?)(0, DateTime.UtcNow - HistoryView.FocusAfterFor));
+        var other = ui.Database.AddByHand(new HandAddedItem(ItemKind.Task, "pay rent", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
+        ui.Database.SetDone(other, true);
+        view.Refresh();
+        ui.Pump();
+        Assert.Null(field.GetValue(view));
+        Assert.True(search.IsKeyboardFocused);
+    });
+
+    [Fact]
     public void Tab_reaches_a_rows_box_before_its_menu_and_delete_moves_the_keyboard_to_the_next_row() => Ui.Run(ui =>
     {
         foreach (var title in new[] { "return books", "pay rent", "water plants" })
