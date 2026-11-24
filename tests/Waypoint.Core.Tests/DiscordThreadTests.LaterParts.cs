@@ -38,5 +38,33 @@ public sealed partial class DiscordThreadTests
         Assert.DoesNotContain(post.Messages, message => message.Id == kept[^1]);
         Assert.Equal(parts, post.Messages.Where(message => message.Bot).Select(message => message.Id));
         Assert.All(Descriptions(post), shown => Assert.DoesNotContain("Made up line", shown));
+        Assert.Empty(_database.GetDiscordSends("partdrop:"));
+    }
+
+    [Fact]
+    public async Task A_later_part_that_still_cant_be_taken_away_after_a_day_is_let_go_and_the_missing_part_is_sent()
+    {
+        var id = _database.CreateNote("Made up longer reading", LongerReading, _now);
+        var worker = await Started(lists: null);
+        var post = PostFor(id);
+        var kept = _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message).ToList();
+        lock (_discord.Posts)
+        {
+            post.Messages.RemoveAll(message => message.Id == kept[1]);
+        }
+
+        _discord.FailingDeletes.Add(kept[^1]);
+        Assert.True(_database.SaveNote(id, "Made up longer reading", LongerReading.Replace("Made up line", "Made up changed line"), _now));
+        await worker.SyncDiscordThreadsAsync();
+        Assert.Contains(kept[^1], _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message));
+
+        _now = _now.AddDays(1).AddMinutes(1);
+        await worker.SyncDiscordThreadsAsync();
+
+        var parts = _database.FindDiscordThread(post.Id)!.Parts.Select(part => part.Message).ToList();
+        Assert.Equal(parts, post.Messages.Where(message => message.Bot && message.Id != kept[^1]).Select(message => message.Id));
+        Assert.DoesNotContain(kept[^1], parts);
+        Assert.Contains(post.Messages, message => message.Id == kept[^1]);
+        Assert.Empty(_database.GetDiscordSends("partdrop:"));
     }
 }
