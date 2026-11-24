@@ -322,7 +322,7 @@ public sealed class TodayViewTests
         var (view, _) = Make(ui);
         view.UpdateLayout();
 
-        Assert.Equal("Hide 1 finished", UiTest.Named<TextBlock>(view, "HideFinishedText").Text);
+        Assert.Equal("Hide 1 done", UiTest.Named<TextBlock>(view, "HideFinishedText").Text);
         Assert.Contains(UiTest.Descendants<TextBlock>(view), block => block.Text == "Today");
         Assert.DoesNotContain(UiTest.Descendants<TextBlock>(view), block => block.Text == "TODAY");
     });

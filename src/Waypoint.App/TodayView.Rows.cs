@@ -447,7 +447,7 @@ public partial class TodayView
 
         if (entries.Count == 0)
         {
-            entries.Add(new RowMenuEntry("Some of these are finished, so they can only be changed one at a time"));
+            entries.Add(new RowMenuEntry("Some of these are done, so they can only be changed one at a time"));
         }
 
         entries.Add(RowMenuEntry.Separator);

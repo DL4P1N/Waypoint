@@ -182,12 +182,12 @@ public partial class TodayView
         Work.Show(() => ShowItems(force: true), () => ShowItems());
     }
 
-    /// <summary>"Hide 2 finished", counting the finished rows this filter and search would show, so it's clear what the box hides.</summary>
+    /// <summary>"Hide 2 done", counting the done rows this filter and search would show, so it's clear what the box hides.</summary>
     private void ShowFinishedCount(IReadOnlyList<StoredItem> everything, ToDoFilter? filter, string search, DateOnly today)
     {
         var finished = everything.Count(item => item.Done && item.ParentRef is null
             && ToDoFilters.Matches(filter, item, Placement(item)) && PassesWaiting(item, search, today)
             && ToDoFilters.MatchesSearch(search, item, Placement(item), ItemGroups.StepsOf(item, everything)));
-        HideFinishedText.Text = finished > 0 ? $"Hide {finished} finished" : "Hide finished";
+        HideFinishedText.Text = finished > 0 ? $"Hide {finished} done" : "Hide done";
     }
 }

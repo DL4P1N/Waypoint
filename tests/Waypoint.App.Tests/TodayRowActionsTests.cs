@@ -171,6 +171,24 @@ public sealed class TodayRowActionsTests
     });
 
     [Fact]
+    public void Done_is_the_one_word_for_a_finished_item_on_to_do_and_history() => Ui.Run(ui =>
+    {
+        var task = Add(ui, "Mail the form", 0);
+        ui.Database.SetDone(task, true);
+        var (view, _) = Make(ui);
+        Assert.Equal("Hide 1 done", UiTest.Named<TextBlock>(view, "HideFinishedText").Text);
+
+        var history = new HistoryView();
+        history.Connect(ui.Database, () => { });
+        ui.Host(history);
+        history.Refresh();
+        ui.Pump();
+        var filters = UiTest.Named<ListBox>(UiTest.Named<NestedColumn>(history, "Column"), "Entries").Items.Cast<ColumnEntry>();
+        Assert.Contains(filters, entry => entry.Key == nameof(HistoryFilter.Completed) && entry.Label == "Done");
+        Assert.Contains(UiTest.Descendants<TextBlock>(history), block => block.Text.StartsWith("Done ", StringComparison.Ordinal));
+    });
+
+    [Fact]
     public void Each_row_has_a_more_button_that_opens_its_menu() => Ui.Run(ui =>
     {
         Add(ui, "Clean the oven", 2);
