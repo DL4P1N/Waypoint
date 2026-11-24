@@ -551,7 +551,7 @@ public sealed partial class WaypointWorker
     private void ForgetSendsOfRetiredPosts()
     {
         _database.ForgetDiscordNoticesOfEndedPosts();
-        foreach (var send in _database.GetDiscordSends("part:").Concat(_database.GetDiscordSends(NoticeSends)))
+        foreach (var send in new[] { "part:", NoticeSends, MovedSends, RetireSends }.SelectMany(_database.GetDiscordSends))
         {
             var thread = send.Key.Split(':') is [_, var id, _] ? id : null;
             if (thread is null || _database.FindDiscordThread(thread) is { Live: true })
