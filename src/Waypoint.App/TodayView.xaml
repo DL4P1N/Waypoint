@@ -172,7 +172,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <!-- The cards scroll away with the list, so a short window still shows the rows. -->
-                        <Border x:Name="ListCards" Grid.ColumnSpan="2">
+                        <Border x:Name="ListCards" Grid.ColumnSpan="2" SizeChanged="OnListCardsResized">
                             <StackPanel x:Name="Cards">
                         <Border x:Name="SuggestionCard"
                    

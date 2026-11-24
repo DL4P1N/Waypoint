@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Waypoint.App;
+using Waypoint.Core.Calendar;
 using Waypoint.Core.Capture;
 using Waypoint.Core.Data;
 
@@ -186,6 +187,63 @@ public sealed class TodayRowActionsTests
         var filters = UiTest.Named<ListBox>(UiTest.Named<NestedColumn>(history, "Column"), "Entries").Items.Cast<ColumnEntry>();
         Assert.Contains(filters, entry => entry.Key == nameof(HistoryFilter.Completed) && entry.Label == "Done");
         Assert.Contains(UiTest.Descendants<TextBlock>(history), block => block.Text.StartsWith("Done ", StringComparison.Ordinal));
+    });
+
+    [Fact]
+    public void Checking_a_dose_already_taken_today_changes_nothing_and_offers_no_undo() => Ui.Run(ui =>
+    {
+        var today = InDays(0);
+        ui.Database.CompleteCapture(ui.Database.AddCapture("Vitamin D"), [new SortedItem(ItemKind.Reminder, "Vitamin D", today, null, new TimeOnly(9, 0), Recurs: new Recurrence(RecurrenceUnit.Day), Dose: true)]);
+        var dose = ui.Database.GetOpenItems().Single(item => item.Title == "Vitamin D");
+        ui.Database.TakeDose(dose, DateTime.Now);
+        var (view, replies) = Make(ui);
+
+        Row(view, "Vitamin D").IsChecked = true;
+        ui.Pump();
+
+        Assert.Single(Assert.Single(ui.Database.GetDoses()).Taken);
+        Assert.StartsWith("Already marked taken", replies.Last(), StringComparison.Ordinal);
+        Assert.False(Bar(view).Visibility == Visibility.Visible && UndoButton(view).Visibility == Visibility.Visible, "a dose offered Undo");
+        Assert.False(Row(view, "Vitamin D").IsChecked);
+    });
+
+    [Fact]
+    public void Undoing_a_feed_items_move_puts_it_back_on_its_feed_date() => Ui.Run(ui =>
+    {
+        ui.Database.ReplaceCalendarEvents([new CalendarEvent("essay", "Essay draft", "ENG 102", InDays(3), null)]);
+        var essay = ui.Database.GetOpenItems().Single(item => item.Title == "Essay draft");
+        Assert.False(ui.Database.IsMovedFromFeed(essay));
+        var (view, _) = Make(ui);
+
+        ui.Choose(ui.RightClick(Row(view, "Essay draft"))!, "Reschedule", "Tomorrow");
+        ui.Pump();
+        essay = ui.Database.GetOpenItems().Single(item => item.Title == "Essay draft");
+        Assert.Equal(InDays(1), essay.DueDate);
+        Assert.True(ui.Database.IsMovedFromFeed(essay));
+
+        Click(UndoButton(view));
+        ui.Pump();
+        essay = ui.Database.GetOpenItems().Single(item => item.Title == "Essay draft");
+        Assert.Equal(InDays(3), essay.DueDate);
+        Assert.False(ui.Database.IsMovedFromFeed(essay));
+    });
+
+    [Fact]
+    public void An_undo_leaves_an_item_that_changed_since_as_it_is() => Ui.Run(ui =>
+    {
+        var task = Add(ui, "Call the dentist", 2);
+        var (view, _) = Make(ui);
+        ui.RenameAnswer = "Call the dentist about Friday";
+        ui.Choose(ui.RightClick(Row(view, "Call the dentist"))!, "Rename");
+        ui.Pump();
+
+        // Renamed again elsewhere, such as from Discord, before Undo is pressed.
+        ui.Database.ChangeItem(new ItemChange(ItemSource.Capture, task.Id, ChangeAction.Update, "Call the dentist on Monday"), DateTime.Now);
+        Click(UndoButton(view));
+        ui.Pump();
+
+        Assert.Equal("Call the dentist on Monday", Stored(ui, task.Id).Title);
+        Assert.Equal(TodayView.ChangedSince("Call the dentist"), BarText(view));
     });
 
     [Fact]

@@ -82,6 +82,21 @@ public sealed class ServerToDoClickTests
 
                 body = new { };
             }
+            else if (path == "/api/items/change")
+            {
+                var sent = JsonSerializer.Deserialize<ItemChange>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
+                ChangeArrived.Set();
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                string title;
+                lock (_gate)
+                {
+                    title = _items.Keys.First(key => Id(key) == sent.ItemId);
+                    Changes.Add($"{title} {sent.Action}");
+                    _items[title] = true;
+                }
+
+                body = new AppliedChange(sent, title);
+            }
             else if (path.StartsWith("/api/feedback", StringComparison.Ordinal))
             {
                 var sent = await request.Content!.ReadAsStringAsync(cancellationToken);
@@ -221,6 +236,25 @@ public sealed class ServerToDoClickTests
         Assert.Equal(["Email advisor done"], server.Changes);
         Assert.True(Box(view, "Email advisor").IsChecked);
         Assert.False(Box(view, "Repot the basil").IsChecked);
+    });
+
+    [Fact]
+    public void Delete_pressed_again_while_the_first_is_on_its_way_deletes_once() => Ui.Run(ui =>
+    {
+        var server = new ToDoServer();
+        var (view, work) = Open(ui, server);
+        var box = Box(view, "Email advisor");
+        ui.Focus(box);
+        server.ReleaseChanges.Reset();
+
+        Assert.True(ui.Press(box, System.Windows.Input.Key.Delete));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(ui.Press(box, System.Windows.Input.Key.Delete));
+
+        server.ReleaseChanges.Set();
+        PumpUntil(ui, () => !work.IsBusy, "the delete");
+        Assert.Equal(["Email advisor Cancel"], server.Changes);
+        Assert.Equal("Deleted Email advisor", UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message").Text);
     });
 
     [Fact]

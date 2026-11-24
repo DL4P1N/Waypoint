@@ -373,6 +373,32 @@ public partial class TodayView : UserControl
         FitWeekCards();
     }
 
+    /// <summary>Where the list goes back to once rebuilt rows are laid out, moved along with any card above that grew or shrank meanwhile.</summary>
+    private double? _restoreOffset;
+
+    /// <summary>
+    /// A card above the rows that grows or shrinks, such as the suggestion moving on, would push the rows under the
+    /// eye, so the list scrolls by the same amount and the rows stay put. At the top, the cards are what's being
+    /// read, so it stays at the top.
+    /// </summary>
+    private void OnListCardsResized(object sender, SizeChangedEventArgs e)
+    {
+        var change = e.NewSize.Height - e.PreviousSize.Height;
+        if (_weekShown || !e.HeightChanged || e.PreviousSize.Height <= 0 || e.NewSize.Height <= 0 || change == 0)
+        {
+            return;
+        }
+
+        if (_restoreOffset is { } waiting)
+        {
+            _restoreOffset = waiting > 0 ? Math.Max(0, waiting + change) : waiting;
+        }
+        else if (ItemsScroll.VerticalOffset > 0)
+        {
+            ItemsScroll.ScrollToVerticalOffset(Math.Max(0, ItemsScroll.VerticalOffset + change));
+        }
+    }
+
     private void FitWeekCards() => WeekCards.MaxHeight = Math.Max(96, ActualHeight * WeekCardsShare);
 
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
@@ -471,9 +497,16 @@ public partial class TodayView : UserControl
         ShowSelection(groups);
 
         // Every row is rebuilt, so the place in the list is put back once they've been laid out.
-        var offset = toTop ? 0 : ItemsScroll.VerticalOffset;
+        _restoreOffset = toTop ? 0 : ItemsScroll.VerticalOffset;
         Groups.ItemsSource = groups;
-        Dispatcher.InvokeAsync(() => ItemsScroll.ScrollToVerticalOffset(offset), DispatcherPriority.Loaded);
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (_restoreOffset is { } offset)
+            {
+                _restoreOffset = null;
+                ItemsScroll.ScrollToVerticalOffset(offset);
+            }
+        }, DispatcherPriority.Loaded);
         Empty.Visibility = groups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         Empty.Text = search.Trim().Length > 0 ? "Nothing matches that search."
             : ShowingWaiting ? "You're not waiting on anyone. Use + to add one."
