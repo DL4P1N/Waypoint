@@ -68,7 +68,7 @@
                                        Visibility="{Binding FullTextVisibility}" />
                         </StackPanel>
                     </CheckBox>
-                    <ItemsControl Margin="26,6,0,0" ItemsSource="{Binding Steps}">
+                    <ItemsControl Margin="26,6,0,0" Focusable="False" ItemsSource="{Binding Steps}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Margin="-4,0" Padding="4,0" CornerRadius="4" Background="{Binding SelectedBrush}">
@@ -106,13 +106,13 @@
                            Text="Scheduled"
                            Foreground="{DynamicResource SecondaryText}"
                            Visibility="{Binding ScheduledVisibility}" />
-                <ItemsControl ItemsSource="{Binding ScheduledRows}" ItemTemplate="{StaticResource RowTemplate}" />
+                <ItemsControl Focusable="False" ItemsSource="{Binding ScheduledRows}" ItemTemplate="{StaticResource RowTemplate}" />
                 <TextBlock Margin="0,4,0,6"
                            FontSize="12"
                            Text="To do"
                            Foreground="{DynamicResource SecondaryText}"
                            Visibility="{Binding ToDoHeadingVisibility}" />
-                <ItemsControl ItemsSource="{Binding ToDoRows}" ItemTemplate="{StaticResource RowTemplate}" />
+                <ItemsControl Focusable="False" ItemsSource="{Binding ToDoRows}" ItemTemplate="{StaticResource RowTemplate}" />
             </StackPanel>
         </DataTemplate>
     </UserControl.Resources>
@@ -153,162 +153,171 @@
                     <TextBlock x:Name="HideFinishedText" Margin="8,0,0,0" FontSize="13" Text="Hide finished" Foreground="{DynamicResource SecondaryText}" />
                 </CheckBox>
             </Grid>
-            <Border x:Name="SuggestionCard"
-                    DockPanel.Dock="Top"
-                    Margin="28,0,24,12"
-                    Padding="14,10"
-                    Background="{DynamicResource Surface}"
-                    BorderBrush="{DynamicResource Accent}"
-                    BorderThickness="2,0,0,0"
-                    Visibility="Collapsed">
-                <DockPanel>
-                    <StackPanel x:Name="SuggestionButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- For an exam's study window, practice questions from its notes are one click away too. -->
-                        <Button x:Name="PracticeButton"
-                                Margin="12,0,0,0"
-                                VerticalAlignment="Center"
-                                Style="{StaticResource SmallButton}"
-                                FontSize="12"
-                                Content="Practice questions"
-                                ToolTip="Make practice questions from this class's notes, on Notes"
-                                Visibility="Collapsed"
-                                Click="OnPracticeClicked" />
-                        <Button x:Name="SuggestionSkip"
-                                Margin="12,0,6,0"
-                                VerticalAlignment="Center"
-                                Style="{StaticResource SmallButton}"
-                                FontSize="12"
-                                Content="{x:Static capture:CardLabels.NotNow}"
-                                ToolTip="Suggest something else for the rest of today"
-                                Click="OnSuggestionSkipClicked" />
-                        <Button x:Name="SuggestionStart"
-                                Margin="0"
-                                VerticalAlignment="Center"
-                                Style="{StaticResource PageAction}"
-                                Content="Start"
-                                ToolTip="Start on this, one tiny action at a time"
-                                Click="OnSuggestionStartClicked" />
-                    </StackPanel>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock x:Name="SuggestionTitle"
-                                   FontSize="14"
-                                   TextWrapping="Wrap"
-                                   Foreground="{DynamicResource PrimaryText}" />
-                        <TextBlock x:Name="SuggestionReason"
-                                   Margin="0,2,0,0"
-                                   FontSize="13"
-                                   TextWrapping="Wrap"
-                                   Foreground="{DynamicResource SecondaryText}" />
-                        <local:FeedbackPrompt x:Name="SuggestionFeedback" />
-                    </StackPanel>
-                </DockPanel>
-            </Border>
-            <Border x:Name="SetupCard"
-                    DockPanel.Dock="Top"
-                    Margin="28,0,24,12"
-                    Padding="14,10"
-                    Background="{DynamicResource Surface}"
-                    BorderBrush="{DynamicResource Accent}"
-                    BorderThickness="2,0,0,0"
-                    Visibility="Collapsed">
-                <DockPanel>
-                    <Button x:Name="SetupHide"
-                            DockPanel.Dock="Right"
-                            Margin="12,0,0,0"
-                            VerticalAlignment="Top"
-                            Style="{StaticResource SmallButton}"
-                            FontSize="12"
-                            Content="Hide this"
-                            ToolTip="Put this away for good. Everything here is also on its page."
-                            Click="OnSetupHideClicked" />
-                    <StackPanel>
-                        <TextBlock Margin="0,0,0,6"
-                                   FontSize="13"
-                                   Text="Getting set up, whenever you like"
-                                   Foreground="{DynamicResource SecondaryText}" />
-                        <ItemsControl x:Name="SetupSteps">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Button Margin="0,2,0,2"
-                                            Style="{StaticResource LinkButton}"
-                                            AutomationProperties.Name="{Binding Label}"
-                                            Click="OnSetupStepClicked">
-                                        <TextBlock FontSize="13" TextWrapping="Wrap" Text="{Binding Label}" />
-                                    </Button>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </DockPanel>
-            </Border>
-            <WrapPanel DockPanel.Dock="Top" Margin="28,0,24,8">
-                <Button x:Name="RowStart" Style="{StaticResource PageAction}" Content="Start" ToolTip="Start on the most pressing thing, one tiny action at a time" Click="OnStartClicked" />
-                <Button Style="{StaticResource PageAction}" Content="I have 15 minutes" ToolTip="Pick one small thing that fits" Click="OnFifteenClicked" />
-                <Button Style="{StaticResource PageAction}" Content="Low energy" ToolTip="Pick the lightest thing" Click="OnLowEnergyClicked" />
-                <Button x:Name="RowSaveSpot" Style="{StaticResource PageAction}" Content="Save my spot" Click="OnSaveSpotClicked" />
-            </WrapPanel>
             <local:UndoBar x:Name="Bar" DockPanel.Dock="Top" Margin="28,0,24,12" />
             <!-- The row menu's This didn't help opens its optional line here. -->
             <local:FeedbackPrompt x:Name="RowFeedback" DockPanel.Dock="Top" Margin="28,0,24,12" ShowLink="False" MaxWidth="480" HorizontalAlignment="Left" />
-            <StackPanel DockPanel.Dock="Top" Margin="28,0,24,14" MaxWidth="{x:Static local:TodayView.RowsMaxWidth}" HorizontalAlignment="Left">
-                <Button x:Name="SafeLine"
-                        Style="{StaticResource LinkButton}"
-                        FontSize="13"
-                        Visibility="Collapsed"
-                        Click="OnMoneyClicked" />
-
-            </StackPanel>
-            <Border x:Name="TonightCard"
-                    DockPanel.Dock="Top"
-                    Margin="28,0,24,14"
-                    Padding="14,11"
-                    Background="{StaticResource Surface}"
-                    BorderBrush="{DynamicResource Accent}"
-                    BorderThickness="2,0,0,0"
-                    Visibility="Collapsed">
-                <StackPanel>
-                    <TextBlock x:Name="TonightLabel"
-                               Margin="0,0,0,8"
-                               FontSize="13"
-                               Foreground="{DynamicResource SecondaryText}" />
-                    <ItemsControl x:Name="TonightSteps">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <CheckBox Margin="0,0,0,5" AutomationProperties.Name="{Binding Label}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnRoutineStepClicked" Unchecked="OnRoutineStepClicked">
-                                    <TextBlock Margin="10,0,0,0"
-                                               FontSize="13"
-                                               Text="{Binding Label}"
-                                               Foreground="{StaticResource PrimaryText}" />
-                                </CheckBox>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <WrapPanel>
-                        <Button Margin="0,4,6,0" Padding="10,5" Content="Save my spot" Click="OnSaveSpotClicked" />
-                        <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.NotNow}" ToolTip="Bring the bedtime reminder back in a little while" Click="OnBedtimeSnoozeClicked" />
-                        <Button Margin="0,4,6,0" Padding="10,5" Content="Skip tonight" ToolTip="No more bedtime reminders tonight" Click="OnBedtimeSkipClicked" />
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
+            <!-- Kept short in the week, which needs the height for its hours. In the list the cards are moved into its scroll area, above the rows. -->
+            <ScrollViewer x:Name="WeekCards" DockPanel.Dock="Top" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed" />
             <Grid>
-                <TextBlock x:Name="Empty"
-                           Margin="28,0"
-                           VerticalAlignment="Top"
-                           FontSize="14"
-                           Text="Nothing on To do yet. Type anything in Ask on the right, or press +."
-                           TextWrapping="Wrap"
-                           Foreground="{DynamicResource SecondaryText}"
-                           Visibility="Collapsed" />
                 <local:WeekView x:Name="WeekPage" Visibility="Collapsed" />
-                <ScrollViewer x:Name="ItemsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" LostKeyboardFocus="OnRowsLeft" PreviewKeyDown="OnRowsKeyDown">
+                <ScrollViewer x:Name="ItemsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <!-- Held to a readable width in a big window, so the eye doesn't travel far from a title to its row's end. -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition x:Name="RowsColumn" Width="*" MaxWidth="{x:Static local:TodayView.RowsMaxWidth}" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel x:Name="RowsPanel" Margin="28,0,24,24">
-                            <ItemsControl x:Name="Groups" ItemTemplate="{StaticResource GroupTemplate}" />
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <!-- The cards scroll away with the list, so a short window still shows the rows. -->
+                        <Border x:Name="ListCards" Grid.ColumnSpan="2">
+                            <StackPanel x:Name="Cards">
+                        <Border x:Name="SuggestionCard"
+                   
+                                Margin="28,0,24,12"
+                                Padding="14,10"
+                                Background="{DynamicResource Surface}"
+                                BorderBrush="{DynamicResource Accent}"
+                                BorderThickness="2,0,0,0"
+                                Visibility="Collapsed">
+                            <DockPanel>
+                                <StackPanel x:Name="SuggestionButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <!-- For an exam's study window, practice questions from its notes are one click away too. -->
+                                    <Button x:Name="PracticeButton"
+                                            Margin="12,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource SmallButton}"
+                                            FontSize="12"
+                                            Content="Practice questions"
+                                            ToolTip="Make practice questions from this class's notes, on Notes"
+                                            Visibility="Collapsed"
+                                            Click="OnPracticeClicked" />
+                                    <Button x:Name="SuggestionSkip"
+                                            Margin="12,0,6,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource SmallButton}"
+                                            FontSize="12"
+                                            Content="{x:Static capture:CardLabels.NotNow}"
+                                            ToolTip="Suggest something else for the rest of today"
+                                            Click="OnSuggestionSkipClicked" />
+                                    <Button x:Name="SuggestionStart"
+                                            Margin="0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource PageAction}"
+                                            Content="Start"
+                                            ToolTip="Start on this, one tiny action at a time"
+                                            Click="OnSuggestionStartClicked" />
+                                </StackPanel>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="SuggestionTitle"
+                                               FontSize="14"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource PrimaryText}" />
+                                    <TextBlock x:Name="SuggestionReason"
+                                               Margin="0,2,0,0"
+                                               FontSize="13"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource SecondaryText}" />
+                                    <local:FeedbackPrompt x:Name="SuggestionFeedback" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <Border x:Name="SetupCard"
+                   
+                                Margin="28,0,24,12"
+                                Padding="14,10"
+                                Background="{DynamicResource Surface}"
+                                BorderBrush="{DynamicResource Accent}"
+                                BorderThickness="2,0,0,0"
+                                Visibility="Collapsed">
+                            <DockPanel>
+                                <Button x:Name="SetupHide"
+                                        DockPanel.Dock="Right"
+                                        Margin="12,0,0,0"
+                                        VerticalAlignment="Top"
+                                        Style="{StaticResource SmallButton}"
+                                        FontSize="12"
+                                        Content="Hide this"
+                                        ToolTip="Put this away for good. Everything here is also on its page."
+                                        Click="OnSetupHideClicked" />
+                                <StackPanel>
+                                    <TextBlock Margin="0,0,0,6"
+                                               FontSize="13"
+                                               Text="Getting set up, whenever you like"
+                                               Foreground="{DynamicResource SecondaryText}" />
+                                    <ItemsControl x:Name="SetupSteps" Focusable="False">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Margin="0,2,0,2"
+                                                        Style="{StaticResource LinkButton}"
+                                                        AutomationProperties.Name="{Binding Label}"
+                                                        Click="OnSetupStepClicked">
+                                                    <TextBlock FontSize="13" TextWrapping="Wrap" Text="{Binding Label}" />
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <WrapPanel Margin="28,0,24,8">
+                            <Button x:Name="RowStart" Style="{StaticResource PageAction}" Content="Start" ToolTip="Start on the most pressing thing, one tiny action at a time" Click="OnStartClicked" />
+                            <Button Style="{StaticResource PageAction}" Content="I have 15 minutes" ToolTip="Pick one small thing that fits" Click="OnFifteenClicked" />
+                            <Button Style="{StaticResource PageAction}" Content="Low energy" ToolTip="Pick the lightest thing" Click="OnLowEnergyClicked" />
+                            <Button x:Name="RowSaveSpot" Style="{StaticResource PageAction}" Content="Save my spot" Click="OnSaveSpotClicked" />
+                        </WrapPanel>
+                        <StackPanel Margin="28,0,24,14" MaxWidth="{x:Static local:TodayView.RowsMaxWidth}" HorizontalAlignment="Left">
+                            <Button x:Name="SafeLine"
+                                    Style="{StaticResource LinkButton}"
+                                    FontSize="13"
+                                    Visibility="Collapsed"
+                                    Click="OnMoneyClicked" />
+
+                        </StackPanel>
+                        <Border x:Name="TonightCard"
+                   
+                                Margin="28,0,24,14"
+                                Padding="14,11"
+                                Background="{StaticResource Surface}"
+                                BorderBrush="{DynamicResource Accent}"
+                                BorderThickness="2,0,0,0"
+                                Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock x:Name="TonightLabel"
+                                           Margin="0,0,0,8"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource SecondaryText}" />
+                                <ItemsControl x:Name="TonightSteps" Focusable="False">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Margin="0,0,0,5" AutomationProperties.Name="{Binding Label}" IsChecked="{Binding Done, Mode=OneWay}" Checked="OnRoutineStepClicked" Unchecked="OnRoutineStepClicked">
+                                                <TextBlock Margin="10,0,0,0"
+                                                           FontSize="13"
+                                                           Text="{Binding Label}"
+                                                           Foreground="{StaticResource PrimaryText}" />
+                                            </CheckBox>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <WrapPanel>
+                                    <Button Margin="0,4,6,0" Padding="10,5" Content="Save my spot" Click="OnSaveSpotClicked" />
+                                    <Button Margin="0,4,6,0" Padding="10,5" Content="{x:Static capture:CardLabels.NotNow}" ToolTip="Bring the bedtime reminder back in a little while" Click="OnBedtimeSnoozeClicked" />
+                                    <Button Margin="0,4,6,0" Padding="10,5" Content="Skip tonight" ToolTip="No more bedtime reminders tonight" Click="OnBedtimeSkipClicked" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                            </StackPanel>
+                        </Border>
+                        <StackPanel x:Name="RowsPanel" Grid.Row="1" Margin="28,0,24,24" LostKeyboardFocus="OnRowsLeft" PreviewKeyDown="OnRowsKeyDown">
+                            <TextBlock x:Name="Empty"
+                                       FontSize="14"
+                                       Text="Nothing on To do yet. Type anything in Ask on the right, or press +."
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SecondaryText}"
+                                       Visibility="Collapsed" />
+                            <ItemsControl x:Name="Groups" Focusable="False" ItemTemplate="{StaticResource GroupTemplate}" />
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>

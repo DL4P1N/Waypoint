@@ -334,11 +334,51 @@ public partial class TodayView : UserControl
         ViewToggle.Content = _weekShown ? "List view" : "Week view";
         WeekPage.Visibility = _weekShown ? Visibility.Visible : Visibility.Collapsed;
         ItemsScroll.Visibility = _weekShown ? Visibility.Collapsed : Visibility.Visible;
+        PlaceCards();
         if (_weekShown)
         {
             Empty.Visibility = Visibility.Collapsed;
             ClearSelection();
         }
+    }
+
+    /// <summary>The most of the page's height the cards take above the week, which needs the rest for its hours.</summary>
+    internal const double WeekCardsShare = 0.3;
+
+    /// <summary>
+    /// The cards scroll with the list, so in a short window they move out of the way of the rows. The week scrolls
+    /// only its hours, so there they sit above it in a strip of their own, kept to a share of the height.
+    /// </summary>
+    private void PlaceCards()
+    {
+        if (Cards.Parent is Border list)
+        {
+            list.Child = null;
+        }
+        else if (Cards.Parent is ScrollViewer week)
+        {
+            week.Content = null;
+        }
+
+        if (_weekShown)
+        {
+            WeekCards.Content = Cards;
+        }
+        else
+        {
+            ListCards.Child = Cards;
+        }
+
+        WeekCards.Visibility = _weekShown ? Visibility.Visible : Visibility.Collapsed;
+        FitWeekCards();
+    }
+
+    private void FitWeekCards() => WeekCards.MaxHeight = Math.Max(96, ActualHeight * WeekCardsShare);
+
+    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+    {
+        base.OnRenderSizeChanged(sizeInfo);
+        FitWeekCards();
     }
 
     public void Refresh(BedtimeStatus? tonight)
@@ -422,7 +462,7 @@ public partial class TodayView : UserControl
             return;
         }
 
-        if (!_rowsGate.ShouldRebuild(signature, !force && ItemsScroll.IsKeyboardFocusWithin))
+        if (!_rowsGate.ShouldRebuild(signature, !force && RowsPanel.IsKeyboardFocusWithin))
         {
             return;
         }
