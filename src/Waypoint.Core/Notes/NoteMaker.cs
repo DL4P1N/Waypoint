@@ -74,10 +74,26 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
 
         var (folder, course) = Place(file.Name, file.Text, pickedFolderId, folderPicked, now);
         var title = TitleFor(file.Name);
-        var id = onceKey is null ? database.CreateNote(title, "", now, folder) : database.CreateNoteOnce(onceKey, title, "", now, folder);
-        if (onceKey is null || database.GetNoteSources(id).Count == 0)
+        long id;
+        if (onceKey is null)
         {
-            database.AddNoteSource(id, NoteSourceKind.ForFile(file.Name), file.Name, file.Text!, now, keptPath);
+            // The note and its file's text are one write, so a failure between can't leave a note with nothing to
+            // write from.
+            id = database.InOneWrite(write =>
+            {
+                var made = write.CreateNote(title, "", now, folder);
+                write.AddNoteSource(made, NoteSourceKind.ForFile(file.Name), file.Name, file.Text!, now, keptPath);
+                return made;
+            });
+        }
+        else
+        {
+            // Sent again under the same key, the note already made gets its text then, if it didn't the first time.
+            id = database.CreateNoteOnce(onceKey, title, "", now, folder);
+            if (database.GetNoteSources(id).Count == 0)
+            {
+                database.AddNoteSource(id, NoteSourceKind.ForFile(file.Name), file.Name, file.Text!, now, keptPath);
+            }
         }
 
         return new StartedNote(id, title, folder, course);
@@ -212,7 +228,17 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
 
     private NoteWriteOutcome Save(long noteId, WrittenNotes written, string expectedBody, DateTime now)
     {
-        var saved = database.SaveGeneratedNotes(noteId, written.Markdown, expectedBody, now);
+        // The notes and the dates and tasks found in them are one write, so the suggestions always match the notes.
+        var saved = database.InOneWrite(write =>
+        {
+            var result = write.SaveGeneratedNotes(noteId, written.Markdown, expectedBody, now);
+            if (result.Result == GeneratedSaveResult.Saved)
+            {
+                write.ReplaceNoteSuggestions(noteId, written.Suggestions, now);
+            }
+
+            return result;
+        });
         switch (saved.Result)
         {
             case GeneratedSaveResult.Gone:
@@ -221,7 +247,6 @@ public sealed class NoteMaker(WaypointDatabase database, INoteWriter writer, Cla
                 return new NoteWriteOutcome(NoteWriteStatus.ChangedWhileWriting, "The note changed while the notes were being written, so nothing was replaced yet.", written);
         }
 
-        database.ReplaceNoteSuggestions(noteId, written.Suggestions, now);
         var found = database.GetNoteSuggestions(noteId).Count;
         var message = "Wrote the notes.";
         if (found > 0)

@@ -73,6 +73,32 @@ public sealed class KilledMidSaveTests : IDisposable
             Task.FromResult<CaptureResult?>(result);
     }
 
+    /// <summary>Notes written at once, for the note steps that save them.</summary>
+    private sealed class MadeUpWriter : Notes.INoteWriter
+    {
+        public Task<Notes.WrittenNotes> WriteAsync(IReadOnlyList<Notes.NoteSource> sources, Notes.NoteWriteContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new Notes.WrittenNotes("Made up notes", []));
+    }
+
+    [Fact]
+    public void A_note_started_from_a_file_killed_partway_is_found_whole_or_not_at_all()
+    {
+        AtEveryPoint(
+            () => new Notes.NoteMaker(_database, new MadeUpWriter(), null).StartFromFile(new Files.FileText("Made up lecture.txt", "Made up cells divide."), null, true, DateTime.Now),
+            "items", "note_sources");
+    }
+
+    [Fact]
+    public void Written_notes_and_their_suggestions_killed_partway_are_found_whole_or_not_at_all()
+    {
+        var id = _database.CreateNote("Made up lecture", "", DateTime.Now);
+        var written = new Notes.WrittenNotes("Made up notes", [new Notes.SuggestedItem(ItemKind.Exam, "Made up quiz", Day)]);
+
+        AtEveryPoint(
+            () => Assert.Equal(Notes.NoteWriteStatus.Written, new Notes.NoteMaker(_database, new MadeUpWriter(), null).SaveAnyway(id, written, DateTime.Now).Status),
+            "items", "note_suggestions");
+    }
+
     [Fact]
     public void A_card_export_killed_partway_is_found_whole_or_not_at_all()
     {
