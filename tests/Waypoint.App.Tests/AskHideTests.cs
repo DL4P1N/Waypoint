@@ -78,4 +78,30 @@ public sealed class AskHideTests
         Assert.Equal("Show Ask", System.Windows.Automation.AutomationProperties.GetName(strip));
         window.Close();
     });
+
+    [Fact]
+    public void Opening_Ask_in_a_window_at_the_right_edge_moves_it_left_to_stay_on_screen()
+    {
+        // 800 wide at the right edge of a 1920 screen grows to 1040, so it moves left by 240.
+        Assert.Equal(880, ItemsWindow.LeftOnScreen(1120, 1040, 0, 1920));
+
+        // Room already: it stays put. Wider than the screen: it keeps to the screen's left edge.
+        Assert.Equal(100, ItemsWindow.LeftOnScreen(100, 1040, 0, 1920));
+        Assert.Equal(1920, ItemsWindow.LeftOnScreen(2400, 1040, 1920, 2880));
+    }
+
+    [Fact]
+    public void The_new_reply_dot_takes_the_strip_buttons_text_color_so_it_shows_over_the_hover_fill() => Ui.Run(ui =>
+    {
+        var window = Shown(ui);
+        window.ShowAsk(false);
+        window.ShowReply("Added Call the bank for Friday.");
+        ui.Pump();
+
+        var news = UiTest.Named<Ellipse>(window, "AskNews");
+        var strip = UiTest.Named<Button>(window, "AskShow");
+        Assert.Equal(((System.Windows.Media.SolidColorBrush)strip.Foreground).Color, ((System.Windows.Media.SolidColorBrush)news.Fill).Color);
+        window.ShowAsk(true);
+        window.Close();
+    });
 }

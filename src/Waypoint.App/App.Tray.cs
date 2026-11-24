@@ -92,7 +92,7 @@ public partial class App
 
         _askKey?.Dispose();
         _askKey = null;
-        _itemsWindow.ShowReply(AskKeysTaken);
+        _itemsWindow.ShowNotice(AskKeysTaken);
     }
 
     /// <summary>Said once when Ctrl+Alt+Space can't be had.</summary>

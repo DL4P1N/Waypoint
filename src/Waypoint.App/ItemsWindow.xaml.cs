@@ -446,6 +446,13 @@ public partial class ItemsWindow : Window
         }
 
         FitAsk();
+        if (shown)
+        {
+            KeepOnScreen();
+            ChatScroll.UpdateLayout();
+            ChatScroll.ScrollToEnd();
+        }
+
         if (remember)
         {
             _database.SetPreference(AskHiddenKey, shown ? "0" : "1");
@@ -460,6 +467,37 @@ public partial class ItemsWindow : Window
             Dispatcher.BeginInvoke(() => AskShow.Focus(), System.Windows.Threading.DispatcherPriority.Input);
         }
     }
+
+    /// <summary>
+    /// Opening Ask in a window narrowed while it was to the side makes the window wider, so it's moved left as far as
+    /// needed to stay on its screen.
+    /// </summary>
+    private void KeepOnScreen()
+    {
+        if (WindowState != WindowState.Normal || !IsLoaded)
+        {
+            return;
+        }
+
+        if (Width < MinWidth || double.IsNaN(Width))
+        {
+            Width = MinWidth;
+        }
+
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var area = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
+        var scale = VisualTreeHelper.GetDpi(this);
+        Left = LeftOnScreen(Left, Math.Max(Width, MinWidth), area.Left / scale.DpiScaleX, area.Right / scale.DpiScaleX);
+    }
+
+    /// <summary>The window's left edge moved just far enough that its right edge is on the screen, never past its left.</summary>
+    public static double LeftOnScreen(double left, double width, double screenLeft, double screenRight) =>
+        left + width <= screenRight ? left : Math.Max(screenLeft, screenRight - width);
 
     /// <summary>A reply that came while Ask was to the side marks its strip, and a screen reader hears that one came.</summary>
     private void MarkAskNews()
@@ -816,6 +854,12 @@ public partial class ItemsWindow : Window
     public void ShowReply(string text) => AddToChat(new ChatRow(text, ChatKind.Reply));
 
     /// <summary>
+    /// A line from Waypoint itself, such as a problem it kept going after. It reads like a reply but answers nothing
+    /// typed, so a "Sorting..." still waiting stays for its own reply.
+    /// </summary>
+    public void ShowNotice(string text) => AddToChat(new ChatRow(text, ChatKind.Reply), answers: false);
+
+    /// <summary>
     /// A reply with a link under it for each thing it made, which opens that thing where it went: To do, the Shopping
     /// list, Budget's purchases, or the note. Several things on Shopping or in Budget share one link.
     /// </summary>
@@ -885,10 +929,11 @@ public partial class ItemsWindow : Window
         }
     }
 
-    private void AddToChat(ChatRow row)
+    /// <param name="answers">False for a notice, which leaves every "Sorting..." in place.</param>
+    private void AddToChat(ChatRow row, bool answers = true)
     {
         // A reply takes the place of the oldest "Sorting...", since replies come in the order messages were sent.
-        if (row.Kind == ChatKind.Reply && _chat.FirstOrDefault(shown => shown.Kind == ChatKind.Working) is { } working)
+        if (answers && row.Kind == ChatKind.Reply && _chat.FirstOrDefault(shown => shown.Kind == ChatKind.Working) is { } working)
         {
             _chat.Remove(working);
         }

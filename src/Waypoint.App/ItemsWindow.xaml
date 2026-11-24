@@ -457,7 +457,8 @@
                 </DockPanel>
             </Border>
 
-            <!-- Ask put to the side: one narrow strip to bring it back, marked when a reply came meanwhile. -->
+            <!-- Ask put to the side: one narrow strip to bring it back, marked when a reply came meanwhile. The dot
+                 takes the button's text color, so it still shows over the hover fill. -->
             <Border x:Name="AskStrip"
                     Grid.Column="2"
                     BorderBrush="{StaticResource Rule}"
@@ -481,7 +482,7 @@
                                  Width="8"
                                  Height="8"
                                  Margin="0,10,0,0"
-                                 Fill="{DynamicResource Accent}"
+                                 Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                  Visibility="Collapsed" />
                     </StackPanel>
                 </Button>

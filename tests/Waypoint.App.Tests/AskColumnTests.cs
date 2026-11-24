@@ -85,6 +85,30 @@ public sealed class AskColumnTests
         Assert.Empty(UiTest.Descendants<ScrollViewer>(words));
         window.Hide();
     });
+
+    [Fact]
+    public void A_notice_from_Waypoint_leaves_the_sorting_line_for_its_own_reply() => Ui.Run(ui =>
+    {
+        var window = new ItemsWindow(ui.Database, _ => { }, () => { }, _ => { })
+        {
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -20000,
+        };
+        window.Show();
+        ui.Pump();
+        var chat = UiTest.Named<ItemsControl>(window, "Chat");
+
+        window.ShowPrompt("add milk");
+        window.ShowNotice("Something unexpected went wrong. Waypoint kept going, and the detail is in errors.log.");
+        ui.Pump();
+        Assert.Contains(ItemsWindow.WorkingText, chat.Items.Cast<object>().Select(row => row.ToString()));
+
+        window.ShowReply("Added milk to Shopping.");
+        ui.Pump();
+        Assert.DoesNotContain(ItemsWindow.WorkingText, chat.Items.Cast<object>().Select(row => row.ToString()));
+        window.Hide();
+    });
 }
 
 public sealed class AskWorkingTests

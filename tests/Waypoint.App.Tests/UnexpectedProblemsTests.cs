@@ -38,4 +38,13 @@ public sealed class UnexpectedProblemsTests
         Assert.DoesNotContain("Exception", line);
         Assert.DoesNotContain("—", line);
     }
+
+    [Fact]
+    public void The_same_problem_with_different_words_each_time_is_still_said_once()
+    {
+        var problems = new UnexpectedProblems();
+
+        Assert.NotNull(problems.FirstTime(Thrown(() => new InvalidOperationException("Row 12 moved"))));
+        Assert.Null(problems.FirstTime(Thrown(() => new InvalidOperationException("Row 40 moved"))));
+    }
 }
