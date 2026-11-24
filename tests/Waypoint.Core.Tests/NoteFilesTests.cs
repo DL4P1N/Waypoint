@@ -271,6 +271,109 @@ public sealed class NoteFilesTests : IDisposable
         Assert.Contains(_database.GetNotes(), note => note.Title == "Groceries (edited elsewhere)" && note.Body == "milk from obsidian");
     }
 
+    /// <summary>The database as the sync sees it, failing to remember a written file once, as a dropped server would.</summary>
+    public class FailsToRemember : DispatchProxy
+    {
+        public WaypointDatabase Inner { get; set; } = null!;
+
+        public bool Failed { get; private set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name == nameof(INoteFileStore.SetNoteFileRecord) && !Failed)
+            {
+                Failed = true;
+                throw new InvalidOperationException("Made-up failure to remember the file.");
+            }
+
+            try
+            {
+                return targetMethod.Invoke(Inner, args);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is { } inner)
+            {
+                throw inner;
+            }
+        }
+    }
+
+    [Fact]
+    public void A_file_written_whose_record_was_not_saved_is_remembered_not_kept_as_a_copy()
+    {
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        _files.Sync(Now);
+        _database.SaveNote(id, "Groceries", "milk and bread", Now);
+
+        var store = DispatchProxy.Create<INoteFileStore, FailsToRemember>();
+        ((FailsToRemember)(object)store).Inner = _database;
+        Assert.Throws<InvalidOperationException>(() => new NoteFiles(store, _root).Sync(Now));
+        Assert.Equal("milk and bread", Text("Groceries.md"));
+
+        var result = _files.Sync(Now);
+
+        Assert.False(result.NotesChanged);
+        Assert.Single(_database.GetNotes());
+        Assert.Equal("milk and bread", _database.GetNote(id)!.Body);
+        Assert.Equal(["Groceries.md"], Directory.GetFiles(_root, "*", SearchOption.AllDirectories).Select(Path.GetFileName));
+        Assert.Equal(NoteFiles.Hash("milk and bread"), _database.GetNoteFileRecords().Single().FileHash);
+    }
+
+    [Fact]
+    public void Writes_a_crash_left_unfinished_are_swept_on_the_first_sync_but_other_apps_files_stay()
+    {
+        string Made(string relative, DateTime writtenUtc)
+        {
+            var full = File_(relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "half a note");
+            File.SetLastWriteTimeUtc(full, writtenUtc);
+            return full;
+        }
+
+        var old = DateTime.UtcNow.AddHours(-2);
+        var stale = Made(".Groceries.md.tmp", old);
+        var staleInFolder = Made(@"CS 220\.Lecture 1.md.tmp", old);
+        var writing = Made(".Packing.md.tmp", DateTime.UtcNow);
+        var otherApp = Made(@".obsidian\.workspace.md.tmp", old);
+        var notOurs = Made("Draft.tmp", old);
+
+        _files.Sync(Now);
+
+        Assert.False(File.Exists(stale));
+        Assert.False(File.Exists(staleInFolder));
+        Assert.True(File.Exists(writing));
+        Assert.True(File.Exists(otherApp));
+        Assert.True(File.Exists(notOurs));
+        Assert.Empty(_database.GetNotes());
+    }
+
+    [Fact]
+    public void Writing_a_note_file_keeps_when_it_was_first_made()
+    {
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        _files.Sync(Now);
+        var made = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetCreationTimeUtc(File_("Groceries.md"), made);
+
+        _database.SaveNote(id, "Groceries", "milk and eggs", Now);
+        _files.Sync(Now);
+
+        Assert.Equal("milk and eggs", Text("Groceries.md"));
+        Assert.Equal(made, File.GetCreationTimeUtc(File_("Groceries.md")));
+    }
+
+    [Fact]
+    public void Writing_a_note_file_leaves_no_file_beside_it()
+    {
+        var id = _database.CreateNote("Groceries", "milk", Now);
+        _files.Sync(Now);
+        _database.SaveNote(id, "Groceries", "milk and eggs", Now);
+        _files.Sync(Now);
+
+        Assert.Equal("milk and eggs", Text("Groceries.md"));
+        Assert.Equal(["Groceries.md"], Directory.GetFiles(_root, "*", SearchOption.AllDirectories).Select(Path.GetFileName));
+    }
+
     /// <summary>
     /// The database as the sync sees it, with the editor saving a note right after the pass has read the notes, so
     /// the pass holds the text from before that save.

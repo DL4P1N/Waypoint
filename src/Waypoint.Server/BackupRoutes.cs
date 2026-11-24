@@ -93,7 +93,7 @@ public static class BackupRoutes
                     }
                 }
 
-                return Results.Ok(new BackupRestored(result.Restored, result.SafetyCopy is { } copy ? Path.GetFileName(copy) : null, result.Problem, restarting));
+                return Results.Ok(new BackupRestored(result.Restored, result.SafetyCopy is { } copy ? Path.GetFileName(copy) : null, result.Problem, restarting, result.Warning));
             }
             finally
             {

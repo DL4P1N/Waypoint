@@ -104,7 +104,7 @@ public partial class App
                     // Drafts were saved above, into the copy taken before the restore. What the pages still hold is
                     // from before it, so it must not be written into the restored data on the way out.
                     _itemsWindow.DiscardDrafts();
-                    said = $"Restored. How things were before is saved as {Path.GetFileName(result.SafetyCopy)} in the backups folder.";
+                    said = $"Restored. How things were before is saved as {Path.GetFileName(result.SafetyCopy)} in the backups folder.{(result.Warning is { } warning ? $" {warning}" : "")}";
                 }
                 else
                 {

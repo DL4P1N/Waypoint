@@ -89,14 +89,63 @@ public sealed class RecordingWriter : IDisposable
         }
     }
 
-    /// <summary>Silence, for time when the computer played nothing and Windows sent no audio.</summary>
-    public void WriteSilence(int samples)
+    /// <summary>
+    /// Silence, for time when the computer played nothing and Windows sent no audio. It's written a second at a time
+    /// from one buffer of zeros kept for it, so a long gap never needs memory for all of it at once.
+    /// </summary>
+    public void WriteSilence(long samples)
     {
-        if (samples > 0)
+        lock (_lock)
         {
-            Write(new float[samples]);
+            SilenceLocked(samples);
         }
     }
+
+    /// <summary>
+    /// Silence up to <paramref name="expectedSamples"/> in all, when what's written is more than
+    /// <paramref name="minimumGap"/> samples short of it. The gap is worked out while holding the file, so sound that
+    /// came in meanwhile counts and silence never lands after newer sound. Returns how many samples were written.
+    /// </summary>
+    public long FillSilenceTo(long expectedSamples, long minimumGap)
+    {
+        lock (_lock)
+        {
+            var behind = expectedSamples - _dataBytes / 2;
+            if (behind <= minimumGap)
+            {
+                return 0;
+            }
+
+            SilenceLocked(behind);
+            return behind;
+        }
+    }
+
+    private void SilenceLocked(long samples)
+    {
+        if (samples <= 0 || _closed)
+        {
+            return;
+        }
+
+        _stream.Position = WavFile.HeaderBytes + _dataBytes;
+        for (var left = samples * 2; left > 0;)
+        {
+            var bytes = (int)Math.Min(left, Zeros.Length);
+            _stream.Write(Zeros, 0, bytes);
+            _dataBytes += bytes;
+            _sinceFlush += bytes;
+            left -= bytes;
+        }
+
+        if (_sinceFlush >= _flushBytes)
+        {
+            FlushLocked();
+        }
+    }
+
+    /// <summary>A second of silence, written as many times as a gap needs.</summary>
+    private static readonly byte[] Zeros = new byte[BytesPerSecond];
 
     public void Flush()
     {
@@ -118,9 +167,17 @@ public sealed class RecordingWriter : IDisposable
                 return;
             }
 
-            FlushLocked();
+            // The file is let go even when the last flush fails, such as with the disk full, so it isn't held open
+            // and what reached the disk can still be fixed and kept. The failure still goes to the caller.
             _closed = true;
-            _stream.Dispose();
+            try
+            {
+                FlushLocked();
+            }
+            finally
+            {
+                _stream.Dispose();
+            }
         }
     }
 

@@ -226,8 +226,7 @@ public sealed class CaptureQueue(string path)
 
     private static void Write(string file, List<CaptureRequest> waiting)
     {
-        var temporary = $"{file}.tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(waiting, RemoteJson.Options));
-        File.Move(temporary, file, overwrite: true);
+        // Flushed to the disk before it's moved over the old one, so a power cut can't leave the kept captures empty.
+        Platform.DurableFile.WriteAllText(file, JsonSerializer.Serialize(waiting, RemoteJson.Options));
     }
 }

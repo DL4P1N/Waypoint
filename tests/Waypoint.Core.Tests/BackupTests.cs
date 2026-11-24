@@ -33,6 +33,24 @@ public sealed class BackupTests : IDisposable
     }
 
     [Fact]
+    public void ACopyCutOffBeforeIsSweptByTheNextBackup()
+    {
+        Directory.CreateDirectory(_database.BackupFolder);
+        var stale = Path.Combine(_database.BackupFolder, "waypoint-2026-11-01-100000.db.partial");
+        File.WriteAllText(stale, "half a copy");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-2));
+        var journal = stale + "-journal";
+        File.WriteAllText(journal, "its journal");
+        File.SetLastWriteTimeUtc(journal, DateTime.UtcNow.AddDays(-2));
+
+        _database.BackUpNow(Now);
+
+        Assert.False(File.Exists(stale));
+        Assert.False(File.Exists(journal));
+        Assert.Single(_database.GetBackups());
+    }
+
+    [Fact]
     public void ABackupHoldsTheNotesAtThatTime()
     {
         _database.CreateNote("Lecture 1", "Recursion basics", Now);
@@ -99,6 +117,31 @@ public sealed class BackupTests : IDisposable
         Assert.Contains("before-restore", Path.GetFileName(result.SafetyCopy));
         Assert.Equal(2, new WaypointDatabase(result.SafetyCopy).GetNotes().Count);
         Assert.Contains(_database.GetBackups(), file => file.BeforeRestore && file.Path == result.SafetyCopy);
+    }
+
+    [Fact]
+    public void ARestoreThatFailsAfterTheCopyIsInIsToldAsRestoredWithAWarning()
+    {
+        _database.CreateNote("Kept", "from before", Now);
+
+        // The backup carries a trigger that turns down marking the notes as restored, so the step after the copy fails.
+        using (var connection = _database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "CREATE TRIGGER no_restore_mark BEFORE INSERT ON preferences WHEN NEW.key = 'notes_restored' BEGIN SELECT RAISE(ABORT, 'made to fail'); END";
+            command.ExecuteNonQuery();
+        }
+
+        var backup = _database.BackUpNow(Now);
+        _database.CreateNote("Added later", "after the backup", Now.AddHours(1));
+
+        var result = _database.RestoreBackup(backup, Now.AddHours(2));
+
+        Assert.True(result.Restored);
+        Assert.Null(result.Problem);
+        Assert.Contains("notes folder", result.Warning);
+        Assert.Equal("Kept", Assert.Single(_database.GetNotes()).Title);
+        Assert.DoesNotContain("—", result.Warning);
     }
 
     [Fact]

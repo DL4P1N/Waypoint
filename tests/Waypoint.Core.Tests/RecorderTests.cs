@@ -360,7 +360,7 @@ public sealed class RecorderTests : IDisposable
     }
 
     [Fact]
-    public void With_computer_audio_only_a_gap_with_no_sound_sent_is_filled_so_times_stay_true()
+    public async Task With_computer_audio_only_a_gap_with_no_sound_sent_is_filled_so_times_stay_true()
     {
         var recorder = NewRecorder();
         recorder.Start(AudioInput.ComputerAudio, false);
@@ -368,9 +368,302 @@ public sealed class RecorderTests : IDisposable
 
         _now = _now.AddSeconds(10);
         recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
 
         Assert.Equal(TimeSpan.FromSeconds(10), recorder.Elapsed);
         recorder.Stop();
+    }
+
+    [Fact]
+    public async Task Time_the_PC_spent_asleep_is_left_out_instead_of_filled_with_silence()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.ComputerAudio, false);
+        recorder.WriteComputerAudio(Seconds(1));
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+        Assert.Equal(TimeSpan.FromSeconds(5), recorder.Elapsed);
+
+        // The lid was shut for the night, so no check came, and none of that time is written.
+        _now = _now.AddHours(8);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+        Assert.Equal(TimeSpan.FromSeconds(5), recorder.Elapsed);
+
+        // Once it's awake again, gaps are filled as before.
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        var stopped = recorder.Stop()!;
+
+        Assert.Equal(10, stopped.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task Only_the_time_windows_says_it_slept_is_left_out()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.ComputerAudio, false);
+        recorder.WriteComputerAudio(Seconds(1));
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        // Asleep for two hours, three seconds after that check, and awake again for four before the next one.
+        recorder.Suspending(_now.AddSeconds(3));
+        recorder.Resumed(_now.AddSeconds(3).AddHours(2));
+        _now = _now.AddSeconds(7).AddHours(2);
+        recorder.Check(PowerReading.PluggedIn, null);
+        var stopped = recorder.Stop()!;
+
+        Assert.Equal(12, stopped.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task A_long_wait_between_checks_keeps_the_time_that_sound_came_in()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.ComputerAudio, false);
+        recorder.WriteComputerAudio(Seconds(1));
+        _now = _now.AddSeconds(5);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        // The window was busy for 75 seconds, with 70 of them playing sound, so only 5 can have been asleep.
+        recorder.WriteComputerAudio(Seconds(70));
+        _now = _now.AddSeconds(75);
+        recorder.Check(PowerReading.PluggedIn, null);
+        await recorder.SilenceFilled;
+
+        Assert.Equal(TimeSpan.FromSeconds(75), recorder.Elapsed);
+        recorder.Stop();
+    }
+
+    [Fact]
+    public void Waking_up_doesnt_say_the_microphone_heard_nothing()
+    {
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, false);
+        recorder.WriteMicrophone(Seconds(1));
+        _now = _now.AddSeconds(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        recorder.Suspending(_now.AddSeconds(1));
+        recorder.Resumed(_now.AddHours(3));
+        _now = _now.AddHours(3).AddSeconds(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        // Asleep with no word from Windows, found from the long wait with no sound coming in.
+        _now = _now.AddHours(5);
+        Assert.Empty(recorder.Check(PowerReading.PluggedIn, null));
+
+        // Still said when it's really quiet while awake, with the microphone sending sound too faint to count.
+        recorder.WriteMicrophone(Seconds(70, 0.0001f));
+        _now = _now.AddSeconds(70);
+        Assert.Equal([RecordingWarning.SilentMicrophone], recorder.Check(PowerReading.PluggedIn, null));
+        recorder.Stop();
+    }
+
+    [Fact]
+    public void Silence_is_only_written_for_what_sound_since_hasnt_already_covered()
+    {
+        using var stream = new MemoryStream();
+        var writer = new RecordingWriter(stream, TimeSpan.FromSeconds(1));
+        writer.Write(Seconds(1));
+        var gap = RecordingWriter.SampleRate / 2;
+
+        // Sound came in after the check worked out the gap and before the silence went in.
+        writer.Write(Seconds(2.8));
+        Assert.Equal(0, writer.FillSilenceTo(4L * RecordingWriter.SampleRate, gap));
+        Assert.Equal(TimeSpan.FromSeconds(3.8), writer.Length);
+
+        Assert.Equal(2L * RecordingWriter.SampleRate + 3200, writer.FillSilenceTo(6L * RecordingWriter.SampleRate, gap));
+        Assert.Equal(TimeSpan.FromSeconds(6), writer.Length);
+    }
+
+    [Fact]
+    public void A_long_stretch_of_silence_is_written_a_second_at_a_time()
+    {
+        using var stream = new LargestWrite();
+        var writer = new RecordingWriter(stream, TimeSpan.FromSeconds(1));
+
+        writer.WriteSilence(90L * RecordingWriter.SampleRate + 3);
+        writer.Write([0.5f]);
+        writer.Flush();
+
+        Assert.Equal(90L * RecordingWriter.SampleRate + 4, writer.SamplesWritten);
+        Assert.Equal((90L * RecordingWriter.SampleRate + 4) * 2, DataLength(stream));
+        Assert.InRange(stream.Largest, 1, RecordingWriter.BytesPerSecond);
+        var bytes = stream.ToArray();
+        Assert.All(bytes.AsSpan(WavFile.HeaderBytes, bytes.Length - WavFile.HeaderBytes - 2).ToArray(), value => Assert.Equal(0, value));
+        Assert.Equal((short)Math.Round(0.5 * short.MaxValue), BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(bytes.Length - 2)));
+    }
+
+    [Fact]
+    public void A_last_flush_that_fails_still_lets_go_of_the_file_and_says_so()
+    {
+        var stream = new FailingFlush();
+        var writer = new RecordingWriter(stream, TimeSpan.FromSeconds(1));
+        writer.Write(Seconds(0.5));
+        stream.Fail = true;
+
+        Assert.Throws<IOException>(writer.Dispose);
+
+        Assert.True(stream.Closed);
+        writer.Dispose();
+        writer.Write(Seconds(0.5));
+    }
+
+    [Fact]
+    public void A_recording_whose_last_flush_fails_is_still_stopped_with_what_reached_the_disk()
+    {
+        FailingFile? file = null;
+        var recorder = new Recorder(_database, _folder, _awake, null, () => _now, TimeSpan.FromSeconds(1),
+            path => new RecordingWriter(file = new FailingFile(path), TimeSpan.FromSeconds(1)));
+        var started = recorder.Start(AudioInput.Microphone, false);
+        recorder.WriteMicrophone(Seconds(1));
+        recorder.WriteMicrophone(Seconds(1));
+        recorder.WriteMicrophone(Seconds(0.5));
+
+        // The disk filled up just as it stopped.
+        file!.Fail = true;
+        var stopped = recorder.Stop()!;
+
+        Assert.False(_awake.Held);
+        Assert.False(recorder.IsRecording);
+        Assert.Equal(RecordingStatus.Stopped, stopped.Status);
+        Assert.Equal(2.5, stopped.DurationSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(2.5), WavFile.Repair(started.Path).Length);
+
+        // Not held open, so it can be transcribed, and isn't left recording for the next start to find.
+        using (File.Open(started.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+        }
+
+        Assert.Empty(_database.GetRecordingsWithStatus(RecordingStatus.Recording));
+    }
+
+    [Fact]
+    public async Task A_recording_whose_transcribing_is_stopped_is_offered_again_and_can_be_deleted()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        var job = recorder.HandOff(stopped, queue);
+
+        Assert.Empty(recorder.TakeBackStopped());
+        Assert.True(queue.Cancel(job.Id));
+        await queue.RunPendingAsync();
+
+        var back = Assert.Single(recorder.TakeBackStopped());
+        Assert.Equal(RecordingStatus.Stopped, back.Status);
+        Assert.Null(back.JobId);
+        Assert.True(File.Exists(back.Path));
+        Assert.Empty(recorder.TakeBackStopped());
+        Assert.Equal(stopped.Id, Assert.Single(recorder.Recover()).Id);
+
+        Assert.True(recorder.Discard(back.Id));
+
+        Assert.False(File.Exists(back.Path));
+        Assert.Empty(recorder.Recover());
+        Assert.False(recorder.Discard(back.Id));
+    }
+
+    [Fact]
+    public void Working_files_left_by_a_copy_cut_off_before_are_swept_when_transcribing_starts_but_kept_copies_stay()
+    {
+        var audio = Path.Combine(_folder, "audio");
+        var work = Path.Combine(_folder, "whisper", "work");
+        Directory.CreateDirectory(audio);
+        Directory.CreateDirectory(work);
+        var old = DateTime.UtcNow.AddHours(-3);
+        string Made(string folder, string name, DateTime written)
+        {
+            var path = Path.Combine(folder, name);
+            File.WriteAllText(path, "made up");
+            File.SetLastWriteTimeUtc(path, written);
+            return path;
+        }
+
+        var cutOff = Made(audio, "2026-11-03 1002 lecture.m4a.part", old);
+        var copying = Made(audio, "2026-11-03 1100 talk.m4a.part", DateTime.UtcNow);
+        var kept = Made(audio, "2026-11-03 1002 week 3.part 2.m4a", old);
+        var converting = Made(work, "job-4.part.wav", old);
+        var compressing = Made(work, "2026-11-03 1002 lecture.part.m4a", old);
+        var converted = Made(work, "job-5.wav", old);
+
+        using (var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now))
+        {
+            queue.Start();
+        }
+
+        Assert.False(File.Exists(cutOff));
+        Assert.False(File.Exists(converting));
+        Assert.False(File.Exists(compressing));
+        Assert.True(File.Exists(copying));
+        Assert.True(File.Exists(kept));
+        Assert.True(File.Exists(converted));
+    }
+
+    [Fact]
+    public void Stopping_once_the_transcript_is_saved_finishes_the_recording_instead_of_offering_it_again()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        var job = recorder.HandOff(stopped, queue);
+        _database.AddTranscriptSource(job.NoteId, "Transcript of the lecture", "Recursion calls itself.", null, _now);
+        Assert.True(_database.SaveTranscriptionJob(_database.GetTranscriptionJob(job.Id)! with { Status = TranscriptionStatus.Writing, Progress = 100 }, _now));
+
+        Assert.True(queue.Cancel(job.Id));
+
+        Assert.Equal(TranscriptionStatus.Done, _database.GetTranscriptionJob(job.Id)!.Status);
+        Assert.Empty(recorder.TakeBackStopped());
+        Assert.Equal(1, recorder.CleanUp());
+        Assert.False(File.Exists(stopped.Path));
+        Assert.Equal(RecordingStatus.Done, _database.GetRecording(stopped.Id)!.Status);
+        Assert.NotNull(_database.GetNote(job.NoteId));
+    }
+
+    [Fact]
+    public void A_job_stopped_just_as_its_transcript_was_saved_is_cleaned_up_not_offered_again()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        var job = recorder.HandOff(stopped, queue);
+        _database.AddTranscriptSource(job.NoteId, "Transcript of the lecture", "Recursion calls itself.", null, _now);
+        Assert.True(_database.SaveTranscriptionJob(_database.GetTranscriptionJob(job.Id)! with { Status = TranscriptionStatus.Canceled }, _now));
+
+        Assert.Empty(recorder.TakeBackStopped());
+
+        Assert.False(File.Exists(stopped.Path));
+        Assert.Equal(RecordingStatus.Done, _database.GetRecording(stopped.Id)!.Status);
+        Assert.Empty(recorder.Recover());
+    }
+
+    [Fact]
+    public void A_hand_off_that_cant_be_saved_leaves_no_job_or_empty_note_and_the_recording_still_waiting()
+    {
+        using var queue = new TranscriptionQueue(_database, new NoteMaker(_database, new MarkReadingWriter(), null), ReadySetup(), new CopyConverter(), new TranscriptWhisper(), _folder, () => _now);
+        var recorder = NewRecorder();
+        recorder.Start(AudioInput.Microphone, keepAudio: false);
+        recorder.WriteMicrophone(Seconds(3));
+        var stopped = recorder.Stop()!;
+        FailWhen($"BEFORE UPDATE OF status ON recordings WHEN NEW.status = '{RecordingStatus.HandedOff}'");
+
+        Assert.ThrowsAny<SqliteException>(() => recorder.HandOff(stopped, queue));
+
+        Assert.Equal(0, Count("transcription_jobs"));
+        Assert.Empty(_database.GetNotes());
+        Assert.Equal(RecordingStatus.Stopped, _database.GetRecording(stopped.Id)!.Status);
+        Assert.Equal(stopped.Id, Assert.Single(recorder.Recover()).Id);
     }
 
     [Fact]
@@ -557,6 +850,74 @@ public sealed class RecorderTests : IDisposable
         var model = Path.Combine(_folder, "whisper", "model.bin");
         File.WriteAllText(model, "model");
         return new WhisperSetup(model, bin);
+    }
+
+    private void FailWhen(string when)
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"CREATE TRIGGER fail_partway {when} BEGIN SELECT RAISE(ABORT, 'made to fail partway'); END";
+        command.ExecuteNonQuery();
+    }
+
+    private long Count(string table)
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        return (long)command.ExecuteScalar()!;
+    }
+
+    /// <summary>Remembers the most written at once.</summary>
+    private sealed class LargestWrite : MemoryStream
+    {
+        public int Largest { get; private set; }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            Largest = Math.Max(Largest, count);
+            base.Write(buffer, offset, count);
+        }
+    }
+
+    /// <summary>A stream whose flush fails once told to, the way a full disk does.</summary>
+    private sealed class FailingFlush : MemoryStream
+    {
+        public bool Fail { get; set; }
+
+        public bool Closed { get; private set; }
+
+        public override void Flush()
+        {
+            if (Fail)
+            {
+                throw new IOException("Made-up full disk.");
+            }
+
+            base.Flush();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Closed = true;
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>A real file, unbuffered so every write reaches it, whose flush to the disk fails once told to.</summary>
+    private sealed class FailingFile(string path) : FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0)
+    {
+        public bool Fail { get; set; }
+
+        public override void Flush(bool flushToDisk)
+        {
+            if (Fail)
+            {
+                throw new IOException("Made-up full disk.");
+            }
+
+            base.Flush(flushToDisk);
+        }
     }
 
     /// <summary>A stream that stays readable after the writer closes it.</summary>

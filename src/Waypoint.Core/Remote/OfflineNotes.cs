@@ -292,17 +292,13 @@ public sealed class OfflineNotes(string path)
     {
         var unsaved = ReadUnsaved();
         unsaved.Add(note);
-        var temporary = $"{UnsavedPath}.tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(unsaved, RemoteJson.Options));
-        File.Move(temporary, UnsavedPath, overwrite: true);
+        Platform.DurableFile.WriteAllText(UnsavedPath, JsonSerializer.Serialize(unsaved, RemoteJson.Options));
     }
 
     private List<UnsavedNote> ReadUnsaved() =>
         ReadKept<UnsavedNote>(UnsavedPath, kept => kept?.Note is { Title: not null, Body: not null } && kept.Problem is not null, unsaved =>
         {
-            var temporary = $"{UnsavedPath}.tmp";
-            File.WriteAllText(temporary, JsonSerializer.Serialize(unsaved, RemoteJson.Options));
-            File.Move(temporary, UnsavedPath, overwrite: true);
+            Platform.DurableFile.WriteAllText(UnsavedPath, JsonSerializer.Serialize(unsaved, RemoteJson.Options));
         });
 
     private List<OfflineNote> Read() =>
@@ -352,8 +348,7 @@ public sealed class OfflineNotes(string path)
             return;
         }
 
-        var temporary = $"{path}.tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(waiting, RemoteJson.Options));
-        File.Move(temporary, path, overwrite: true);
+        // Flushed to the disk before it's moved over the old one, so a power cut can't leave the kept notes empty.
+        Platform.DurableFile.WriteAllText(path, JsonSerializer.Serialize(waiting, RemoteJson.Options));
     }
 }

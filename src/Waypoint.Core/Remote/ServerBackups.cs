@@ -7,8 +7,11 @@ public sealed record BackupChoice(string Name, DateTime At, bool BeforeRestore);
 
 public sealed record BackupRequest(string Name);
 
-/// <summary>What came of a restore on the server. SafetyCopy names how things were just before, so it can be undone.</summary>
-public sealed record BackupRestored(bool Restored, string? SafetyCopy, string? Problem, bool Restarting);
+/// <summary>
+/// What came of a restore on the server. SafetyCopy names how things were just before, so it can be undone. Warning
+/// says what didn't finish after the restored data was in, which leaves it restored.
+/// </summary>
+public sealed record BackupRestored(bool Restored, string? SafetyCopy, string? Problem, bool Restarting, string? Warning = null);
 
 /// <summary>
 /// Backups, restores, and the notes export, run where the database is. In server mode that's the server, which

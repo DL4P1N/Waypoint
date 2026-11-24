@@ -98,24 +98,63 @@ public sealed class TranscriptionQueue : IDisposable
         var now = _clock();
         var full = Path.GetFullPath(path);
         var started = _notes.StartForRecording(full, pickedFolderId, folderPicked, now);
-        var id = _database.AddTranscriptionJob(started.NoteId, full, keepAudio, now);
-        Raise(new TranscriptionChange(id, started.NoteId));
-        _wake.Release();
-        return _database.GetTranscriptionJob(id)!;
+        return Queue(started.NoteId, full, keepAudio, now, null);
     }
 
     /// <summary>
     /// Queues a lecture recorded on this PC. It's filed by the class that was on when recording started, and gets
     /// the title the recorder gave it. The file is the recorder's own, which it deletes once the transcript is saved.
+    /// <paramref name="alongside"/> is saved in the same write as the job, such as the recorder marking it handed off.
     /// </summary>
-    public TranscriptionJob ImportRecording(string path, bool keepAudio, DateTime startedAt, string title)
+    public TranscriptionJob ImportRecording(string path, bool keepAudio, DateTime startedAt, string title, Action<WaypointDatabase, TranscriptionJob>? alongside = null)
     {
         var full = Path.GetFullPath(path);
         var started = _notes.StartForRecording(full, null, false, startedAt, title);
-        var id = _database.AddTranscriptionJob(started.NoteId, full, keepAudio, _clock());
-        Raise(new TranscriptionChange(id, started.NoteId));
+        return Queue(started.NoteId, full, keepAudio, _clock(), alongside);
+    }
+
+    /// <summary>
+    /// Adds the job for a note just made for it, with anything that goes with it, in one write. If that can't be
+    /// saved, the note, still empty, goes too, so an import never leaves a note waiting on a job that isn't there.
+    /// The note can live on the server, so it can't be part of the same write.
+    /// </summary>
+    private TranscriptionJob Queue(long noteId, string full, bool keepAudio, DateTime now, Action<WaypointDatabase, TranscriptionJob>? alongside)
+    {
+        TranscriptionJob job;
+        try
+        {
+            job = _database.InOneWrite(write =>
+            {
+                var made = write.GetTranscriptionJob(write.AddTranscriptionJob(noteId, full, keepAudio, now))!;
+                alongside?.Invoke(write, made);
+                return made;
+            });
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            DeleteIfEmpty(noteId);
+            throw;
+        }
+
+        Raise(new TranscriptionChange(job.Id, noteId));
         _wake.Release();
-        return _database.GetTranscriptionJob(id)!;
+        return job;
+    }
+
+    /// <summary>Deletes a note that has nothing in it, typed or attached. Best effort: one that can't be reached now is left.</summary>
+    private void DeleteIfEmpty(long noteId)
+    {
+        try
+        {
+            if (_notes.GetNote(noteId) is { } note && string.IsNullOrWhiteSpace(note.Body) && _notes.GetNoteSources(noteId).Count == 0)
+            {
+                _notes.DeleteNote(noteId, _clock());
+            }
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            PlainProblem.Report(exception);
+        }
     }
 
     /// <summary>Remembers the yes, so a download cut off by a restart carries on, and starts it.</summary>
@@ -157,6 +196,7 @@ public sealed class TranscriptionQueue : IDisposable
     /// <summary>Starts the background worker, which carries on with any jobs left from last time.</summary>
     public void Start()
     {
+        SweepStaleParts();
         lock (_lock)
         {
             _loop ??= Task.Run(LoopAsync);
@@ -181,7 +221,12 @@ public sealed class TranscriptionQueue : IDisposable
             return false;
         }
 
-        _database.SaveTranscriptionJob(job with { Status = TranscriptionStatus.Canceled }, _clock());
+        // Transcribing is already done once it's writing notes, and the transcript is saved on the note. Stopping then
+        // only stops the notes, so the job is done, and a recording it came from is cleaned up like any other.
+        var transcribed = job.Status == TranscriptionStatus.Writing;
+        _database.SaveTranscriptionJob(
+            transcribed ? job with { Status = TranscriptionStatus.Done, Error = StoppedWritingText } : job with { Status = TranscriptionStatus.Canceled },
+            _clock());
         bool running;
         lock (_lock)
         {
@@ -193,14 +238,16 @@ public sealed class TranscriptionQueue : IDisposable
         }
 
         // A running job cleans up after itself once Whisper has stopped and let go of the files.
-        if (!running)
+        if (!running && !transcribed)
         {
             CleanUpCanceled(jobId);
         }
 
-        Raise(new TranscriptionChange(jobId, job.NoteId, "Stopped transcribing."));
+        Raise(new TranscriptionChange(jobId, job.NoteId, transcribed ? StoppedWritingText : "Stopped transcribing."));
         return true;
     }
+
+    private const string StoppedWritingText = "Stopped writing notes. The transcript is saved in Sources, so notes can be written from it later.";
 
     /// <summary>Starts a failed job over. A converted WAV that's still there is used again.</summary>
     public bool Retry(long jobId)
@@ -621,18 +668,39 @@ public sealed class TranscriptionQueue : IDisposable
         var extension = Path.GetExtension(source);
         var target = FreeAudioPath(stem, extension);
         var part = target + ".part";
-        await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
-        await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+        try
         {
-            await from.CopyToAsync(to, cancellationToken);
-        }
+            await using (var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
+            await using (var to = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            {
+                await from.CopyToAsync(to, cancellationToken);
+            }
 
-        File.Move(part, target);
-        return target;
+            File.Move(part, target);
+            return target;
+        }
+        finally
+        {
+            // A copy cut short, by a full disk or being stopped, is never finished, so it goes.
+            Delete(part);
+        }
     }
 
+    /// <summary>
+    /// Working files left by a copy or conversion cut off when Waypoint last stopped suddenly. Only names that can't
+    /// be a kept copy are taken: in the audio folder ones ending in .part, and in the work folder, which holds only
+    /// Waypoint's own working files, any part file.
+    /// </summary>
+    private void SweepStaleParts()
+    {
+        Platform.PartFiles.SweepStale(_audioFolder, Platform.PartFiles.EndingIn(".part"), Platform.PartFiles.StaleAfter);
+        Platform.PartFiles.SweepStale(_workFolder, name => name.Contains(".part", StringComparison.OrdinalIgnoreCase), Platform.PartFiles.StaleAfter);
+    }
+
+    /// <summary>A free name for a kept copy, which never ends in .part, so the start-up sweep can't take it.</summary>
     private string FreeAudioPath(string stem, string extension)
     {
+        extension = Platform.PartFiles.FinishedExtension(extension);
         var target = Path.Combine(_audioFolder, stem + extension);
         for (var n = 2; File.Exists(target); n++)
         {
@@ -648,8 +716,10 @@ public sealed class TranscriptionQueue : IDisposable
         var extension = _converter.CompressedExtension;
         var target = FreeAudioPath(stem, extension);
 
-        // The encoder picks the kind of file from its extension, so the part file keeps it.
-        var part = Path.ChangeExtension(target, ".part" + extension);
+        // The encoder picks the kind of file from its extension, so the part file keeps it. It's made in the work
+        // folder, so one left by a crash can't be mistaken for a kept copy whose own name has ".part" in it.
+        Directory.CreateDirectory(_workFolder);
+        var part = Path.Combine(_workFolder, Path.GetFileNameWithoutExtension(target) + ".part" + extension);
         try
         {
             if (await _converter.CompressAsync(source, part, cancellationToken) && File.Exists(part) && new FileInfo(part).Length > 0)

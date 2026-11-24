@@ -139,7 +139,7 @@ public partial class App
 
             // What this PC shows and keeps is from before, so it starts again straight away too.
             var restarting = result.Restarting ? " The server starts again to load it, which takes a few seconds." : "";
-            RestartWith($"Restored. How things were before is saved on the server as {result.SafetyCopy}.{restarting}");
+            RestartWith($"Restored. How things were before is saved on the server as {result.SafetyCopy}.{(result.Warning is { } warning ? $" {warning}" : "")}{restarting}");
         }
         catch (ServerUnavailableException away)
         {

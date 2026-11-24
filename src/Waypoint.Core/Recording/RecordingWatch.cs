@@ -71,6 +71,20 @@ public sealed class RecordingWatch
         }
     }
 
+    /// <summary>The PC was asleep this long. Nothing could be heard then, so it doesn't count toward a silent microphone.</summary>
+    public void Slept(TimeSpan asleep)
+    {
+        if (asleep <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            _lastHeard += asleep;
+        }
+    }
+
     /// <summary>Checks everything, and returns only the warnings raised for the first time just now.</summary>
     public IReadOnlyList<RecordingWarning> Check(DateTime now, PowerReading power, long? freeBytes, bool microphoneMuted = false)
     {
