@@ -74,6 +74,22 @@ public sealed class ServerClientTests : IDisposable
     }
 
     [Fact]
+    public void The_away_line_names_the_day_when_the_last_read_was_not_today()
+    {
+        var now = new DateTime(2026, 11, 20, 9, 0, 0);
+        string Time(DateTime at) => at.ToString("h:mm tt", System.Globalization.CultureInfo.CurrentCulture);
+        var earlier = new DateTime(2026, 11, 20, 8, 15, 0);
+        var lastNight = new DateTime(2026, 11, 19, 23, 40, 0);
+        var monday = new DateTime(2026, 11, 16, 15, 15, 0);
+        var weeksAgo = new DateTime(2026, 11, 2, 15, 15, 0);
+
+        Assert.Equal($"at {Time(earlier)}", ServerClient.LastSeen(earlier, now));
+        Assert.Equal($"yesterday at {Time(lastNight)}", ServerClient.LastSeen(lastNight, now));
+        Assert.Equal($"on {monday.ToString("dddd", System.Globalization.CultureInfo.CurrentCulture)} at {Time(monday)}", ServerClient.LastSeen(monday, now));
+        Assert.Equal($"on {weeksAgo.ToString("MMM d", System.Globalization.CultureInfo.CurrentCulture)} at {Time(weeksAgo)}", ServerClient.LastSeen(weeksAgo, now));
+    }
+
+    [Fact]
     public void While_the_server_is_away_changes_say_so_instead_of_pretending()
     {
         var client = Client();

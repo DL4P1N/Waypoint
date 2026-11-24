@@ -84,12 +84,29 @@ public sealed partial class ServerClient
     public string? Problem => State switch
     {
         ServerState.Offline => LastContact is { } at
-            ? $"Can't reach the server. Showing what was there at {at:h:mm tt}, and anything typed is sent when it's back."
+            ? $"Can't reach the server. Showing what was there {LastSeen(at, DateTime.Now)}, and anything typed is sent when it's back."
             : "Can't reach the server. Anything typed is sent when it's back.",
         ServerState.NotPaired => "The server didn't accept this PC. Pair it again from the tray menu.",
         _ when !HasToken => "This PC isn't paired with the server yet. Use Pair with server in the tray menu.",
         _ => LastStatus?.Warnings.FirstOrDefault(),
     };
+
+    /// <summary>
+    /// When the server last answered, as it reads after "what was there": "at 3:15 PM" today, and with the day
+    /// otherwise, such as "yesterday at 3:15 PM", "on Friday at 3:15 PM", or "on Nov 14 at 3:15 PM".
+    /// </summary>
+    public static string LastSeen(DateTime at, DateTime now)
+    {
+        var time = at.ToString("h:mm tt", System.Globalization.CultureInfo.CurrentCulture);
+        var days = DateOnly.FromDateTime(now).DayNumber - DateOnly.FromDateTime(at).DayNumber;
+        return days switch
+        {
+            <= 0 => $"at {time}",
+            1 => $"yesterday at {time}",
+            < 7 => $"on {at.ToString("dddd", System.Globalization.CultureInfo.CurrentCulture)} at {time}",
+            _ => $"on {at.ToString("MMM d", System.Globalization.CultureInfo.CurrentCulture)} at {time}",
+        };
+    }
 
     /// <summary>Asks for the server's status. This is the one call that runs while offline, so it's how the app notices it's back.</summary>
     public async Task<ServerStatus?> CheckAsync(CancellationToken cancellationToken = default)
