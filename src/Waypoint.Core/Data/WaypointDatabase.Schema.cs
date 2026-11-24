@@ -252,7 +252,6 @@ public sealed partial class WaypointDatabase
         SeparateBudgetPeriods();
         BackfillImportMatches();
         CreateChangeStamps();
-        RepairTypedNoteMarks(DateTime.Now);
     }
 
     /// <summary>
