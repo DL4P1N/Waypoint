@@ -689,6 +689,7 @@ public partial class SettingsView : UserControl
 
     private async void OnWeeklySaved(object sender, RoutedEventArgs e)
     {
+        WorkBar.Changed();
         var days = Days.SelectedItems.Cast<string>().ToList();
         if (days.Count == 0)
         {
@@ -730,6 +731,7 @@ public partial class SettingsView : UserControl
 
     private async void OnShiftAdded(object sender, RoutedEventArgs e)
     {
+        WorkBar.Changed();
         if (ReadHours(ShiftStart.Text, ShiftEnd.Text) is not ({ } start, { } end))
         {
             ShowShift(TimesHint);
@@ -793,6 +795,7 @@ public partial class SettingsView : UserControl
     /// </summary>
     private async Task FieldSaved(Func<OpReply> change, TextBlock hint, string tryThis, Unsaved part)
     {
+        WorkBar.Changed();
         hint.Visibility = Visibility.Collapsed;
         var (ok, reply) = await Change(change, ShowWork);
         if (!ok)
@@ -825,7 +828,7 @@ public partial class SettingsView : UserControl
             var (ok, reply) = await Change(() => _settings.RemoveWeeklyHours([hours.Day.ToString()]), ShowWeekly);
             if (ok)
             {
-                WorkRemoved(reply, ShowWeekly, () => WorkSaved(() => _settings.SetWeeklyHours([hours.Day.ToString()], $"{Clock(hours.Start)}-{Clock(hours.End)}"), ShowWeekly));
+                WorkRemoved(reply, ShowWeekly, () => WorkSaved(() => PutWeeklyHoursBack(hours), ShowWeekly));
             }
         }
         else if (row.Dates is [{ Date: var date }, ..] dates)
@@ -853,8 +856,21 @@ public partial class SettingsView : UserControl
         _changed();
     }
 
+    /// <summary>Only into a day that's still empty, so Undo never replaces hours set since the remove.</summary>
+    private OpReply PutWeeklyHoursBack(WeeklyHours hours) =>
+        _settings.GetWeeklyHours().Any(found => found.Day == hours.Day)
+            ? new OpReply($"{hours.Day} has other hours now, so those were kept.", true)
+            : _settings.SetWeeklyHours([hours.Day.ToString()], $"{Clock(hours.Start)}-{Clock(hours.End)}");
+
+    /// <summary>Only onto a date that's still back to the usual hours, so Undo never adds to what was set since.</summary>
     private OpReply PutWorkDateBack(IReadOnlyList<WorkDate> dates)
     {
+        var removed = dates[0].Date;
+        if (_settings.GetWorkDates(removed).Any(found => found.Date == removed))
+        {
+            return new OpReply($"{removed.ToString("dddd, MMM d", CultureInfo.InvariantCulture)} has something else set now, so that was kept.", true);
+        }
+
         var reply = new OpReply("");
         foreach (var date in dates)
         {
@@ -870,6 +886,7 @@ public partial class SettingsView : UserControl
     /// <summary>Runs a work change and says how it went under the part of the section it was made in.</summary>
     private async void WorkSaved(Func<OpReply> change, Action<string> show)
     {
+        WorkBar.Changed();
         var (ok, reply) = await Change(change, show);
         if (ok)
         {

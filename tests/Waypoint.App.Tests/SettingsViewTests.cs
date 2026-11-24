@@ -727,6 +727,24 @@ public sealed class SettingsViewTests
         Assert.Equal([new TimeOnly(8, 0), new TimeOnly(13, 0)], settings.Dates.Select(date => date.Start!.Value).Order());
         Assert.Equal(2, ((System.Collections.IEnumerable)UiTest.Named<ItemsControl>(view, "DateRows").ItemsSource).Cast<object>().Count());
 
+        // Another work change ends the chance to undo, and Undo never replaces hours set since.
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        Assert.Equal(Visibility.Visible, bar.Visibility);
+        UiTest.Named<TextBox>(view, "ShiftStart").Text = "9-5";
+        UiTest.Call(view, "OnShiftAdded", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(Visibility.Collapsed, bar.Visibility);
+
+        settings.Weekly.Clear();
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(9, 0), new TimeOnly(17, 0)));
+        view.Refresh();
+        Remove(UiTest.Named<ItemsControl>(view, "WeeklyRows"));
+        settings.Weekly.Add(new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(10, 0), new TimeOnly(14, 0)));
+        undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, undo));
+        ui.Pump();
+        Assert.Equal([new WeeklyHours(DayOfWeek.Tuesday, new TimeOnly(10, 0), new TimeOnly(14, 0))], settings.Weekly);
+        Assert.Equal("Tuesday has other hours now, so those were kept.", UiTest.Named<TextBlock>(view, "WeeklyStatus").Text);
+
         void Remove(ItemsControl rows)
         {
             var row = ui.Container(rows, rows.Items[0]);
