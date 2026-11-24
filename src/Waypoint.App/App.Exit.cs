@@ -206,6 +206,9 @@ public partial class App
         {
             try
             {
+                CornerCards.Changed -= OnCornerCardsChanged;
+                _cardKey?.Dispose();
+                _cardKey = null;
                 _tray?.Dispose();
             }
             finally

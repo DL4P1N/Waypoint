@@ -89,6 +89,9 @@ public partial class App : System.Windows.Application
 
         DispatcherUnhandledException += OnUnhandledException;
 
+        // Watched from the start, so a card that comes up before startup has finished still gets its shortcut.
+        CornerCards.Changed += OnCornerCardsChanged;
+
         // Problems are said plainly in the window, and the detail behind them goes to errors.log.
         PlainProblem.Log = LogError;
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
@@ -443,7 +446,6 @@ public partial class App : System.Windows.Application
         }
 
         _started = true;
-        CornerCards.Changed += OnCornerCardsChanged;
 
         // A recording cut off by a crash or power cut is fixed and offered once things have settled.
         Dispatcher.BeginInvoke(() => Guarded(() => _recorder?.OfferUnfinished()), DispatcherPriority.ApplicationIdle);
