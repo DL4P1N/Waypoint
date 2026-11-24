@@ -452,6 +452,39 @@ public sealed class SettingsViewTests
     });
 
     [Fact]
+    public void The_class_being_changed_is_found_again_after_one_above_it_is_removed() => Ui.Run(ui =>
+    {
+        var art = new ClassMeeting("Art 101", "Room 4", [DayOfWeek.Monday], new TimeOnly(9, 0), new TimeOnly(10, 0));
+        var bio = new ClassMeeting("Bio 102", "", [DayOfWeek.Tuesday], new TimeOnly(11, 0), new TimeOnly(12, 0));
+        var chem = new ClassMeeting("Chem 103", "", [DayOfWeek.Friday], new TimeOnly(13, 0), new TimeOnly(14, 0));
+        var settings = new MemorySettings { Classes = new(null, null, [art, bio, chem]) };
+        var view = OpenClasses(ui, settings);
+        Button Named(string name) => UiTest.Descendants<Button>(view).Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == name);
+        var className = UiTest.Named<TextBox>(view, "ClassName");
+
+        UiTest.Call(view, "OnClassEdited", Named("Change Bio 102"), new RoutedEventArgs());
+        UiTest.Call(view, "OnClassRemoved", Named("Remove Art 101"), new RoutedEventArgs());
+        ui.Pump();
+        className.Text = "Bio 202";
+        UiTest.Call(view, "OnClassesSaved", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(["Bio 202", "Chem 103"], settings.Classes.Classes.Select(meeting => meeting.Course));
+
+        // The class being changed is removed: what's typed stays, as a new class.
+        UiTest.Call(view, "OnClassEdited", Named("Change Chem 103"), new RoutedEventArgs());
+        className.Text = "Chem 203";
+        UiTest.Call(view, "OnClassRemoved", Named("Remove Chem 103"), new RoutedEventArgs());
+        ui.Pump();
+        view.Load();
+        Assert.Equal("Chem 203", className.Text);
+        Assert.Equal("Add a class", UiTest.Named<TextBlock>(view, "ClassFormTitle").Text);
+        Assert.Equal(SettingsView.NotSavedYet, UiTest.Named<TextBlock>(view, "ClassesStatus").Text);
+        UiTest.Call(view, "OnClassesSaved", view, new RoutedEventArgs());
+        ui.Pump();
+        Assert.Equal(["Bio 202", "Chem 203"], settings.Classes.Classes.Select(meeting => meeting.Course));
+    });
+
+    [Fact]
     public void Classes_saved_on_the_server_are_used_on_this_pc_too() => Ui.Run(ui =>
     {
         var here = new ClassSchedule(DateOnly.MinValue, DateOnly.MinValue, [], [new DateOnly(2026, 10, 16)]);

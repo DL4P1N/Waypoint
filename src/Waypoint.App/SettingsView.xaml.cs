@@ -67,7 +67,11 @@ public partial class SettingsView : UserControl
 
     /// <summary>Class changes asked for and not finished yet. While any is, a read doesn't replace the classes shown.</summary>
     private int _classSaves;
-    private int? _editingClass;
+    /// <summary>
+    /// The class the form is changing, found again by what it is rather than where it was, so a class removed or put
+    /// back above it can't make Save change another one.
+    /// </summary>
+    private ClassMeeting? _editingClass;
     private DateOnly? _termStart;
     private DateOnly? _termEnd;
     private bool _loading;
@@ -93,7 +97,7 @@ public partial class SettingsView : UserControl
         _rateEdits = new(WorkStatus, () => HourlyRate.Text);
         _bedtimeEdits = new(BedtimeNote, () => Unsaved.Join(SleepHours.Text, ReadyMinutes.Text, LatestBedtime.Text, RoutineSteps.Text, EveningStepName.Text, WindDownStepName.Text));
         _classEdits = new(ClassesStatus, () => Unsaved.Join(
-            [ClassName.Text, ClassStart.Text, ClassEnd.Text, ClassPlace.Text, ClassTravel.Text, _editingClass?.ToString(CultureInfo.InvariantCulture) ?? "", .. ClassDays.SelectedItems.Cast<string>()]));
+            [ClassName.Text, ClassStart.Text, ClassEnd.Text, ClassPlace.Text, ClassTravel.Text, _editingClass is { } editing ? ClassLabel(editing) : "", .. ClassDays.SelectedItems.Cast<string>()]));
         _discordEdits = new(DiscordNote, () => Unsaved.Join(
             DiscordOwner.Text, DiscordCapture.Text, DiscordAlerts.Text, DiscordBudget.Text, DiscordNotesForum.Text, DiscordListsForum.Text, DiscordToken.Password));
         _feedEdits = new(CalendarStatus, () => CalendarFeed.Text);
@@ -1009,18 +1013,7 @@ public partial class SettingsView : UserControl
         _savedClasses = _classes.ToList();
         _termStart = form.TermStart;
         _termEnd = form.TermEnd;
-        if (_classEdits.Edited)
-        {
-            // A class being changed that's no longer there is added as a new one instead.
-            if (_editingClass >= _classes.Count)
-            {
-                _editingClass = null;
-                ClassFormTitle.Text = "Add a class";
-                ClassEditCancel.Visibility = Visibility.Collapsed;
-                _classEdits.Filled();
-            }
-        }
-        else
+        if (!_classEdits.Edited)
         {
             ClearClassForm();
             _classEdits.Filled();
@@ -1032,6 +1025,14 @@ public partial class SettingsView : UserControl
 
     private void ShowClasses()
     {
+        // A class being changed that's gone now: what's typed stays, and Save adds it as a new class.
+        if (_editingClass is { } editing && FindClass(_classes, editing) < 0)
+        {
+            _editingClass = null;
+            ClassFormTitle.Text = "Add a class";
+            ClassEditCancel.Visibility = Visibility.Collapsed;
+        }
+
         ClassRows.ItemsSource = _classes.Select((meeting, index) => new ClassRow(ClassLabel(meeting), meeting.Course, index)).ToList();
         NoClasses.Visibility = _classes.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         TermStartButton.Content = _termStart is { } start ? $"First day: {start.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)}" : "First day: not set";
@@ -1044,6 +1045,22 @@ public partial class SettingsView : UserControl
         var days = string.Join(", ", Week.Where(meeting.Days.Contains).Select(day => day.ToString()[..3]));
         var place = string.IsNullOrWhiteSpace(meeting.Room) ? "" : $"  {meeting.Room.Trim()}";
         return $"{meeting.Course}  {days}  {Hours(meeting.Start, meeting.End)}{place}";
+    }
+
+    /// <summary>Where the class is in the list, by its name, place, days and times, or -1 when it isn't there.</summary>
+    private static int FindClass(IReadOnlyList<ClassMeeting> classes, ClassMeeting meeting)
+    {
+        for (var index = 0; index < classes.Count; index++)
+        {
+            var found = classes[index];
+            if (found.Course == meeting.Course && (found.Room ?? "") == (meeting.Room ?? "") && found.Start == meeting.Start
+                && found.End == meeting.End && found.TravelMinutes == meeting.TravelMinutes && found.Days.Order().SequenceEqual(meeting.Days.Order()))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private void ClearClassForm()
@@ -1077,7 +1094,7 @@ public partial class SettingsView : UserControl
                 return;
             }
 
-            if (_editingClass is { } index && index < classes.Count)
+            if (_editingClass is { } editing && FindClass(classes, editing) is >= 0 and var index)
             {
                 classes[index] = meeting;
             }
@@ -1202,7 +1219,7 @@ public partial class SettingsView : UserControl
 
         var meeting = _classes[row.Index];
         ClearClassForm();
-        _editingClass = row.Index;
+        _editingClass = meeting;
         ClassName.Text = meeting.Course;
         foreach (var day in meeting.Days.Select(day => day.ToString()))
         {
