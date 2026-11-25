@@ -368,7 +368,11 @@ public sealed class ServerNotesClickTests
     {
         var server = new NotesServer();
         var (view, work, body, _) = OpenNotes(ui, server);
-        var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid():N}.txt");
+        // The folder keeps it apart from other runs. The name has no long run of digits, which a file's name loses
+        // as it's read in case it's an account number, as a random one in the name sometimes had.
+        var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"waypoint-test-{Guid.NewGuid():N}");
+        System.IO.Directory.CreateDirectory(folder);
+        var file = System.IO.Path.Combine(folder, "radish sowing.txt");
         System.IO.File.WriteAllText(file, "Sow radish in early spring.");
         try
         {
@@ -385,12 +389,12 @@ public sealed class ServerNotesClickTests
             server.ReleaseChanges.Set();
             var message = UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message");
             ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && message.Text.Contains("Choose Write notes", StringComparison.Ordinal), "what to do next");
-            Assert.Equal([$"attach 7 {System.IO.Path.GetFileName(file)}"], server.Changes);
+            Assert.Equal(["attach 7 radish sowing.txt"], server.Changes);
             Assert.Equal("radish", body.Text);
         }
         finally
         {
-            System.IO.File.Delete(file);
+            System.IO.Directory.Delete(folder, recursive: true);
         }
     });
 
