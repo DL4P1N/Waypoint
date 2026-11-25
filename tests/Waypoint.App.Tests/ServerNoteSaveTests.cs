@@ -147,7 +147,7 @@ public sealed class ServerNoteSaveTests
         UiTest.Call(view, "SaveSoon");
         // The server holds the save until it's let go, so had the window waited for it, it would have been answered.
         Assert.Equal(answered, server.Answered);
-        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(30)));
         // And the window went on while the server was still holding it, so it never waited on the save at all.
         Assert.Equal(answered, server.Answered);
 

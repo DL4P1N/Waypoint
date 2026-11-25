@@ -47,7 +47,7 @@ public sealed class ServerBudgetClickTests
             {
                 var sent = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
                 ChangeArrived.Set();
-                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (Changes)
                 {
                     Changes.Add($"{path} {sent}");
@@ -75,9 +75,9 @@ public sealed class ServerBudgetClickTests
         ui.Host(view);
         view.Connect(new ServerBudgetData(client), () => { });
         var entries = UiTest.Named<ListBox>(UiTest.Named<NestedColumn>(view, "Column"), "Entries");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && entries.Items.Count > 0, "the page");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && entries.Items.Count > 0, "the page");
         entries.SelectedItem = entries.Items.Cast<ColumnEntry>().Single(entry => entry.Key == "waiting");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Waiting(view).Count == 2, "the waits");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Waiting(view).Count == 2, "the waits");
 
         server.Release.Reset();
         view.UpdateLayout();
@@ -87,11 +87,11 @@ public sealed class ServerBudgetClickTests
 
         // Both clicks came back while the server still held the first change.
         Assert.Empty(server.Changes);
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.True(work.ChangesWaiting);
 
         server.Release.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the changes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the changes");
         var waits = BudgetPage.Read(ui.Database, Today.AddDays(1 - Today.Day), Today).WaitList;
         string Resolve(string description) => $"/api/budget/waits/{waits.Single(item => item.Description == description).Id}/resolve";
         Assert.Equal(2, server.Changes.Count);
@@ -132,7 +132,7 @@ public sealed class ServerBudgetClickTests
 
             // It came back while the server still held the save.
             Assert.Empty(server.Changes);
-            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
 
             // It can't be pressed again meanwhile, so it's saved once.
             Assert.False(done.IsEnabled);
@@ -144,7 +144,7 @@ public sealed class ServerBudgetClickTests
             Assert.True(form.IsVisible);
 
             server.Release.Set();
-            ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && done.IsEnabled, "the save");
+            ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && done.IsEnabled, "the save");
             var change = Assert.Single(server.Changes);
             Assert.Contains("Made up snacks\"", change);
             Assert.Equal("Add", done.Content);

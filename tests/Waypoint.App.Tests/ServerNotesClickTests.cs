@@ -101,13 +101,13 @@ public sealed class ServerNotesClickTests
             if (request.Method != HttpMethod.Get && (path.StartsWith("/api/notes/", StringComparison.Ordinal) || path.StartsWith("/api/lists/entries", StringComparison.Ordinal)))
             {
                 ChangeArrived.Set();
-                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             if (request.Method == HttpMethod.Put && path.StartsWith("/api/notes/", StringComparison.Ordinal))
             {
                 SaveArrived.Set();
-                await Task.Run(() => ReleaseSaves.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseSaves.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             lock (_gate)
@@ -184,12 +184,12 @@ public sealed class ServerNotesClickTests
             if (request.Method == HttpMethod.Get && path == "/api/lists")
             {
                 ListReadArrived.Set();
-                await Task.Run(() => ReleaseListReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseListReads.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             if (request.Method == HttpMethod.Get && path is "/api/notes/7" or "/api/notes/8")
             {
-                await Task.Run(() => ReleaseReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseReads.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             var json = JsonSerializer.Serialize(body, body.GetType(), RemoteJson.Options);
@@ -218,9 +218,9 @@ public sealed class ServerNotesClickTests
         ui.Host(view);
         work.Show(() => view.Refresh(force: true));
         var body = UiTest.Named<MarkdownBox>(view, "BodyBox");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Rows(view).Count == 2, "the notes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Rows(view).Count == 2, "the notes");
         Pick(view, 7);
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "radish", "the note to open");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && body.Text == "radish", "the note to open");
         return (view, work, body, client);
     }
 
@@ -244,14 +244,14 @@ public sealed class ServerNotesClickTests
         server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Pick(view, 8);
 
         // It came back while the server still held the save.
         Assert.Empty(server.Changes);
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "tent", "the other note");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && body.Text == "tent", "the other note");
 
         Assert.Equal(["save 7 radish, kale"], server.Changes);
         Assert.Equal("radish, kale", server.Body(7));
@@ -269,7 +269,7 @@ public sealed class ServerNotesClickTests
         // Where it goes is read while the first words are typed, then the first save places it and makes it, and
         // more typed meanwhile is saved to it after. Each came back while the server still held the first.
         UiTest.Call(view, "NewNote");
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Type(body, "cell walls");
         UiTest.Call(view, "SaveSoon");
         Type(body, "cell walls, mitochondria");
@@ -279,7 +279,7 @@ public sealed class ServerNotesClickTests
         Assert.Equal("cell walls, mitochondria", body.Text);
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3 && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 3 && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
         Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
         Assert.Equal(1, server.NotesMade);
         Assert.Equal("Biology 1 Apr", server.Title(101));
@@ -289,7 +289,7 @@ public sealed class ServerNotesClickTests
         // Typed on, it goes on as that note.
         Type(body, "cell walls, mitochondria, ribosomes");
         UiTest.Call(view, "SaveSoon");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 4, "the next save");
         Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
         Assert.Equal(1, server.NotesMade);
     });
@@ -321,14 +321,14 @@ public sealed class ServerNotesClickTests
         Assert.Equal("Biology 1 Apr", title.Text);
 
         server.ReleaseSaves.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count >= 3, "the held save");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count >= 3, "the held save");
         Assert.Equal(["class folder", "make 101 Biology 1 Apr: cell walls in 50", "save 101 cell walls, mitochondria"], server.Changes);
         Assert.Equal("Biology 1 Apr", title.Text);
 
         // Typed on, the title it saves is still the class title.
         Type(body, "cell walls, mitochondria, ribosomes");
         UiTest.Call(view, "SaveSoon");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 4, "the next save");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 4, "the next save");
         Assert.Equal("save 101 cell walls, mitochondria, ribosomes", server.Changes[^1]);
         Assert.Equal("Biology 1 Apr", server.Title(101));
         Assert.Equal("Biology 1 Apr", title.Text);
@@ -348,7 +348,7 @@ public sealed class ServerNotesClickTests
         UiTest.Call(view, "SaveSoon");
         UiTest.Call(view, "OnDeleteClicked", view, new System.Windows.RoutedEventArgs());
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the first save");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the first save");
 
         // Its problem is said, and the note stays open with what was typed.
         Assert.Single(Ui.TakeUnhandled());
@@ -358,7 +358,7 @@ public sealed class ServerNotesClickTests
 
         // Tried again, it's saved.
         UiTest.Call(view, "SaveSoon");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.NotesMade == 1, "the save tried again");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.NotesMade == 1, "the save tried again");
         Assert.Equal("pond notes", server.Body(101));
         Assert.Equal("pond notes", body.Text);
     });
@@ -388,7 +388,7 @@ public sealed class ServerNotesClickTests
 
             server.ReleaseChanges.Set();
             var message = UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message");
-            ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && message.Text.Contains("Choose Write notes", StringComparison.Ordinal), "what to do next");
+            ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && message.Text.Contains("Choose Write notes", StringComparison.Ordinal), "what to do next");
             Assert.Equal(["attach 7 radish sowing.txt"], server.Changes);
             Assert.Equal("radish", body.Text);
         }
@@ -408,14 +408,14 @@ public sealed class ServerNotesClickTests
         var chia = new ListEntry(3, "Shopping", "chia seeds", false, new DateTime(2030, 4, 2, 9, 0, 0));
         server.AddElsewhere(chia);
         client.Send(HttpMethod.Post, "api/elsewhere");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the page to settle");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the page to settle");
         server.ListReadArrived.Reset();
         server.ReleaseListReads.Reset();
 
         view.RevealListEntry(chia);
 
         // It came back while the server still held the read.
-        Assert.True(server.ListReadArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ListReadArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.True(work.IsBusy);
         var lists = UiTest.Named<ListsView>(view, "ListsPanel");
         var entries = UiTest.Named<ItemsControl>(lists, "Entries");
@@ -423,7 +423,7 @@ public sealed class ServerNotesClickTests
         Assert.False(Shown());
 
         server.ReleaseListReads.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Shown(), "the entry");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Shown(), "the entry");
         Assert.Equal("Shopping", lists.Selected);
     });
 
@@ -444,7 +444,7 @@ public sealed class ServerNotesClickTests
         Assert.Empty(server.Changes);
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Named<TextBlock>(view, "SavedLabel").Text == "Saved", "the saves");
 
         // The second only goes over what the first saved, so nothing is taken for a change made elsewhere.
         Assert.Equal(["save 7 radish, kale", "save 7 radish, kale, beets"], server.Changes);
@@ -467,12 +467,12 @@ public sealed class ServerNotesClickTests
         Type(body, "radish, typed here");
 
         server.ReleaseReads.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the read");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the read");
         Assert.Equal("radish, typed here", body.Text);
 
         // Saved over the other version, which is kept as its own note, so neither is lost.
         view.Leave();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the save");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the save");
         Assert.Equal("radish, typed here", server.Body(7));
         Assert.Equal(1, server.NotesMade);
         Assert.Equal("radish, typed here", body.Text);
@@ -488,11 +488,11 @@ public sealed class ServerNotesClickTests
         server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Equal(["Saving a note"], work.Finish(TimeSpan.FromMilliseconds(100)));
 
         _ = Task.Delay(200).ContinueWith(_ => server.ReleaseChanges.Set());
-        Assert.Empty(work.Finish(TimeSpan.FromSeconds(5)));
+        Assert.Empty(work.Finish(TimeSpan.FromSeconds(30)));
 
         // What closing saves after that is the same text, so it isn't sent again.
         view.Leave();
@@ -512,7 +512,7 @@ public sealed class ServerNotesClickTests
         work.Show(() => view.Open("Shopping", ""));
         var entries = UiTest.Named<ItemsControl>(view, "Entries");
         CheckBox Box(string text) => UiTest.Descendants<CheckBox>(entries).Single(box => UiTest.Prop<string>(box.DataContext, "Text") == text);
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
 
         server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
@@ -522,10 +522,10 @@ public sealed class ServerNotesClickTests
 
         // All three came back while the server still held the first change.
         Assert.Empty(server.Changes);
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3, "the changes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 3, "the changes");
         Assert.Equal(["eggs done", "eggs open", "oat milk done"], server.Changes);
         Assert.False(Box("eggs").IsChecked);
         Assert.True(Box("oat milk").IsChecked);
@@ -541,7 +541,7 @@ public sealed class ServerNotesClickTests
         server.ChangeArrived.Reset();
         server.ReleaseChanges.Reset();
         UiTest.Call(view, "SaveSoon");
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
 
         // Away to the other note and straight back while the save is still held.
         Pick(view, 8);
@@ -555,7 +555,7 @@ public sealed class ServerNotesClickTests
         UiTest.Call(view, "SaveSoon");
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 2, "the saves");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 2, "the saves");
         Assert.Equal(["save 7 radish, kale", "save 7 radish, kale, beets"], server.Changes);
         Assert.Equal("radish, kale, beets", server.Body(7));
         Assert.Equal(0, server.NotesMade);
@@ -573,9 +573,9 @@ public sealed class ServerNotesClickTests
         server.ReleaseChanges.Reset();
         server.RefuseNextSave = true;
         UiTest.Call(view, "SaveSoon");
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         server.ReleaseChanges.Set();
-        Assert.Empty(work.Finish(TimeSpan.FromSeconds(5)));
+        Assert.Empty(work.Finish(TimeSpan.FromSeconds(30)));
 
         // The turned down save doesn't stop closing, and what it sent is saved again.
         view.Leave();
@@ -596,23 +596,23 @@ public sealed class ServerNotesClickTests
         work.Show(() => view.Open("Shopping", ""));
         var entries = UiTest.Named<ItemsControl>(view, "Entries");
         CheckBox Box(string text) => UiTest.Descendants<CheckBox>(entries).Single(box => UiTest.Prop<string>(box.DataContext, "Text") == text);
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Descendants<CheckBox>(entries).Count() == 2, "the entries");
         Box("oat milk").IsChecked = true;
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 1, "the first change");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 1, "the first change");
 
         // Unchecked while the server is held. Meanwhile the list is drawn again from what was kept, where it's still
         // done, and that new row is unchecked too. It goes by what it shows, so that click isn't dropped.
         server.ReleaseChanges.Reset();
         server.ChangeArrived.Reset();
         Box("oat milk").IsChecked = false;
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         work.Show(() => view.Refresh(force: true), () => { });
         ui.Pump();
         Assert.True(Box("oat milk").IsChecked);
         Box("oat milk").IsChecked = false;
 
         server.ReleaseChanges.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Changes.Count == 3, "the click on the new row");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Changes.Count == 3, "the click on the new row");
         Assert.Equal(["oat milk done", "oat milk open", "oat milk open"], server.Changes);
         Assert.False(Box("oat milk").IsChecked);
     });

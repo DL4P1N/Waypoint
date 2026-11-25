@@ -32,11 +32,11 @@ public sealed class PageWorkQueueTests
         var client = new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token");
         var work = new PageWork(client);
         work.Show(() => client.GetOr("api/seed-page", ""));
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy, "the page");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the page");
 
         server.BreakReads = true;
         var change = work.Run(() => client.Send(HttpMethod.Post, "api/seed-change"), "Seed change");
-        ServerToDoClickTests.PumpUntil(ui, () => change.IsCompleted && !work.IsBusy, "the change");
+        ServerToDoClickTests.PumpUntil(ui, () => change.IsCompleted && ServerToDoClickTests.Settled(work), "the change");
 
         Assert.True(change.IsCompletedSuccessfully);
         Assert.False(work.ChangesWaiting);

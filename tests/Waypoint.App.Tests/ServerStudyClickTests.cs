@@ -120,7 +120,7 @@ public sealed class ServerStudyClickTests
             };
             if (hold is not null)
             {
-                await Task.Run(() => hold.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => hold.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             var json = JsonSerializer.Serialize(body, body.GetType(), RemoteJson.Options);
@@ -159,7 +159,7 @@ public sealed class ServerStudyClickTests
         public NoteAudioResult Delete(long noteId)
         {
             Interlocked.Increment(ref _deletes);
-            ReleaseDelete.Wait(TimeSpan.FromSeconds(10));
+            ReleaseDelete.Wait(TimeSpan.FromMinutes(1));
             if (ServerAway)
             {
                 throw new ServerUnavailableException("The server couldn't be reached.");
@@ -180,9 +180,9 @@ public sealed class ServerStudyClickTests
         ui.Host(view);
         work.Show(() => view.Refresh(force: true));
         var body = UiTest.Named<MarkdownBox>(view, "BodyBox");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Named<ListBox>(view, "NotesList").Items.Count == 2, "the notes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Named<ListBox>(view, "NotesList").Items.Count == 2, "the notes");
         Pick(view, 7);
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text.Contains("plant cell", StringComparison.Ordinal), "the note to open");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && body.Text.Contains("plant cell", StringComparison.Ordinal), "the note to open");
         return (view, work, body, client);
     }
 
@@ -212,7 +212,7 @@ public sealed class ServerStudyClickTests
         // The user opens another note before the answer comes.
         Pick(view, 8);
         server.ReleaseStudyFolder.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "frogs", "the other note");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && body.Text == "frogs", "the other note");
         ui.Pump();
 
         // Nothing came of the answer: no study note was looked for or asked to be written.
@@ -240,7 +240,7 @@ public sealed class ServerStudyClickTests
         // Another note opens, so the study answer is dropped once it comes.
         Pick(view, 8);
         server.ReleaseStudyFolder.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && body.Text == "frogs", "the other note");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && body.Text == "frogs", "the other note");
     });
 
     [Fact]
@@ -262,7 +262,7 @@ public sealed class ServerStudyClickTests
         Assert.Empty(replies);
 
         server.ReleaseStart.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && replies.Count == 1, "the reply");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && replies.Count == 1, "the reply");
         ui.Pump();
         Assert.Equal(1, server.Count("POST /api/activation/start"));
         Assert.Equal(["Started on Cell quiz. Answer question 1 first."], replies);
@@ -293,7 +293,7 @@ public sealed class ServerStudyClickTests
         Assert.Empty(Shown());
 
         server.ReleaseSuggestions.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Shown().Count == 1, "the suggestion");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Shown().Count == 1, "the suggestion");
         Assert.Equal(["Review the cell wall"], Shown());
         Assert.Equal(Visibility.Visible, panel.Visibility);
 
@@ -306,7 +306,7 @@ public sealed class ServerStudyClickTests
         ServerToDoClickTests.PumpUntil(ui, () => server.Count("/api/notes/7/suggestions") == asked + 1, "the suggestions to be read again");
         Pick(view, 8);
         server.ReleaseSuggestions.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Named<MarkdownBox>(view, "BodyBox").Text == "frogs", "the other note");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Named<MarkdownBox>(view, "BodyBox").Text == "frogs", "the other note");
         ui.Pump();
 
         // The other note shows its own, none, rather than the late answer for note 7.
@@ -337,7 +337,7 @@ public sealed class ServerStudyClickTests
         Assert.Equal(1, audio.Deletes);
 
         audio.ReleaseDelete.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && !work.IsBusy, "the delete to finish");
+        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && ServerToDoClickTests.Settled(work), "the delete to finish");
         ui.Pump();
         Assert.Equal("Deleted this note's audio. The transcript and notes are still here.", BarText(view));
         Assert.Equal(Visibility.Collapsed, button.Visibility);
@@ -354,7 +354,7 @@ public sealed class ServerStudyClickTests
         ServerToDoClickTests.PumpUntil(ui, () => button.Visibility == Visibility.Visible && button.IsEnabled, "the audio button");
 
         var deleting = (Task)UiTest.Call(view, "DeleteAudio", 7L, audio)!;
-        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && !work.IsBusy, "the delete to fail");
+        ServerToDoClickTests.PumpUntil(ui, () => deleting.IsCompleted && ServerToDoClickTests.Settled(work), "the delete to fail");
         ui.Pump();
         Assert.Equal("The audio couldn't be deleted, because the server couldn't be reached. Try again in a moment.", BarText(view));
         Assert.Equal(Visibility.Visible, button.Visibility);

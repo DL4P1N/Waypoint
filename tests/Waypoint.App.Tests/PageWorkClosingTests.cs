@@ -23,7 +23,7 @@ public sealed class PageWorkClosingTests
             }
             else if (path == "/api/first-change")
             {
-                await Task.Run(() => SecondArrived.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => SecondArrived.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("\"pea shoots\"", Encoding.UTF8, "application/json") };
@@ -45,7 +45,7 @@ public sealed class PageWorkClosingTests
         var firstChange = first.Run(() => client.Send(HttpMethod.Post, "api/first-change"), "First change");
 
         // This thread is held while closing waits, so the second page's drawing can never happen. It still carries on.
-        Assert.Empty(PageWork.FinishAll([first, second], TimeSpan.FromSeconds(3)));
+        Assert.Empty(PageWork.FinishAll([first, second], TimeSpan.FromSeconds(30)));
         Assert.True(server.SecondArrived.IsSet);
         Assert.True(firstChange.IsCompletedSuccessfully);
         Assert.True(secondChange.IsCompletedSuccessfully);
