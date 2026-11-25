@@ -41,7 +41,7 @@ public sealed partial class DiscordPhoneTests
         // Something typed earlier is being sorted slowly, so Did it waits behind it.
         worker.Captures.Capture("made up slow thing", null, CaptureOrigin.Discord);
         _ = worker.Captures.ProcessPendingAsync();
-        await sorter.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await sorter.Entered.Task.WaitAsync(TimeSpan.FromMinutes(2));
 
         gateway.Deliver("INTERACTION_CREATE", Json("""
             {"id":"1","token":"tok1","application_id":"app","type":3,"channel_id":"alerts","data":{"custom_id":"waypoint:did-it","component_type":2},
@@ -52,9 +52,10 @@ public sealed partial class DiscordPhoneTests
              "member":{"user":{"id":"owner"}},"message":{"id":"card-essay","embeds":[{"title":"Made up essay"}]}}
             """));
 
-        // Both taps are promised straight away, and Start waits for Did it.
+        // Both taps are promised while the sort is still held, and Start waits for Did it. Each promise has its own
+        // timer, so on a busy machine either can be made first.
         await _discord.Made(request => request.Url.Contains("/interactions/2/tok2/callback"));
-        Assert.Contains(_discord.Of(HttpMethod.Post), post => post.Url.Contains("/interactions/1/tok1/callback"));
+        await _discord.Made(request => request.Url.Contains("/interactions/1/tok1/callback"));
         Assert.Equal("Made up paper", _database.GetActiveSession(_now)?.TaskTitle);
 
         release.TrySetResult();

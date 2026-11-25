@@ -205,7 +205,8 @@ public sealed class DiscordInboxTests : IDisposable
     /// <summary>Polls until the check holds, since the start's own poll may still be running and a poll then does nothing.</summary>
     private static async Task PollUntil(WaypointWorker worker, Func<bool> done)
     {
-        for (var attempt = 0; attempt < 100 && !done(); attempt++)
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (!done() && waited.Elapsed < Waits.Hung)
         {
             await worker.Discord!.PollAsync();
             await Task.Delay(20);

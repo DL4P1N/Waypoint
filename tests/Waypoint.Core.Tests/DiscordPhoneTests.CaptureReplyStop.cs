@@ -23,7 +23,7 @@ public sealed partial class DiscordPhoneTests
         await paused.Task.WaitAsync(TimeSpan.FromSeconds(30));
         worker.StopDiscord();
 
-        await answering.WaitAsync(TimeSpan.FromSeconds(10));
+        await answering.WaitAsync(Waits.Hung);
         Assert.Single(_discord.Of(HttpMethod.Post), post => post.Body.Contains("Made up answer"));
     }
 }

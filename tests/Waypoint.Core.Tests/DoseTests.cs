@@ -354,14 +354,15 @@ public sealed class DoseTests : IDisposable
 
         worker.CheckAlerts();
         (string Id, string Body) card = default;
-        for (var waited = 0; waited < 100 && card.Id is null; waited++)
+        await Waits.Until(() =>
         {
-            await Task.Delay(50);
             lock (discord.Posts)
             {
                 card = discord.Posts.FirstOrDefault(post => post.Body.Contains("Took it"));
             }
-        }
+
+            return card.Id is not null;
+        }, every: 50);
 
         Assert.NotNull(card.Id);
         var took = card.Body.IndexOf("\"Took it\"", StringComparison.Ordinal);

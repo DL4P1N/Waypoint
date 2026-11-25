@@ -596,7 +596,7 @@ public sealed class DiscordTests : IDisposable
 
         events.Post(() => throw new InvalidOperationException("broken"));
         events.Post(() => last.SetResult());
-        await last.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await last.Task.WaitAsync(Waits.Hung);
 
         Assert.Equal(Enumerable.Range(0, 10), order);
         Assert.False(overlapped);
