@@ -9,10 +9,14 @@ namespace Waypoint.Core.Notes;
 /// </summary>
 public static class ClaudeCliProcess
 {
-    public static async Task<string> RunAsync(ProcessStartInfo startInfo, string input, TimeSpan timeout, CancellationToken cancellationToken)
+    public static Task<string> RunAsync(ProcessStartInfo startInfo, string input, TimeSpan timeout, CancellationToken cancellationToken) =>
+        RunAsync(startInfo, input, timeout, TimeProvider.System, cancellationToken);
+
+    /// <param name="time">Where <paramref name="timeout"/> is measured, so a test can say when it runs out.</param>
+    internal static async Task<string> RunAsync(ProcessStartInfo startInfo, string input, TimeSpan timeout, TimeProvider time, CancellationToken cancellationToken)
     {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        limit.CancelAfter(timeout);
+        using var timer = new CancellationTokenSource(timeout, time);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token);
 
         Process? process = null;
         Task<string>? output = null;
