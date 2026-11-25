@@ -795,6 +795,9 @@ public sealed partial class MarkdownBox : RichTextBox
         return text.ToString();
     }
 
+    /// <summary>How many times a block's Markdown has been written again, so a test can see typing doesn't rewrite the whole note.</summary>
+    internal long BlocksWritten { get; private set; }
+
     /// <summary>A block's Markdown, written again only if it changed since it was last written.</summary>
     private string MarkdownOf(Block block)
     {
@@ -804,6 +807,7 @@ public sealed partial class MarkdownBox : RichTextBox
             return info.Markdown;
         }
 
+        BlocksWritten++;
         var para = TextPara(block);
         var written = MarkdownLines.Write(info, para is null ? [] : Segments(para), para is null ? "" : CodeText(para), level => ParentItem(block, level));
         info.Markdown = info.Source is not null && written == info.Fresh ? info.Source : written;

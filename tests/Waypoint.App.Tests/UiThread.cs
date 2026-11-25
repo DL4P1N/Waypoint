@@ -293,7 +293,7 @@ internal sealed class UiTest : IDisposable
         var closed = false;
         menu.Closed += (_, _) => closed = true;
         menu.IsOpen = false;
-        var until = DateTime.UtcNow.AddSeconds(3);
+        var until = DateTime.UtcNow.AddSeconds(10);
         while (!closed && DateTime.UtcNow < until)
         {
             var frame = new DispatcherFrame();

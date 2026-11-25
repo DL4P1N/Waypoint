@@ -34,7 +34,7 @@ public sealed class ServerAskCardClickTests
             if (request.Method == HttpMethod.Post && path is "/api/session/cancel" or "/api/after-this/take")
             {
                 ChangeArrived.Set();
-                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     if (path == "/api/session/cancel")
@@ -77,7 +77,7 @@ public sealed class ServerAskCardClickTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Arrived.Set();
-            await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+            await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]", Encoding.UTF8, "application/json") };
         }
     }
@@ -98,7 +98,7 @@ public sealed class ServerAskCardClickTests
         view.Search();
 
         // It came back while the server still held the search.
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         ui.Pump();
         Assert.NotEqual("Nothing on any page matches \"zebra\".", hint.Text);
 
@@ -126,7 +126,7 @@ public sealed class ServerAskCardClickTests
         {
             // Opening takes the held item. It came back while the server still held that.
             window.ShowList();
-            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
             ui.Pump();
             var card = UiTest.Named<Border>(window, "AfterThisCard");
             Assert.Equal(Visibility.Collapsed, card.Visibility);
@@ -145,7 +145,7 @@ public sealed class ServerAskCardClickTests
             server.ChangeArrived.Reset();
             server.ReleaseChanges.Reset();
             end.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, end));
-            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
             ui.Pump();
             Assert.Equal(["take"], server.Changes);
             Assert.False(end.IsEnabled);

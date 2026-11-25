@@ -24,7 +24,7 @@ public sealed class ServerFindClickTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Arrived.Set();
-            await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+            await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
             object body = request.RequestUri!.AbsolutePath == "/api/lists"
                 ? new List<ListOverview> { new("Shopping", [new ListEntry(5, "Shopping", "zebra cakes", false, new DateTime(2030, 1, 1))]) }
                 : new List<object>();
@@ -62,7 +62,7 @@ public sealed class ServerFindClickTests
         view.Chosen += thing => chosen = thing;
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Null(chosen);
         Answer(ui, view, server);
 
@@ -79,7 +79,7 @@ public sealed class ServerFindClickTests
         view.Closed += () => closed = true;
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         ui.Press(box, Key.Escape);
         Assert.True(closed);
         Answer(ui, view, server);
@@ -95,7 +95,7 @@ public sealed class ServerFindClickTests
         view.Chosen += thing => chosen = thing;
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         UiTest.Descendants<Button>(view).First(button => button.Content as string == "Close")
             .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         Answer(ui, view, server);
@@ -111,7 +111,7 @@ public sealed class ServerFindClickTests
         view.Chosen += thing => chosen = thing;
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         view.Visibility = Visibility.Collapsed;
         Answer(ui, view, server);
 
@@ -126,7 +126,7 @@ public sealed class ServerFindClickTests
         view.Chosen += thing => chosen = thing;
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         view.Leave();
         Answer(ui, view, server);
 
@@ -174,7 +174,7 @@ public sealed class ServerFindClickTests
         var results = UiTest.Named<ListBox>(view, "Results");
 
         view.Search();
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.NotEqual(FindView.SearchingHint, hint.Text);
         Assert.True(UiTest.Field<System.Windows.Threading.DispatcherTimer>(view, "_searching")!.IsEnabled);
 
@@ -196,7 +196,7 @@ public sealed class ServerFindClickTests
         var hint = UiTest.Named<TextBlock>(view, "Hint");
 
         ui.Press(box, Key.Enter);
-        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.Arrived.Wait(TimeSpan.FromSeconds(30)));
         UiTest.Call(view, "OnSearchingTick");
         Assert.Equal(FindView.SearchingHint, hint.Text);
         view.Leave();

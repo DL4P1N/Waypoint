@@ -252,21 +252,70 @@ public sealed partial class MarkdownBoxTests
     [Fact]
     public void A_big_transcript_note_stays_quick_to_edit() => Ui.Run(ui =>
     {
-        var lines = Enumerable.Range(0, 10_000).Select(i => $"[{i / 3600:00}:{i / 60 % 60:00}:{i % 60:00}] This is line {i} of the lecture, about **cells** and membranes.");
-        var box = Open(ui, string.Join("\r\n", lines));
-        AtEnd(box);
+        static string Transcript(int count) => string.Join("\r\n", Enumerable.Range(0, count).Select(i => $"[{i / 3600:00}:{i / 60 % 60:00}:{i % 60:00}] This is line {i} of the lecture, about **cells** and membranes."));
+        var small = new MarkdownBox();
+        var big = new MarkdownBox();
+        ui.Host(new System.Windows.Controls.Grid { Children = { small, big } });
+        small.Text = Transcript(100);
+        big.Text = Transcript(10_000);
+        ui.Pump();
+        AtEnd(small);
+        AtEnd(big);
         ui.Pump();
 
-        // The first few keys pay for laying the note out. Reading the whole note again for each key would cost over a second.
-        Type(box, new string('x', 10));
-        var watch = Stopwatch.StartNew();
-        const int typed = 40;
-        Type(box, new string('x', typed));
-        var perKey = watch.Elapsed.TotalMilliseconds / typed;
+        // The first few keys pay for laying the notes out.
+        Type(small, new string('x', 10));
+        Type(big, new string('x', 10));
 
-        Assert.EndsWith("xxx", Md(box), StringComparison.Ordinal);
-        Assert.True(perKey < 60, $"Typing took {perKey:0.0} ms a key on a 10,000 line note");
+        // Keys go to the two notes in turn, so whatever else the PC is doing weighs on both alike. What's compared is
+        // this thread's own processor time, which doesn't count the time it waits while other programs run.
+        const int typed = 41;
+        var writtenBefore = big.BlocksWritten;
+        var smallCost = new List<ulong>();
+        var bigCost = new List<ulong>();
+        var bigTime = new List<double>();
+        for (var i = 0; i < typed; i++)
+        {
+            var start = ThreadCycles();
+            Type(small, "x");
+            smallCost.Add(ThreadCycles() - start);
+
+            var watch = Stopwatch.StartNew();
+            start = ThreadCycles();
+            Type(big, "x");
+            bigCost.Add(ThreadCycles() - start);
+            bigTime.Add(watch.Elapsed.TotalMilliseconds);
+        }
+
+        static T Median<T>(List<T> values) => values.Order().ElementAt(values.Count / 2);
+        var written = (big.BlocksWritten - writtenBefore) / (double)typed;
+        var ratio = Median(bigCost) / (double)Math.Max(1UL, Median(smallCost));
+        Assert.EndsWith(new string('x', typed + 10), Md(big), StringComparison.Ordinal);
+
+        // A key writes again only the line it's on. Reading the whole note again for each key would write all 10,000.
+        Assert.True(written <= 2, $"Typing wrote {written:0.0} lines a key on a 10,000 line note");
+
+        // Joining the lines makes a key cost a little more on a long note, about 7 to 18 times the 100 line note's
+        // here. Work that grows faster with the note, like going over every line for each key, costs 50 times or more.
+        Assert.True(ratio < 30, $"A key cost {ratio:0.0} times as much on a 10,000 line note as on a 100 line one");
+
+        // Only a loose check that nothing is badly slow, wide enough for a PC busy with other work.
+        Assert.True(Median(bigTime) < 1_000, $"Typing took {Median(bigTime):0.0} ms a key on a 10,000 line note");
     });
+
+    /// <summary>The processor cycles this thread has used, which don't count time spent waiting while other programs run.</summary>
+    private static ulong ThreadCycles()
+    {
+        Assert.True(QueryThreadCycleTime(GetCurrentThread(), out var cycles));
+        return cycles;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool QueryThreadCycleTime(nint thread, out ulong cycles);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern nint GetCurrentThread();
 
     [Fact]
     public void Ctrl_K_makes_a_link_of_the_selection_and_only_from_a_safe_address() => Ui.Run(ui =>

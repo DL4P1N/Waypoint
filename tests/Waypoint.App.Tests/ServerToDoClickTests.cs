@@ -73,7 +73,7 @@ public sealed class ServerToDoClickTests
             {
                 var sent = JsonSerializer.Deserialize<DoneRequest>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                 ChangeArrived.Set();
-                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     Changes.Add($"{sent.Item.Title} {(sent.Done ? "done" : "open")}");
@@ -86,7 +86,7 @@ public sealed class ServerToDoClickTests
             {
                 var sent = JsonSerializer.Deserialize<ItemChange>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                 ChangeArrived.Set();
-                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 string title;
                 lock (_gate)
                 {
@@ -101,7 +101,7 @@ public sealed class ServerToDoClickTests
             {
                 var sent = await request.Content!.ReadAsStringAsync(cancellationToken);
                 ChangeArrived.Set();
-                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseChanges.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     if (request.Method == HttpMethod.Post)
@@ -136,7 +136,7 @@ public sealed class ServerToDoClickTests
             {
                 if (path == "/api/items/open")
                 {
-                    await Task.Run(() => ReleaseReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                    await Task.Run(() => ReleaseReads.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 }
 
                 var done = path == "/api/items/finished";
@@ -172,9 +172,17 @@ public sealed class ServerToDoClickTests
         };
     }
 
+    /// <summary>
+    /// Whether the page's work is all done and handed back. A change counts as done just before what awaits it is
+    /// queued on the window's thread, so on a busy PC there can be a moment with nothing busy and that still to run.
+    /// Once the page's queue has finished it's queued, and the pump at the end of <see cref="PumpUntil"/> runs it.
+    /// </summary>
+    internal static bool Settled(PageWork work) => !work.IsBusy && UiTest.Field<Task>(work, "_tail")!.IsCompleted;
+
+    /// <summary>Runs the window's thread until <paramref name="done"/>, however long a busy PC takes, up to half a minute.</summary>
     internal static void PumpUntil(UiTest ui, Func<bool> done, string what)
     {
-        var until = DateTime.UtcNow.AddSeconds(10);
+        var until = DateTime.UtcNow.AddSeconds(30);
         while (!done() && DateTime.UtcNow < until)
         {
             var frame = new DispatcherFrame();
@@ -203,7 +211,7 @@ public sealed class ServerToDoClickTests
         view.Connect(new ServerToDoData(client), () => { }, _ => { }, _ => { }, () => { });
         ui.Host(view);
         work.Show(() => view.Refresh(null));
-        PumpUntil(ui, () => !work.IsBusy && Rows(view).Count == 2, "the rows");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Rows(view).Count == 2, "the rows");
         return (view, work);
     }
 
@@ -227,12 +235,12 @@ public sealed class ServerToDoClickTests
 
         // It came back while the server still held the change.
         Assert.Empty(server.Changes);
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.True(work.ChangesWaiting);
         Assert.True(Box(view, "Email advisor").IsChecked);
 
         server.ReleaseChanges.Set();
-        PumpUntil(ui, () => !work.IsBusy, "the change");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the change");
         Assert.Equal(["Email advisor done"], server.Changes);
         Assert.True(Box(view, "Email advisor").IsChecked);
         Assert.False(Box(view, "Repot the basil").IsChecked);
@@ -248,11 +256,11 @@ public sealed class ServerToDoClickTests
         server.ReleaseChanges.Reset();
 
         Assert.True(ui.Press(box, System.Windows.Input.Key.Delete));
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.True(ui.Press(box, System.Windows.Input.Key.Delete));
 
         server.ReleaseChanges.Set();
-        PumpUntil(ui, () => !work.IsBusy, "the delete");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the delete");
         Assert.Equal(["Email advisor Cancel"], server.Changes);
         Assert.Equal("Deleted Email advisor", UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "Bar"), "Message").Text);
     });
@@ -265,7 +273,7 @@ public sealed class ServerToDoClickTests
         server.Away = true;
 
         Click(Box(view, "Email advisor"));
-        PumpUntil(ui, () => !work.IsBusy, "the change");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the change");
 
         Assert.False(server.IsDone("Email advisor"));
         Assert.False(Box(view, "Email advisor").IsChecked);
@@ -284,7 +292,7 @@ public sealed class ServerToDoClickTests
 
         // A second press while the first is on its way keeps nothing more.
         link.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent, link));
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Empty(server.Feedback);
         Assert.True(work.ChangesWaiting);
         Assert.False(link.IsVisible);
@@ -292,7 +300,7 @@ public sealed class ServerToDoClickTests
 
         server.ReleaseChanges.Set();
         var note = UiTest.Descendants<TextBox>(prompt).Single();
-        PumpUntil(ui, () => !work.IsBusy && note.IsVisible, "the line for a note");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && note.IsVisible, "the line for a note");
         Assert.Equal([$"kept {Feedback.Suggestion}"], server.Feedback);
 
         server.ChangeArrived.Reset();
@@ -302,12 +310,12 @@ public sealed class ServerToDoClickTests
         add.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent, add));
 
         // It came back while the server still held the note, and the line can't be sent again meanwhile.
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Single(server.Feedback);
         Assert.False(note.IsVisible);
 
         server.ReleaseChanges.Set();
-        PumpUntil(ui, () => !work.IsBusy && server.Feedback.Count == 2, "the note");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Feedback.Count == 2, "the note");
         Assert.Equal([$"kept {Feedback.Suggestion}", "/api/feedback/1/note Already emailed them"], server.Feedback);
         Assert.Contains(UiTest.Descendants<TextBlock>(prompt), block => block.IsVisible && block.Text.StartsWith("Thanks.", StringComparison.Ordinal));
     });
@@ -324,7 +332,7 @@ public sealed class ServerToDoClickTests
         Click(Box(view, "Email advisor"));
         Click(Box(view, "Repot the basil"));
         server.ReleaseChanges.Set();
-        PumpUntil(ui, () => !work.IsBusy, "the changes");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work), "the changes");
 
         Assert.Equal(["Email advisor done", "Email advisor open", "Repot the basil done"], server.Changes);
         Assert.False(server.IsDone("Email advisor"));
@@ -357,7 +365,7 @@ public sealed class ServerToDoClickTests
         Assert.True(Box(view, "Email advisor").IsChecked);
 
         server.ReleaseChanges.Set();
-        PumpUntil(ui, () => !work.IsBusy && Rows(view).Count == 3, "the change");
+        PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Rows(view).Count == 3, "the change");
         Assert.True(Box(view, "Email advisor").IsChecked);
         Assert.Equal(["Email advisor done"], server.Changes);
     });
@@ -369,12 +377,12 @@ public sealed class ServerToDoClickTests
         var (view, work) = Open(ui, server);
         server.ReleaseChanges.Reset();
         Click(Box(view, "Email advisor"));
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
 
         Assert.Equal(["OnItemChecked"], work.Finish(TimeSpan.FromMilliseconds(100)));
 
         _ = Task.Delay(200).ContinueWith(_ => server.ReleaseChanges.Set());
-        Assert.Empty(work.Finish(TimeSpan.FromSeconds(5)));
+        Assert.Empty(work.Finish(TimeSpan.FromSeconds(30)));
         Assert.Equal(["Email advisor done"], server.Changes);
 
         // Once closing, a change is made straight away, so it can't be left behind.

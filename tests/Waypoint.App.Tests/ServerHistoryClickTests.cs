@@ -38,7 +38,7 @@ public sealed class ServerHistoryClickTests
             {
                 var sent = JsonSerializer.Deserialize<HistoryEntryRequest>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                 ChangeArrived.Set();
-                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     Reopened.Add(sent.Entry.Title);
@@ -77,7 +77,7 @@ public sealed class ServerHistoryClickTests
         work.Show(view.Refresh);
         var rows = UiTest.Named<ItemsControl>(view, "Entries");
         List<CheckBox> Boxes() => UiTest.Descendants<CheckBox>(rows).ToList();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Boxes().Count == 2, "the rows");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Boxes().Count == 2, "the rows");
 
         server.Release.Reset();
         Boxes()[0].IsChecked = false;
@@ -85,10 +85,10 @@ public sealed class ServerHistoryClickTests
 
         // Both clicks came back while the server still held the first change.
         Assert.Empty(server.Reopened);
-        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ChangeArrived.Wait(TimeSpan.FromSeconds(30)));
 
         server.Release.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && Boxes().Count == 0, "the changes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && Boxes().Count == 0, "the changes");
         Assert.Equal(["Email advisor", "Repot the basil"], server.Reopened);
         Assert.Equal(2, changed);
     });

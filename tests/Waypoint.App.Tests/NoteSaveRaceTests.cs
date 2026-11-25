@@ -40,15 +40,18 @@ public sealed class NoteSaveRaceTests
         return UiTest.Named<MarkdownBox>(view, "BodyBox");
     }
 
-    private static void WaitForSaved(UiTest ui, NotesView view)
+    /// <summary>
+    /// Waits for the save once typing stops, then for the reads the page makes again after it, however long a busy
+    /// PC takes, so none of them is still on its way when a test goes on to count what's asked of the server next.
+    /// </summary>
+    private static void WaitForSaved(UiTest ui, NotesView view, NotesServer server)
     {
         var label = UiTest.Named<TextBlock>(view, "SavedLabel");
-        for (var tries = 0; tries < 100 && label.Text != "Saved"; tries++)
-        {
-            Thread.Sleep(20);
-            ui.Pump();
-        }
+        ServerToDoClickTests.PumpUntil(ui, () => label.Text == "Saved", "the note to be saved");
 
+        // Asked while the page's own reads after the save are on their way, this is the same round of them.
+        var reading = server.Client!.RefreshReadsAsync();
+        ServerToDoClickTests.PumpUntil(ui, () => reading.IsCompleted, "the reads after the save");
         Assert.Equal("Saved", label.Text);
     }
 
@@ -145,6 +148,9 @@ public sealed class NoteSaveRaceTests
         private readonly object _gate = new();
 
         public bool Old { get; init; }
+
+        /// <summary>The page's client for this server, set as the page is opened.</summary>
+        public ServerClient? Client { get; set; }
 
         public string Body { get; set; } = "radish";
 
@@ -261,7 +267,8 @@ public sealed class NoteSaveRaceTests
     private static (NotesView View, MarkdownBox Body) Open(UiTest ui, NotesServer server)
     {
         var view = new NotesView();
-        view.Connect(new ServerNotesData(new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token")));
+        server.Client = new ServerClient(new HttpClient(server) { BaseAddress = new Uri("http://server/") }, "token");
+        view.Connect(new ServerNotesData(server.Client));
         return (view, Open(ui, view, NoteId));
     }
 
@@ -274,7 +281,7 @@ public sealed class NoteSaveRaceTests
         Type(body, "radish, kale");
         server.Reply = "beets too";
         UiTest.Call(view, "SaveSoon");
-        WaitForSaved(ui, view);
+        WaitForSaved(ui, view, server);
 
         Assert.Equal("radish, kale", server.Body);
         var kept = Assert.Single(server.Made);
@@ -317,7 +324,7 @@ public sealed class NoteSaveRaceTests
         Type(body, "radish, kale");
         server.KeepsReplying = true;
         UiTest.Call(view, "SaveSoon");
-        WaitForSaved(ui, view);
+        WaitForSaved(ui, view, server);
         server.KeepsReplying = false;
 
         // The note keeps every reply, each version seen was kept, and what was typed is a note of its own.
@@ -349,7 +356,7 @@ public sealed class NoteSaveRaceTests
         Type(body, "radish, kale, leeks");
         server.Requests.Clear();
         UiTest.Call(view, "SaveSoon");
-        WaitForSaved(ui, view);
+        WaitForSaved(ui, view, server);
         Assert.Equal("radish, kale, leeks", server.Body);
         Assert.Single(server.Made);
         Assert.Equal([$"GET /api/notes/{NoteId}", $"PUT /api/notes/{NoteId}"], server.UpToSaved(1));

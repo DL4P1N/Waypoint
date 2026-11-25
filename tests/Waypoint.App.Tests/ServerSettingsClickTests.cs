@@ -49,18 +49,47 @@ public sealed class ServerSettingsClickTests
         /// <summary>While set, each read of the classes waits until <see cref="LetClassReadsGo"/>.</summary>
         public bool HoldClassReads { get; set; }
 
-        public int ClassReadsWaiting => Volatile.Read(ref _classReadsWaiting);
+        /// <summary>
+        /// The reads of the classes held and not let go yet. Counted from what was let go rather than from the reads
+        /// waking up, so a read slow to wake on a busy PC is never let go twice, which would let the next one through.
+        /// </summary>
+        public int ClassReadsWaiting
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _classReadsHeld - _classReadsLetGo;
+                }
+            }
+        }
 
-        private int _classReadsWaiting;
+        private int _classReadsHeld;
+
+        private int _classReadsLetGo;
 
         private readonly SemaphoreSlim _classReads = new(0);
 
-        public void LetOneClassReadGo() => _classReads.Release();
+        public void LetOneClassReadGo()
+        {
+            lock (_gate)
+            {
+                if (_classReadsHeld > _classReadsLetGo)
+                {
+                    _classReadsLetGo++;
+                    _classReads.Release();
+                }
+            }
+        }
 
         public void LetClassReadsGo()
         {
-            HoldClassReads = false;
-            _classReads.Release(100);
+            lock (_gate)
+            {
+                HoldClassReads = false;
+                _classReadsLetGo = _classReadsHeld;
+                _classReads.Release(100);
+            }
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -72,7 +101,7 @@ public sealed class ServerSettingsClickTests
                 {
                     var sent = JsonSerializer.Deserialize<ClassesForm>(await request.Content!.ReadAsStringAsync(cancellationToken), RemoteJson.Options)!;
                     SaveArrived.Set();
-                    await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                    await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                     lock (_gate)
                     {
                         _classes = sent;
@@ -82,11 +111,19 @@ public sealed class ServerSettingsClickTests
                     return Json(new TextValue("Saved. Waypoint uses these classes straight away."));
                 }
 
-                if (HoldClassReads)
+                var held = false;
+                lock (_gate)
                 {
-                    Interlocked.Increment(ref _classReadsWaiting);
-                    await _classReads.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-                    Interlocked.Decrement(ref _classReadsWaiting);
+                    if (HoldClassReads)
+                    {
+                        _classReadsHeld++;
+                        held = true;
+                    }
+                }
+
+                if (held)
+                {
+                    await _classReads.WaitAsync(TimeSpan.FromMinutes(1), cancellationToken);
                 }
 
                 lock (_gate)
@@ -109,7 +146,7 @@ public sealed class ServerSettingsClickTests
                 }
 
                 DiscordReadArrived.Set();
-                await Task.Run(() => ReleaseDiscordReads.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => ReleaseDiscordReads.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     return Json(new DiscordForm("123", null, null, null, _hasToken));
@@ -121,7 +158,7 @@ public sealed class ServerSettingsClickTests
                 if (request.Method == HttpMethod.Delete)
                 {
                     SaveArrived.Set();
-                    await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                    await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                     lock (_gate)
                     {
                         Saves.Add($"clear {_feedback.Count}");
@@ -141,7 +178,7 @@ public sealed class ServerSettingsClickTests
             {
                 var sent = await request.Content!.ReadAsStringAsync(cancellationToken);
                 SaveArrived.Set();
-                await Task.Run(() => Release.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => Release.Wait(TimeSpan.FromMinutes(1)), cancellationToken);
                 lock (_gate)
                 {
                     if (path == "/api/settings/rate")
@@ -188,7 +225,7 @@ public sealed class ServerSettingsClickTests
         view.LoadSoon();
         var rate = UiTest.Named<TextBox>(view, "HourlyRate");
         var commute = UiTest.Named<TextBox>(view, "Commute");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && rate.Text == "20.00" && commute.Text == "15", "the settings");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && rate.Text == "20.00" && commute.Text == "15", "the settings");
 
         server.Release.Reset();
         rate.Text = "21.50";
@@ -198,10 +235,10 @@ public sealed class ServerSettingsClickTests
 
         // Both came back while the server still held the first save.
         Assert.Empty(server.Saves);
-        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(30)));
 
         server.Release.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Saves.Count == 2, "the saves");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Saves.Count == 2, "the saves");
         Assert.Equal(["rate 21.50", "commute 25"], server.Saves);
         Assert.Equal("21.50", rate.Text);
         Assert.Equal("25", commute.Text);
@@ -215,7 +252,7 @@ public sealed class ServerSettingsClickTests
         view.Connect(new ServerSettingsData(client), ui.Database, null, new BedtimeSettings(), () => [], () => { });
         ui.Host(view);
         view.LoadSoon();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && UiTest.Named<ItemsControl>(view, "FeedbackRows").Items.Count == 2, "the settings");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && UiTest.Named<ItemsControl>(view, "FeedbackRows").Items.Count == 2, "the settings");
         return (view, work);
     }
 
@@ -240,7 +277,7 @@ public sealed class ServerSettingsClickTests
         Assert.Equal(Visibility.Collapsed, note.Visibility);
 
         server.ReleaseDiscordReads.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && note.Visibility == Visibility.Visible, "the token note");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && note.Visibility == Visibility.Visible, "the token note");
         Assert.Equal("", UiTest.Named<PasswordBox>(view, "DiscordToken").Password);
     });
 
@@ -256,14 +293,14 @@ public sealed class ServerSettingsClickTests
         UiTest.Call(view, "OnFeedbackCleared", view, new RoutedEventArgs());
 
         // It came back while the server still held the clear.
-        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Empty(server.Saves);
         Assert.True(work.ChangesWaiting);
         Assert.False(clear.IsEnabled);
 
         server.Release.Set();
         var message = UiTest.Named<TextBlock>(UiTest.Named<UndoBar>(view, "FeedbackBar"), "Message");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && message.Text == "Cleared 2 entries.", "the clear");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && message.Text == "Cleared 2 entries.", "the clear");
         Assert.Equal(["clear 2"], server.Saves);
         Assert.True(clear.IsEnabled);
         Assert.Empty(UiTest.Named<ItemsControl>(view, "FeedbackRows").Items);
@@ -286,13 +323,13 @@ public sealed class ServerSettingsClickTests
         var server = new SettingsServer();
         var (view, work) = Open(ui, server);
         view.ShowSection("classes");
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && ClassLines(view).Count == 3, "the classes");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && ClassLines(view).Count == 3, "the classes");
 
         // The first removal is held by the server, and the list shows it gone straight away.
         server.Release.Reset();
         server.SaveArrived.Reset();
         RemoveClass(ui, view, "Art 101");
-        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(30)));
         Assert.Equal(["Bio 102", "Chem 103"], ClassLines(view));
 
         // Once it's saved, the read of the classes after it is held too. Reads made as part of the save itself go on.
@@ -316,12 +353,12 @@ public sealed class ServerSettingsClickTests
 
         // The read from before the second removal comes back, and doesn't bring Bio 102 back.
         server.LetClassReadsGo();
-        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(server.SaveArrived.Wait(TimeSpan.FromSeconds(30)));
         ui.Pump();
         Assert.Equal(["Chem 103"], ClassLines(view));
 
         server.Release.Set();
-        ServerToDoClickTests.PumpUntil(ui, () => !work.IsBusy && server.Saves.Count == 2, "the removals");
+        ServerToDoClickTests.PumpUntil(ui, () => ServerToDoClickTests.Settled(work) && server.Saves.Count == 2, "the removals");
         Assert.Equal(["classes Bio 102, Chem 103", "classes Chem 103"], server.Saves);
         Assert.Equal(["Chem 103"], ClassLines(view));
     });
