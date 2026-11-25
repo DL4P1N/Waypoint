@@ -135,7 +135,39 @@ public sealed partial class WaypointWorker
     private void ViewsChanged()
     {
         _viewsDirty = true;
-        _ = Task.Run(RefreshDiscordViewsAsync);
+        var round = Task.Run(RefreshDiscordViewsAsync);
+        lock (_changedRounds)
+        {
+            _changedRounds.RemoveAll(done => done.IsCompleted);
+            _changedRounds.Add(round);
+        }
+    }
+
+    // The rounds a change set going, kept only until they end, so a test can wait for them.
+    private readonly List<Task> _changedRounds = [];
+
+    /// <summary>
+    /// Finishes once every round a change set going, with the round of posts that follows it, is over. For tests,
+    /// since such a round runs on its own and can come late on a busy machine.
+    /// </summary>
+    internal async Task ChangedRoundsSettledAsync()
+    {
+        while (true)
+        {
+            Task[] pending;
+            lock (_changedRounds)
+            {
+                pending = _changedRounds.Where(round => !round.IsCompleted).ToArray();
+            }
+
+            if (pending.Length == 0)
+            {
+                return;
+            }
+
+            // A round that failed has said so already. Only its end matters here.
+            await Task.WhenAll(pending).ContinueWith(_ => { }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
     }
 
     /// <summary>
