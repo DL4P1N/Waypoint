@@ -22,6 +22,7 @@ namespace Waypoint.App.Tests;
 /// One STA thread with a plain <see cref="Application"/> carrying App.xaml's resources. Never constructs
 /// <see cref="App"/>, since its startup signals a running Waypoint. Every test body runs on this thread.
 /// Nothing here sends real OS input or moves the mouse: events are raised on the controls in process.
+/// The thread and its windows live on a desktop of their own, so they never take part in the user's input.
 /// </summary>
 internal static class Ui
 {
@@ -39,6 +40,7 @@ internal static class Ui
     public static void Run(Action<UiTest> body)
     {
         ExceptionDispatchInfo? failure = null;
+        var taken = Foreground.Taken;
         Thread.Value.Invoke(() =>
         {
             // Work an earlier test left queued runs first, so a problem it raises late isn't put down to this test.
@@ -46,13 +48,11 @@ internal static class Ui
             Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => frame.Continue = false);
             Dispatcher.PushFrame(frame);
             Unhandled.Clear();
-            var returned = UiTest.ForegroundReturned;
             var test = new UiTest();
             try
             {
                 body(test);
                 test.Pump();
-                Assert.True(returned == UiTest.ForegroundReturned, "The test window took the foreground from the user and had to give it back");
                 if (Unhandled.Count > 0)
                 {
                     throw new AggregateException("Unhandled exception on the UI thread", Unhandled.ToList());
@@ -67,22 +67,49 @@ internal static class Ui
                 test.Dispose();
             }
         });
+
+        // Asked here, on the user's desktop, since the UI thread sees only its own. Checked first, as having the
+        // user's foreground would also explain a test failing on what the user was doing.
+        Assert.True(taken == Foreground.Taken && !Foreground.IsOurs(), "A test window took the foreground from the user and had to give it back");
         failure?.Throw();
     }
 
+    /// <summary>The thread's entry point, kept here so it isn't collected while the thread runs.</summary>
+    private static ThreadProc? _entry;
+
+    /// <summary>
+    /// Starts the UI thread on a desktop made for this run. A window on the desktop the user works on can be handed
+    /// the foreground by Windows, for instance when the user's window closes or nothing is in front, and once there
+    /// the thread shares in the user's real keyboard: a Ctrl or Shift the user holds in another app can show through
+    /// in <see cref="Keyboard.Modifiers"/> mid-press. Windows on another desktop can never be the user's foreground
+    /// or receive the user's keys, and no thread on the user's desktop can attach its input to them. The thread is
+    /// made outside .NET because a desktop can only be set before a thread has a window, and an STA thread started by
+    /// .NET already has one; it joins its STA once the desktop is set.
+    /// </summary>
     private static Dispatcher Start()
     {
         Dispatcher? dispatcher = null;
         Exception? problem = null;
         using var ready = new ManualResetEventSlim();
-        var thread = new System.Threading.Thread(() =>
+        _entry = _ =>
         {
             try
             {
-                // This process may still hold the right to take the foreground (it was started recently). Locking it
-                // means nothing here can pull focus away from the window the user is working in.
-                UiTest.LockSetForegroundWindow(1);
-                AppDomain.CurrentDomain.ProcessExit += (_, _) => UiTest.LockSetForegroundWindow(2);
+                var desktop = CreateDesktop($"Waypoint UI tests {Environment.ProcessId}", null, 0, 0, DesktopAllAccess, 0);
+                if (desktop == 0 || !SetThreadDesktop(desktop))
+                {
+                    throw new InvalidOperationException($"Couldn't make a desktop for the test windows (error {Marshal.GetLastWin32Error()})");
+                }
+
+                var thread = System.Threading.Thread.CurrentThread;
+                thread.IsBackground = true;
+                thread.Name = "Waypoint UI tests";
+                if (!thread.TrySetApartmentState(ApartmentState.STA))
+                {
+                    throw new InvalidOperationException("The UI thread couldn't join an STA");
+                }
+
+                Foreground.Watch();
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 app.Resources = AppResources();
                 app.DispatcherUnhandledException += (_, e) =>
@@ -107,13 +134,16 @@ internal static class Ui
             {
                 Dispatcher.Run();
             }
-        })
-        {
-            IsBackground = true,
-            Name = "Waypoint UI tests",
+
+            return 0;
         };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
+
+        // 4 MB of stack, more than .NET gives a thread of its own, so deep layouts have room.
+        if (CreateThread(0, 4 << 20, Marshal.GetFunctionPointerForDelegate(_entry), 0, StackSizeIsReservation, out _) == 0)
+        {
+            throw new InvalidOperationException($"The UI thread didn't start (error {Marshal.GetLastWin32Error()})");
+        }
+
         ready.Wait();
         if (problem is not null)
         {
@@ -122,6 +152,22 @@ internal static class Ui
 
         return dispatcher!;
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate uint ThreadProc(nint parameter);
+
+    private const uint DesktopAllAccess = 0x000F01FF;
+    private const uint StackSizeIsReservation = 0x00010000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint CreateThread(nint attributes, nuint stackSize, nint start, nint parameter, uint flags, out uint id);
+
+    [DllImport("user32.dll", EntryPoint = "CreateDesktopW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateDesktop(string name, string? device, nint mode, uint flags, uint access, nint attributes);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetThreadDesktop(nint desktop);
 
     /// <summary>App.xaml's resources, read from the file itself, plus two test-only overrides so nothing pops up on screen.</summary>
     private static ResourceDictionary AppResources()
@@ -199,7 +245,6 @@ internal sealed class UiTest : IDisposable
             var handle = new WindowInteropHelper(_window).Handle;
             SetWindowLong(handle, ExStyle, GetWindowLong(handle, ExStyle) | ToolWindow);
         };
-        _userForeground = Foreground();
         _window.Show();
         Pump();
         return content;
@@ -208,7 +253,6 @@ internal sealed class UiTest : IDisposable
     /// <summary>Runs everything queued on the dispatcher, down to background work.</summary>
     public void Pump()
     {
-        GiveBackForeground();
         for (var i = 0; i < 3; i++)
         {
             var frame = new DispatcherFrame();
@@ -222,7 +266,6 @@ internal sealed class UiTest : IDisposable
         for (var attempt = 0; attempt < 3 && !element.IsKeyboardFocused; attempt++)
         {
             Keyboard.Focus(element);
-            GiveBackForeground();
             Pump();
         }
 
@@ -231,9 +274,9 @@ internal sealed class UiTest : IDisposable
 
     /// <summary>
     /// A key press with no modifiers as WPF raises it: PreviewKeyDown, then KeyDown unless handled. A handler that
-    /// checks <see cref="Keyboard.Modifiers"/> reads this thread's own key state from Windows, which only changes as
-    /// the thread reads key messages. If Windows ever hands the test window the foreground while a modifier is held
-    /// elsewhere, that state can go on showing it held after the key is let go, so it's cleared here first.
+    /// checks <see cref="Keyboard.Modifiers"/> reads this thread's own key state from Windows. The user's keys never
+    /// reach it, since the thread is on a desktop of its own, but a test can leave a modifier showing held, so the
+    /// modifiers are cleared here first.
     /// </summary>
     public bool Press(UIElement target, Key key)
     {
@@ -426,31 +469,6 @@ internal sealed class UiTest : IDisposable
     }
 
     private const int ExStyle = -20;
-    private nint _userForeground;
-
-    /// <summary>The number of times Windows handed this process the foreground and it was given straight back.</summary>
-    public static int ForegroundReturned { get; private set; }
-
-    /// <summary>
-    /// Focusing a control needs Win32 focus in its window, which activates it within this thread only. If Windows
-    /// ever hands this process the foreground anyway, it goes straight back to the window the user was in.
-    /// </summary>
-    private void GiveBackForeground()
-    {
-        if (_userForeground != 0 && Foreground() == 0)
-        {
-            ForegroundReturned++;
-            SetForegroundWindow(_userForeground);
-        }
-    }
-
-    /// <summary>The foreground window, or 0 when it belongs to this process.</summary>
-    private static nint Foreground()
-    {
-        var window = GetForegroundWindow();
-        GetWindowThreadProcessId(window, out var process);
-        return process == (uint)Environment.ProcessId ? 0 : window;
-    }
 
     /// <summary>Shift, Ctrl, Alt and the Windows keys, left, right and either.</summary>
     private static readonly byte[] Modifiers = [0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
@@ -483,6 +501,109 @@ internal sealed class UiTest : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetKeyboardState(byte[] state);
 
+    private const int ToolWindow = 0x00000080;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLong(nint handle, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLong(nint handle, int index, nint value);
+}
+
+/// <summary>
+/// Watches, from a thread on the user's desktop, for a window of this process becoming the user's foreground. The
+/// test windows can't, being on a desktop of their own, so any time it happens is a window made somewhere else, and
+/// the foreground goes straight back to the window the user was in.
+/// </summary>
+internal static class Foreground
+{
+    private static int _taken;
+    private static nint _userWindow;
+    private static WinEventProc? _callback;
+
+    /// <summary>The number of times a window of this process became the user's foreground.</summary>
+    public static int Taken => Volatile.Read(ref _taken);
+
+    /// <summary>Whether the user's foreground window belongs to this process right now.</summary>
+    public static bool IsOurs() => OwnedHere(GetForegroundWindow());
+
+    public static void Watch()
+    {
+        var thread = new System.Threading.Thread(() =>
+        {
+            _callback = (_, _, _, _, _, _, _) => Check();
+            SetWinEventHook(ForegroundEvent, ForegroundEvent, 0, _callback, 0, 0, OutOfContext);
+            Check();
+            while (GetMessage(out var message, 0, 0, 0) > 0)
+            {
+                DispatchMessage(ref message);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Waypoint UI tests foreground watch",
+        };
+        thread.Start();
+    }
+
+    private static void Check()
+    {
+        var window = GetForegroundWindow();
+        if (!OwnedHere(window))
+        {
+            if (window != 0)
+            {
+                _userWindow = window;
+            }
+
+            return;
+        }
+
+        Interlocked.Increment(ref _taken);
+        if (_userWindow != 0)
+        {
+            SetForegroundWindow(_userWindow);
+        }
+    }
+
+    private static bool OwnedHere(nint window)
+    {
+        if (window == 0)
+        {
+            return false;
+        }
+
+        GetWindowThreadProcessId(window, out var process);
+        return process == (uint)Environment.ProcessId;
+    }
+
+    private const uint ForegroundEvent = 0x0003;
+    private const uint OutOfContext = 0x0000;
+
+    private delegate void WinEventProc(nint hook, uint eventType, nint window, int objectId, int childId, uint thread, uint time);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Message
+    {
+        public nint Window;
+        public uint Id;
+        public nint WParam;
+        public nint LParam;
+        public uint Time;
+        public int X;
+        public int Y;
+        public uint Private;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern nint SetWinEventHook(uint min, uint max, nint module, WinEventProc callback, uint process, uint thread, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessage(out Message message, nint window, uint min, uint max);
+
+    [DllImport("user32.dll")]
+    private static extern nint DispatchMessage(ref Message message);
+
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
 
@@ -491,16 +612,5 @@ internal sealed class UiTest : IDisposable
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool LockSetForegroundWindow(uint code);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(nint window);
-    private const int ToolWindow = 0x00000080;
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
-    private static extern nint GetWindowLong(nint handle, int index);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern nint SetWindowLong(nint handle, int index, nint value);
 }
