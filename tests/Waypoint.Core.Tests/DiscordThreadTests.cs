@@ -517,7 +517,7 @@ public sealed partial class DiscordThreadTests : IDisposable
     {
         var worker = MakeWorker(notes: notes, lists: lists, notesView: notesView);
         worker.StartDiscord();
-        worker.Discord!.DeferAfter = TimeSpan.FromMinutes(1);
+        worker.Discord!.DeferAfter = Waits.Never;
         await worker.SyncDiscordThreadsAsync();
         await Task.Delay(100);
         await worker.SyncDiscordThreadsAsync();
@@ -532,15 +532,7 @@ public sealed partial class DiscordThreadTests : IDisposable
         await worker.ThreadsSettledAsync();
     }
 
-    private static async Task WaitFor(Func<bool> condition)
-    {
-        for (var tries = 0; tries < 500 && !condition(); tries++)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition());
-    }
+    private static async Task WaitFor(Func<bool> condition) => Assert.True(await Waits.Until(condition));
 
     private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement.Clone();
 
@@ -1417,12 +1409,12 @@ public sealed partial class DiscordThreadTests : IDisposable
         worker.NoteFiles = new LocalNotesData(_database, new NoteMaker(_database, new SlowWriter(writing, gate), null));
         var post = _discord.UserPost(NotesForum, "From a PDF", "", files: ["cells.pdf"]);
         await worker.Discord!.HandleEventAsync("THREAD_CREATE", ThreadEvent(post));
-        await writing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await writing.Task.WaitAsync(Waits.Hung);
 
         // Deleted on the PC while its notes are still being written: the round leaves the post to a later round.
         var noteId = long.Parse(_database.FindDiscordThread(post.Id)!.Key, CultureInfo.InvariantCulture);
         _database.DeleteNote(noteId, _now);
-        await worker.SyncDiscordThreadsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await worker.SyncDiscordThreadsAsync().WaitAsync(Waits.Hung);
         Assert.True(_discord.Posts.ContainsKey(post.Id));
         Assert.Equal(WaypointDatabase.PostLive, _database.FindDiscordThread(post.Id)!.State);
 
@@ -1443,18 +1435,18 @@ public sealed partial class DiscordThreadTests : IDisposable
 
         var post = _discord.UserPost(NotesForum, "From a PDF", "", files: ["cells.pdf"]);
         await worker.Discord!.HandleEventAsync("THREAD_CREATE", ThreadEvent(post));
-        await writing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await writing.Task.WaitAsync(Waits.Hung);
 
         // An Edit saves straight away, so what was typed in the form is never turned away.
         var part = PostFor(id).Messages.First(message => message.Bot);
         var form = (await worker.OnButtonActedAsync(new ButtonPress(EditId(part), null, part.Id, PostFor(id).Id)))!.Form!;
-        var reply = await Task.Run(() => worker.OnFormSent(form.Id, new Dictionary<string, string> { ["text"] = "Line one changed" })).WaitAsync(TimeSpan.FromSeconds(5));
+        var reply = await Task.Run(() => worker.OnFormSent(form.Id, new Dictionary<string, string> { ["text"] = "Line one changed" })).WaitAsync(Waits.Hung);
         Assert.Equal("Saved", reply.Card.Title);
         Assert.Equal("Line one changed", _database.GetNote(id)!.Body);
 
         // A round goes on too, and gives a note made meanwhile its post.
         var later = _database.CreateNote("Made meanwhile", "Words", _now);
-        await worker.SyncDiscordThreadsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await worker.SyncDiscordThreadsAsync().WaitAsync(Waits.Hung);
         Assert.NotNull(_database.GetDiscordThread(WaypointDatabase.ThreadNote, later.ToString(CultureInfo.InvariantCulture)));
 
         gate.SetResult();
@@ -1611,7 +1603,7 @@ public sealed partial class DiscordThreadTests : IDisposable
         {
             if (method == HttpMethod.Post && path == $"/channels/{NotesForum}/threads")
             {
-                held.Wait(TimeSpan.FromSeconds(20));
+                held.Wait(Waits.Hung * 2);
             }
         };
 
@@ -1639,12 +1631,7 @@ public sealed partial class DiscordThreadTests : IDisposable
         _database.CreateNote("Another", "More words", _now);
         _now = _now.AddMinutes(2);
         var next = Task.Run(worker.RefreshDiscordViewsAsync);
-        for (var tries = 0; tries < 300 && ViewCalls() == before; tries++)
-        {
-            await Task.Delay(10);
-        }
-
-        var drawn = ViewCalls() > before;
+        var drawn = await Waits.Until(() => ViewCalls() > before);
         held.Set();
         await Task.WhenAll(slow, next);
         Assert.True(drawn);

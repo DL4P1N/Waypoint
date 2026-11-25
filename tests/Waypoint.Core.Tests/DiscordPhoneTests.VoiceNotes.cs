@@ -67,16 +67,8 @@ public sealed partial class DiscordPhoneTests
     /// <summary>Finishes once that many replies to the message have gone out.</summary>
     private Task Replied(string id, int count) => _discord.Made(request => IsReplyTo(request, id), count);
 
-    /// <summary>Longer than <see cref="WaitFor"/>, since the download and reading run in the background.</summary>
-    private static async Task Eventually(Func<bool> condition)
-    {
-        for (var tries = 0; tries < 1000 && !condition(); tries++)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition());
-    }
+    /// <summary>The download and reading run in the background, so this waits for them.</summary>
+    private static async Task Eventually(Func<bool> condition) => Assert.True(await Waits.Until(condition));
 
     /// <summary>
     /// What's kept for good. Saying a voice note is waiting rewrites its details through a short-lived .part file,

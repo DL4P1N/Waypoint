@@ -16,11 +16,18 @@ public sealed partial class DiscordThreadTests
         var post = PostFor(id);
         _discord.AnswersWhoAmI = true;
 
-        // A recording sent in the post raises a notice, which goes out before Waypoint stops partway.
+        // A recording sent in the post raises a notice, which goes out before Waypoint stops partway. The round its
+        // change sets going runs on its own, and on a busy machine it can come once the post is free and find the
+        // notice then, two minutes before the round below, which would clear it away as old before the new part. So
+        // that round can't keep it either, and it's over before going on.
         FailPartway("BEFORE UPDATE OF message_id ON discord_sends WHEN NEW.send_key LIKE 'notice:%'");
+        FailKeepingNotices();
         var typed = _discord.UserMessage(post, "", files: ["made-up-talk.mp3"]);
         await Record.ExceptionAsync(() => Event(worker, "MESSAGE_CREATE", MessageEvent(post, typed)));
+        await worker.ChangedRoundsSettledAsync().WaitAsync(Waits.Hung);
         StopFailingPartway();
+        StopFailingToKeepNotices();
+        Assert.Empty(_database.GetDiscordNotices(post.Id));
         Assert.Single(post.Messages, message => message.Bot && message.Says("Not every file was added"));
 
         // The note grows, so a new part goes in under the notice on the next round.
@@ -32,6 +39,18 @@ public sealed partial class DiscordThreadTests
         Assert.Single(post.Messages, message => message.Bot && message.Says("Not every file was added"));
         Assert.Single(_database.GetDiscordNotices(post.Id));
         Assert.Empty(_database.GetDiscordSends("notice:"));
+    }
+
+    private void FailKeepingNotices() => Run("CREATE TRIGGER fail_keeping_notices BEFORE INSERT ON discord_post_notices BEGIN SELECT RAISE(ABORT, 'made to fail keeping a notice'); END");
+
+    private void StopFailingToKeepNotices() => Run("DROP TRIGGER fail_keeping_notices");
+
+    private void Run(string sql)
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     [Fact]

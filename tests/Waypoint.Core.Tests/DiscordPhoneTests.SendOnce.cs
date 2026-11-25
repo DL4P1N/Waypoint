@@ -499,15 +499,7 @@ public sealed partial class DiscordPhoneTests
         Assert.Equal(before + 1, Rows("item_history", $"item_id = {task.Id}"));
     }
 
-    private static async Task Until(Func<bool> done)
-    {
-        for (var waited = 0; waited < 400 && !Try(done); waited++)
-        {
-            await Task.Delay(25);
-        }
-
-        Assert.True(Try(done));
-    }
+    private static async Task Until(Func<bool> done) => Assert.True(await Waits.Until(() => Try(done), every: 25));
 
     /// <summary>A check that hits a write still going counts as not yet.</summary>
     private static bool Try(Func<bool> check)

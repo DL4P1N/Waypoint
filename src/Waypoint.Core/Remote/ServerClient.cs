@@ -342,7 +342,10 @@ public sealed partial class ServerClient
 
     private bool _savePending;
 
-    private Timer? _saveTimer;
+    private ITimer? _saveTimer;
+
+    /// <summary>What the wait before writing the file is timed by, so a test can say when it runs out.</summary>
+    internal TimeProvider Time { get; set; } = TimeProvider.System;
 
     private readonly object _writeGate = new();
 
@@ -442,7 +445,7 @@ public sealed partial class ServerClient
         }
 
         _savePending = true;
-        _saveTimer ??= new Timer(_ => FlushSavedReads());
+        _saveTimer ??= Time.CreateTimer(_ => FlushSavedReads(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _saveTimer.Change(SavedReadsDelay, Timeout.InfiniteTimeSpan);
     }
 

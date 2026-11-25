@@ -98,7 +98,8 @@ public sealed partial class DiscordPhoneTests
         var worker = NotesWorker(new FakeWriter());
 
         await worker.Discord!.HandleEventAsync("MESSAGE_CREATE", NotesMessage("601", "stmt_4111111111111111.pdf"));
-        await WaitFor(() => _database.GetNotes().Count == 1);
+        // The note is made first and its file added just after, so this waits for both.
+        await WaitFor(() => _database.GetNotes() is [var made] && _database.GetNoteSources(made.Id).Count > 0);
 
         var note = Assert.Single(_database.GetNotes());
         var source = Assert.Single(_database.GetNoteSources(note.Id));

@@ -61,10 +61,7 @@ public sealed partial class DiscordPhoneTests
         var worker = Worker(toDo: null, lists: null);
 
         worker.CheckAlerts();
-        for (var tries = 0; tries < 100 && !_discord.All.Any(request => request.Body.Contains("waypoint:start")); tries++)
-        {
-            await Task.Delay(20);
-        }
+        await Waits.Until(() => _discord.All.Any(request => request.Body.Contains("waypoint:start")), every: 20);
 
         Assert.Contains("waypoint:save-spot", _discord.All.Single(request => request.Body.Contains("waypoint:start")).Body);
     }

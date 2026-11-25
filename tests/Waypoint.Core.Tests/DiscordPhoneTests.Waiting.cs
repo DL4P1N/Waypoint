@@ -63,10 +63,7 @@ public sealed partial class DiscordPhoneTests
         _now = Today.AddDays(1).ToDateTime(WaitingOn.NudgeTime);
 
         worker.CheckAlerts();
-        for (var tries = 0; tries < 100 && !_discord.All.Any(request => request.Body.Contains("\"label\":\"Still waiting\"")); tries++)
-        {
-            await Task.Delay(20);
-        }
+        await Waits.Until(() => _discord.All.Any(request => request.Body.Contains("\"label\":\"Still waiting\"")), every: 20);
 
         var sent = _discord.All.Single(request => request.Body.Contains("\"label\":\"Still waiting\"")).Body;
         Assert.Contains("\"label\":\"Follow up\"", sent);

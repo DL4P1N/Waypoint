@@ -12,17 +12,8 @@ public sealed partial class DiscordPhoneTests
 {
     private async Task<string> SentContaining(string text)
     {
-        for (var tries = 0; tries < 100; tries++)
-        {
-            if (_discord.Of(HttpMethod.Post).Select(request => request.Body).LastOrDefault(body => body.Contains(text)) is { } found)
-            {
-                return found;
-            }
-
-            await Task.Delay(20);
-        }
-
-        throw new Xunit.Sdk.XunitException($"Nothing sent with {text}");
+        string? Found() => _discord.Of(HttpMethod.Post).Select(request => request.Body).LastOrDefault(body => body.Contains(text));
+        return await Waits.Until(() => Found() is not null, every: 20) ? Found()! : throw new Xunit.Sdk.XunitException($"Nothing sent with {text}");
     }
 
     [Fact]

@@ -125,13 +125,7 @@ public sealed class CalendarFeedSettingsTests : IDisposable
     private static string CalendarLine(WaypointWorker worker) =>
         worker.DescribeConnections().Single(line => line.Name == "Calendar feed").State;
 
-    private void WaitForAsked(int count)
-    {
-        for (var tries = 0; _feed.Asked.Count < count && tries < 100; tries++)
-        {
-            Thread.Sleep(20);
-        }
-    }
+    private void WaitForAsked(int count) => Waits.UntilNow(() => _feed.Asked.Count >= count, every: 20);
 
     [Theory]
     [InlineData("https://example.test/feed.ics", "https://example.test/feed.ics")]

@@ -74,10 +74,7 @@ public sealed class WorkerStopTests : IDisposable
         _feed.Hold = true;
         var worker = Worker();
         var sync = worker.SyncCalendarAsync();
-        for (var tries = 0; _feed.Asked == 0 && tries < 400; tries++)
-        {
-            await Task.Delay(25);
-        }
+        Assert.True(await Waits.Until(() => _feed.Asked > 0, every: 25));
 
         Assert.True(await worker.StopWorkAsync(TimeSpan.FromMinutes(1)));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sync);

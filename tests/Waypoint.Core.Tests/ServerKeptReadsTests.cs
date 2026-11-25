@@ -11,6 +11,12 @@ public sealed class ServerKeptReadsTests
     /// <summary>Answers with the open items as they are when the request arrives, and can hold one request.</summary>
     private sealed class FakeServer : HttpMessageHandler
     {
+        /// <summary>
+        /// Only so a hung test fails rather than hangs. Each wait here is for a signal, so a slow machine only makes
+        /// it later, never wrong.
+        /// </summary>
+        public static readonly TimeSpan Hung = TimeSpan.FromSeconds(60);
+
         private readonly object _gate = new();
         private int _requests;
 
@@ -35,7 +41,7 @@ public sealed class ServerKeptReadsTests
             if (Interlocked.Exchange(ref _holdNow, null) is { } hold)
             {
                 Held.Set();
-                await Task.Run(() => hold.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                await Task.Run(() => Assert.True(hold.Wait(Hung), "The held answer was never let go"), cancellationToken);
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
@@ -130,7 +136,7 @@ public sealed class ServerKeptReadsTests
         using var release = new ManualResetEventSlim();
         _fake.HoldOne(release);
         var slow = Task.Run(() => Titles(client));
-        Assert.True(_fake.Held.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(_fake.Held.Wait(FakeServer.Hung));
 
         _fake.Set("Water the ferns", "Mail the form");
         client.ReadAgain([Open]);
@@ -152,7 +158,7 @@ public sealed class ServerKeptReadsTests
         using var release = new ManualResetEventSlim();
         _fake.HoldOne(release);
         var slow = Task.Run(() => client.ReadAgain([Open]));
-        Assert.True(_fake.Held.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(_fake.Held.Wait(FakeServer.Hung));
 
         client.Amend<List<StoredItem>>(path => path == Open, items => [.. items, new StoredItem(9, ItemKind.Task, "Mail the form", null, null, false)]);
         release.Set();

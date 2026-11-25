@@ -87,7 +87,9 @@ public sealed class ServerAddressTests
     public async Task A_tailnet_name_that_points_outside_Tailscale_never_gets_the_token()
     {
         var client = Guarded("http://optiplex.tailnet-name.ts.net:5280/", (_, _) => Task.FromResult(new[] { IPAddress.Parse("203.0.113.9") }));
-        client.Timeout = TimeSpan.FromSeconds(5);
+        // The check turns it away before any connection, so the limit is only for a hung test. A short one could run
+        // out first on a busy machine and hide the check's own answer.
+        client.Timeout = Waits.Hung;
 
         var error = await Assert.ThrowsAsync<HttpRequestException>(() => Send(client));
 

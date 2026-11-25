@@ -352,23 +352,60 @@ public sealed class ServerClientTests : IDisposable
         Assert.Contains("Read chapter 4", System.Text.Encoding.UTF8.GetString(new Scramble().Unprotect(File.ReadAllBytes(ReadsFile))));
     }
 
-    [Fact]
-    public async Task A_run_of_changes_is_written_once_they_stop_rather_than_each_time()
+    /// <summary>A clock with one timer, which goes off only when the test says and keeps each wait it's given.</summary>
+    private sealed class SaveClock : TimeProvider
     {
+        private TimerCallback? _callback;
+        private object? _state;
+
+        public List<TimeSpan> Waits { get; } = [];
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Assert.Null(_callback);
+            (_callback, _state) = (callback, state);
+            return new Timer(this);
+        }
+
+        public void RunOut() => _callback!(_state);
+
+        private sealed class Timer(SaveClock clock) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (dueTime != Timeout.InfiniteTimeSpan)
+                {
+                    clock.Waits.Add(dueTime);
+                }
+
+                return true;
+            }
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public void A_run_of_changes_is_written_once_they_stop_rather_than_each_time()
+    {
+        var clock = new SaveClock();
         var client = Client();
+        client.Time = clock;
         client.SaveReadsIn(ReadsFile);
         for (var n = 0; n < 20; n++)
         {
             client.Keep("api/notes/1", $"Draft {n}");
         }
 
+        // Each change puts the write off by the whole wait again, so nothing is written while they keep coming.
+        Assert.Equal(Enumerable.Repeat(ServerClient.SavedReadsDelay, 20), clock.Waits);
         Assert.False(File.Exists(ReadsFile));
 
-        var waited = System.Diagnostics.Stopwatch.StartNew();
-        while (!File.Exists(ReadsFile) && waited.Elapsed < TimeSpan.FromSeconds(10))
-        {
-            await Task.Delay(50);
-        }
+        clock.RunOut();
 
         Assert.Contains("Draft 19", File.ReadAllText(ReadsFile));
         Assert.DoesNotContain("Draft 18", File.ReadAllText(ReadsFile));

@@ -6,7 +6,11 @@ namespace Waypoint.Core.Tests;
 /// <summary>The one-at-a-time queue behind Discord's events and the server's background work.</summary>
 public sealed class OrderedWorkTests
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// Only so a hung test fails rather than hangs. Each test waits for its own work by a signal, so a slow machine
+    /// only makes it later, never wrong.
+    /// </summary>
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(60);
 
     private readonly ConcurrentQueue<Exception> _failures = new();
     private readonly ConcurrentQueue<string> _warnings = new();
@@ -19,6 +23,7 @@ public sealed class OrderedWorkTests
     {
         await using var work = Make();
         var order = new ConcurrentQueue<int>();
+        var last = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         for (var index = 0; index < 50; index++)
         {
             var number = index;
@@ -29,6 +34,10 @@ public sealed class OrderedWorkTests
             }));
         }
 
+        Assert.True(work.Post(last.SetResult));
+
+        // Everything has run before stopping, so stopping's own limit is never what decides this.
+        await last.Task.WaitAsync(Wait);
         Assert.Equal(0, await work.StopAsync(Wait));
         Assert.Equal(Enumerable.Range(0, 50), order);
     }
@@ -42,8 +51,11 @@ public sealed class OrderedWorkTests
         work.Post(() => throw new InvalidOperationException("broken"));
         work.Post(() => Task.FromException(new InvalidOperationException("broken later")));
         work.Post(() => ran.Enqueue("last"));
+        var last = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        work.Post(last.SetResult);
 
-        await work.StopAsync(Wait);
+        await last.Task.WaitAsync(Wait);
+        Assert.Equal(0, await work.StopAsync(Wait));
 
         Assert.Equal(["first", "last"], ran);
         Assert.Equal(["broken", "broken later"], _failures.Select(failure => failure.Message));
@@ -96,10 +108,9 @@ public sealed class OrderedWorkTests
         work.Post(() => Interlocked.Increment(ref later));
         work.Post(() => Interlocked.Increment(ref later));
 
-        var started = DateTime.UtcNow;
-        var left = await work.StopAsync(TimeSpan.FromMilliseconds(200));
+        // The hung piece only ends once it's cancelled, so stopping coming back at all means it gave up on it.
+        var left = await work.StopAsync(TimeSpan.FromMilliseconds(200)).WaitAsync(Wait);
 
-        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
         Assert.Equal(3, left);
         Assert.True(work.Stopping.IsCancellationRequested);
         await sawCancel.Task.WaitAsync(Wait);

@@ -395,13 +395,5 @@ public sealed class WorkerTests : IDisposable
         Assert.Contains("Settings page", await worker.CheckEmailNowAsync());
     }
 
-    private static async Task WaitFor(Func<bool> condition)
-    {
-        for (var tries = 0; tries < 200 && !condition(); tries++)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition());
-    }
+    private static async Task WaitFor(Func<bool> condition) => Assert.True(await Waits.Until(condition));
 }

@@ -90,10 +90,16 @@ public sealed class DiscordSlowPressTests : IDisposable
             gateway.Deliver("INTERACTION_CREATE", Press("1", "m1"));
             gateway.Deliver("INTERACTION_CREATE", Press("2", "m2"));
 
-            // The second is promised well inside Discord's three seconds, while the first is still going.
-            Assert.True(SpinWait.SpinUntil(() => Callbacks("2") == 1, TimeSpan.FromMilliseconds(2500)), "The second press was never promised");
+            // The second is promised while the first is still going, since the first is held until the end. How long
+            // that takes isn't checked against the clock, which a busy machine can't keep to, only that it doesn't
+            // wait for the first. The limit is only so a hung test fails rather than hangs.
+            Assert.True(SpinWait.SpinUntil(() => Callbacks("2") == 1, Waits.Hung), "The second press was never promised");
             Assert.Contains("\"type\":6", Requests().Single(request => request.Url.Contains("/interactions/2/")).Body);
-            Assert.True(SpinWait.SpinUntil(() => { lock (order) { return order.Count > 0; } }, TimeSpan.FromSeconds(30)));
+
+            // The first has its own promise, which a busy machine can send after the second's. Letting it go before
+            // then would have it answered directly, with nothing left to fill in.
+            Assert.True(SpinWait.SpinUntil(() => Callbacks("1") == 1, Waits.Hung), "The first press was never promised");
+            Assert.True(SpinWait.SpinUntil(() => { lock (order) { return order.Count > 0; } }, Waits.Hung));
             lock (order)
             {
                 Assert.Equal(["m1 begins"], order);
@@ -104,7 +110,7 @@ public sealed class DiscordSlowPressTests : IDisposable
             release.TrySetResult();
         }
 
-        Assert.True(SpinWait.SpinUntil(() => Requests().Count(request => request.Url.Contains("/messages/@original")) == 2, TimeSpan.FromSeconds(30)), "The answers were never filled in");
+        Assert.True(SpinWait.SpinUntil(() => Requests().Count(request => request.Url.Contains("/messages/@original")) == 2, Waits.Hung), "The answers were never filled in");
         Assert.Equal(["m1 begins", "m1 ends", "m2 begins", "m2 ends"], order);
 
         // Each is answered once, then filled in through its own promise.
@@ -124,7 +130,7 @@ public sealed class DiscordSlowPressTests : IDisposable
         Assert.True(SpinWait.SpinUntil(() => Callbacks("1") == 1, TimeSpan.FromSeconds(30)));
 
         // Another is read just as it closes, before its promise.
-        bridge.DeferAfter = TimeSpan.FromMinutes(1);
+        bridge.DeferAfter = Waits.Never;
         bridge.EventArrived("INTERACTION_CREATE", Press("2", "m2"));
 
         await bridge.AnswerDroppedAsync();

@@ -40,7 +40,7 @@ public sealed class DiscordTests : IDisposable
         {
             // Tests that look for the immediate answer shouldn't race the 2 second deferral on a busy machine. The
             // ones about deferring set their own.
-            DeferAfter = TimeSpan.FromMinutes(1),
+            DeferAfter = Waits.Never,
             Delay = (wait, _) =>
             {
                 waits?.Add(wait);
@@ -596,7 +596,7 @@ public sealed class DiscordTests : IDisposable
 
         events.Post(() => throw new InvalidOperationException("broken"));
         events.Post(() => last.SetResult());
-        await last.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await last.Task.WaitAsync(Waits.Hung);
 
         Assert.Equal(Enumerable.Range(0, 10), order);
         Assert.False(overlapped);

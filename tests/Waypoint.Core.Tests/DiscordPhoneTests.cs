@@ -332,7 +332,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
         // default can pass first, and then the bridge rightly defers instead, which other tests cover.
         if (worker.Discord is { } bridge)
         {
-            bridge.DeferAfter = TimeSpan.FromMinutes(1);
+            bridge.DeferAfter = Waits.Never;
         }
 
         return worker;
@@ -683,7 +683,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
     }
 
     [Fact]
-    public void Snooze_grays_the_reminder_card_it_snoozed()
+    public async Task Snooze_grays_the_reminder_card_it_snoozed()
     {
         var item = AddTask("Call mom", Today);
         _database.TrackSentReminder("m42", item.Id);
@@ -693,8 +693,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
 
         Assert.Contains("Call mom", reply.Card.Title);
         Assert.Null(_database.LatestSentReminderMessage());
-        SpinWait.SpinUntil(() => _discord.Of(HttpMethod.Patch).Any(), 2000);
-        Assert.Contains(_discord.Of(HttpMethod.Patch), patch => patch.Url.EndsWith("/channels/alerts/messages/m42"));
+        await _discord.Made(patch => patch.Method == HttpMethod.Patch && patch.Url.EndsWith("/channels/alerts/messages/m42"));
     }
 
     [Fact]
@@ -755,15 +754,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
         Assert.NotNull(_database.GetActiveSession(_now));
     }
 
-    private async Task WaitFor(Func<bool> condition)
-    {
-        for (var tries = 0; tries < 300 && !condition(); tries++)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition());
-    }
+    private async Task WaitFor(Func<bool> condition) => Assert.True(await Waits.Until(condition));
 
     [Fact]
     public async Task A_session_button_answers_on_its_own_card_and_not_in_the_capture_channel()
