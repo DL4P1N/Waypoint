@@ -49,18 +49,47 @@ public sealed class ServerSettingsClickTests
         /// <summary>While set, each read of the classes waits until <see cref="LetClassReadsGo"/>.</summary>
         public bool HoldClassReads { get; set; }
 
-        public int ClassReadsWaiting => Volatile.Read(ref _classReadsWaiting);
+        /// <summary>
+        /// The reads of the classes held and not let go yet. Counted from what was let go rather than from the reads
+        /// waking up, so a read slow to wake on a busy PC is never let go twice, which would let the next one through.
+        /// </summary>
+        public int ClassReadsWaiting
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _classReadsHeld - _classReadsLetGo;
+                }
+            }
+        }
 
-        private int _classReadsWaiting;
+        private int _classReadsHeld;
+
+        private int _classReadsLetGo;
 
         private readonly SemaphoreSlim _classReads = new(0);
 
-        public void LetOneClassReadGo() => _classReads.Release();
+        public void LetOneClassReadGo()
+        {
+            lock (_gate)
+            {
+                if (_classReadsHeld > _classReadsLetGo)
+                {
+                    _classReadsLetGo++;
+                    _classReads.Release();
+                }
+            }
+        }
 
         public void LetClassReadsGo()
         {
-            HoldClassReads = false;
-            _classReads.Release(100);
+            lock (_gate)
+            {
+                HoldClassReads = false;
+                _classReadsLetGo = _classReadsHeld;
+                _classReads.Release(100);
+            }
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -82,11 +111,19 @@ public sealed class ServerSettingsClickTests
                     return Json(new TextValue("Saved. Waypoint uses these classes straight away."));
                 }
 
-                if (HoldClassReads)
+                var held = false;
+                lock (_gate)
                 {
-                    Interlocked.Increment(ref _classReadsWaiting);
+                    if (HoldClassReads)
+                    {
+                        _classReadsHeld++;
+                        held = true;
+                    }
+                }
+
+                if (held)
+                {
                     await _classReads.WaitAsync(TimeSpan.FromMinutes(1), cancellationToken);
-                    Interlocked.Decrement(ref _classReadsWaiting);
                 }
 
                 lock (_gate)
