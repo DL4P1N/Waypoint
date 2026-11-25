@@ -39,7 +39,8 @@ public sealed class ServerReadAheadTests
 
             if (Hold is { } hold)
             {
-                await Task.Run(() => hold.Wait(TimeSpan.FromSeconds(10)), cancellationToken);
+                // Only so a hung test fails rather than hangs. The test lets it go well before then.
+                await Task.Run(() => Assert.True(hold.Wait(TimeSpan.FromSeconds(60)), "The held request was never let go"), cancellationToken);
             }
 
             if (!Up)
@@ -138,9 +139,8 @@ public sealed class ServerReadAheadTests
 
         using var hold = new ManualResetEventSlim();
         _fake.Hold = hold;
-        var started = DateTime.UtcNow;
+        // It comes back while the server is still held, so it never waited for the answer.
         var reading = client.RefreshReadsAsync();
-        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(1));
         Assert.False(reading.IsCompleted);
 
         // Asking again while it's on its way gives the same round instead of starting another.
