@@ -14,7 +14,7 @@ namespace Waypoint.Server.Tests;
 /// </summary>
 public sealed class NoteJobsTests : IDisposable
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Wait = InMemoryServer.Background;
 
     private readonly ListLogger _log = new();
     private readonly List<CountedStop> _stops = [];

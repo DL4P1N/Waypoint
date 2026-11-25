@@ -68,7 +68,7 @@ public sealed class PagesApiTests : IDisposable
         return client;
     }
 
-    private ServerClient Client() => new(Paired(), _token);
+    private ServerClient Client() => InMemoryServer.Client(Paired(), _token);
 
     private WaypointDatabase Database => _factory.Services.GetRequiredService<WaypointServer>().Database;
 
@@ -501,13 +501,20 @@ public sealed class PagesApiTests : IDisposable
         var change = maintenance.TryStartChange();
         Assert.NotNull(change);
         var restoring = Task.Run(() => backups.Restore(made));
-        await Task.Delay(500);
 
+        // Once the server says it's restoring, the restore has started and is held waiting on the change.
+        var until = DateTime.UtcNow + InMemoryServer.Background;
+        while (!maintenance.IsRestoring && !restoring.IsCompleted && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(maintenance.IsRestoring);
         Assert.False(restoring.IsCompleted);
         Database.AddListEntry(WaypointDatabase.ShoppingList, "saved while it waited", DateTime.Now);
         change.Dispose();
 
-        var result = await restoring.WaitAsync(TimeSpan.FromSeconds(30));
+        var result = await restoring.WaitAsync(InMemoryServer.Background);
         Assert.True(result.Restored);
         Assert.Equal(["kept"], Database.GetListEntries(WaypointDatabase.ShoppingList).Select(entry => entry.Text));
     }

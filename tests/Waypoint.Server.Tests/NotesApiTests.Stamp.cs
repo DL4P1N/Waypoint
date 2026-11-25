@@ -55,7 +55,7 @@ public sealed partial class NotesApiTests
     private (ServerNotesData Notes, Counted Counted) CountedPc(bool noStamp = false)
     {
         var counted = new Counted(_factory.Server.CreateHandler()) { NoStamp = noStamp };
-        var client = new ServerClient(new HttpClient(counted) { BaseAddress = _factory.Server.BaseAddress }, _token, "counted-pc");
+        var client = InMemoryServer.Client(new HttpClient(counted) { BaseAddress = _factory.Server.BaseAddress }, _token, "counted-pc");
         return (new ServerNotesData(client, new OfflineNotes(Path.Combine(_pc, "counted-notes.json"))), counted);
     }
 

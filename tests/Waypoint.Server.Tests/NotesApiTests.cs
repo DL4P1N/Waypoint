@@ -147,7 +147,7 @@ public sealed partial class NotesApiTests : IDisposable
     private (ServerNotesData Notes, ServerClient Client, Line Line) Pc(OfflineNotes? offline = null, string? clientId = null)
     {
         var line = new Line(_factory.Server.CreateHandler());
-        var client = new ServerClient(new HttpClient(line) { BaseAddress = _factory.Server.BaseAddress }, _token, clientId ?? "this-pc");
+        var client = InMemoryServer.Client(new HttpClient(line) { BaseAddress = _factory.Server.BaseAddress }, _token, clientId ?? "this-pc");
         var notes = new ServerNotesData(client, offline ?? new OfflineNotes(Path.Combine(_pc, "server-notes.json")))
         {
             JobPollInterval = TimeSpan.FromMilliseconds(20),
@@ -156,7 +156,7 @@ public sealed partial class NotesApiTests : IDisposable
     }
 
     /// <summary>The server's own view, as another device would see it.</summary>
-    private ServerNotesData Elsewhere() => new(new ServerClient(Paired(), _token));
+    private ServerNotesData Elsewhere() => new(InMemoryServer.Client(Paired(), _token));
 
     [Fact]
     public void Files_sent_in_Discord_can_make_notes_before_the_Notes_page_is_opened()
@@ -352,7 +352,7 @@ public sealed partial class NotesApiTests : IDisposable
 
         var first = await client.PostAsJsonAsync($"/api/notes/{ids[0]}/write", body, RemoteJson.Options);
         var second = await client.PostAsJsonAsync($"/api/notes/{ids[1]}/write", body, RemoteJson.Options);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var deadline = DateTime.UtcNow + InMemoryServer.Background;
         while (_haiku.Inputs.Count < 2 && DateTime.UtcNow < deadline)
         {
             await Task.Delay(20);
@@ -402,7 +402,7 @@ public sealed partial class NotesApiTests : IDisposable
         var heldNote = notes.StartFromFile(new FileText("week 2.txt", "Tissues."), null, false, DateTime.Now).NoteId;
         var client = Paired();
         var body = new WriteNotesRequest(null, true, null);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var deadline = DateTime.UtcNow + InMemoryServer.Background;
 
         var finished = (await (await client.PostAsJsonAsync($"/api/notes/{finishedNote}/write", body, RemoteJson.Options))
             .Content.ReadFromJsonAsync<NoteJobStarted>(RemoteJson.Options))!.Id;
@@ -527,7 +527,7 @@ public sealed partial class NotesApiTests : IDisposable
         // Both are part way through before either finishes.
         var sendA = Paired().PutAsync(path, a);
         var sendB = Paired().PutAsync(path, b);
-        await Task.WhenAll(a.Halfway, b.Halfway).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(a.Halfway, b.Halfway).WaitAsync(InMemoryServer.Background);
         await Task.Delay(100);
         release.SetResult();
         var responses = await Task.WhenAll(sendA, sendB);

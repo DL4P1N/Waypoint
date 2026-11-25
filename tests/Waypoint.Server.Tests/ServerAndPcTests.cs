@@ -24,7 +24,7 @@ namespace Waypoint.Server.Tests;
 public sealed class ServerAndPcTests : IDisposable
 {
     private const long AttachmentLimit = 100_000;
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Wait = InMemoryServer.Background;
 
     private readonly string _folder = Path.Combine(Path.GetTempPath(), $"waypoint-server-{Guid.NewGuid()}");
     private readonly string _pc = Path.Combine(Path.GetTempPath(), $"waypoint-pc-{Guid.NewGuid()}");
@@ -226,7 +226,7 @@ public sealed class ServerAndPcTests : IDisposable
 
     private Pc StartPc()
     {
-        var client = new ServerClient(new HttpClient(_network) { BaseAddress = new Uri("http://localhost/") }, _token, "made-up-pc");
+        var client = InMemoryServer.Client(new HttpClient(_network) { BaseAddress = new Uri("http://localhost/") }, _token, "made-up-pc");
         var notes = new ServerNotesData(client, new OfflineNotes(Path.Combine(_pc, "server-notes.json")))
         {
             JobPollInterval = TimeSpan.FromMilliseconds(20),
