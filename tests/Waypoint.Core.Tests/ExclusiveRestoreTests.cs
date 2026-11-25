@@ -8,6 +8,12 @@ namespace Waypoint.Core.Tests;
 /// <summary>Everything that writes is stopped, in order and within a time limit, before a restore replaces the database.</summary>
 public sealed class ExclusiveRestoreTests : IDisposable
 {
+    /// <summary>
+    /// Only so a hung test fails rather than hangs, and as the limit where running out isn't what's checked. A slow
+    /// machine then only makes a test later, never wrong.
+    /// </summary>
+    private static readonly TimeSpan Hung = TimeSpan.FromSeconds(60);
+
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"waypoint-restore-test-{Guid.NewGuid()}.db");
     private readonly WaypointDatabase _database;
 
@@ -33,7 +39,7 @@ public sealed class ExclusiveRestoreTests : IDisposable
                 return await Stop(stopped, "sorting");
             },
             _ => Stop(stopped, "note jobs"),
-        ], TimeSpan.FromSeconds(5));
+        ], Hung);
 
         Assert.True(ready);
         Assert.Equal(["loops", "sorting", "note jobs"], stopped);
@@ -43,8 +49,8 @@ public sealed class ExclusiveRestoreTests : IDisposable
     public async Task A_writer_that_does_not_stop_in_time_means_no_restore_and_the_rest_are_not_waited_on()
     {
         var reached = false;
-        var started = DateTime.UtcNow;
 
+        // The first never stops, so coming back at all means the limit ran out rather than it being waited on.
         var ready = await ExclusiveRestore.StopWritersAsync(
         [
             _ => new TaskCompletionSource<bool>().Task,
@@ -53,11 +59,10 @@ public sealed class ExclusiveRestoreTests : IDisposable
                 reached = true;
                 return Task.FromResult(true);
             },
-        ], TimeSpan.FromMilliseconds(200));
+        ], TimeSpan.FromMilliseconds(200)).WaitAsync(Hung);
 
         Assert.False(ready);
         Assert.False(reached);
-        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -65,8 +70,8 @@ public sealed class ExclusiveRestoreTests : IDisposable
     {
         var failures = new List<Exception>();
 
-        Assert.False(await ExclusiveRestore.StopWritersAsync([_ => Task.FromResult(false)], TimeSpan.FromSeconds(5)));
-        Assert.False(await ExclusiveRestore.StopWritersAsync([_ => throw new InvalidOperationException("made up")], TimeSpan.FromSeconds(5), failures.Add));
+        Assert.False(await ExclusiveRestore.StopWritersAsync([_ => Task.FromResult(false)], Hung));
+        Assert.False(await ExclusiveRestore.StopWritersAsync([_ => throw new InvalidOperationException("made up")], Hung, failures.Add));
         Assert.Single(failures);
     }
 
@@ -78,18 +83,18 @@ public sealed class ExclusiveRestoreTests : IDisposable
         var service = new CaptureService(_database, sorter);
         service.Capture("buy stamps");
         var running = service.ProcessPendingAsync();
-        await sorting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sorting.Task.WaitAsync(Hung);
 
-        Assert.True(await service.StopAsync(TimeSpan.FromSeconds(5)));
-        await running.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(await service.StopAsync(Hung));
+        await running.WaitAsync(Hung);
         Assert.True(sorter.Cancelled);
 
         service.Capture("buy envelopes");
-        await service.ProcessPendingAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await service.ProcessPendingAsync().WaitAsync(Hung);
 
         Assert.Equal(1, sorter.Calls);
         Assert.Equal(2, _database.GetPendingCaptures().Count);
-        Assert.True(await service.StopAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await service.StopAsync(Hung));
     }
 
     [Fact]

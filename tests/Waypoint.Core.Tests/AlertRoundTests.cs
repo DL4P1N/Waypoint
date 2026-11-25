@@ -14,6 +14,13 @@ public sealed class AlertRoundTests : IDisposable
 {
     private static readonly DateTime Now = new(2030, 5, 14, 13, 0, 0);
 
+    /// <summary>
+    /// Only so a hung test fails rather than hangs. Everything here waits for a signal, so a slow machine only makes
+    /// a test later, never wrong. A held round is let go on its own only after twice this, so a stop that waited for
+    /// it would run out first.
+    /// </summary>
+    private static readonly TimeSpan Hung = TimeSpan.FromSeconds(60);
+
     private readonly string _folder = Path.Combine(Path.GetTempPath(), $"waypoint-alert-round-{Guid.NewGuid():N}");
     private readonly WaypointDatabase _database;
 
@@ -55,7 +62,7 @@ public sealed class AlertRoundTests : IDisposable
             {
                 roundThread = Environment.CurrentManagedThreadId;
                 inside.Set();
-                release.Wait(TimeSpan.FromSeconds(30));
+                release.Wait(Hung * 2);
             }
 
             return Now;
@@ -70,7 +77,7 @@ public sealed class AlertRoundTests : IDisposable
         Volatile.Write(ref armed, true);
 
         var first = worker.StartAlertRound();
-        Assert.True(inside.Wait(TimeSpan.FromSeconds(30)));
+        Assert.True(inside.Wait(Hung));
         var second = worker.StartAlertRound();
 
         Assert.Same(first, second);
@@ -79,13 +86,13 @@ public sealed class AlertRoundTests : IDisposable
         Assert.NotEqual(caller, roundThread);
 
         release.Set();
-        await first.WaitAsync(TimeSpan.FromSeconds(30));
+        await first.WaitAsync(Hung);
 
         // The round made the daily backup, and the next round is a new one.
         Assert.Single(_database.GetBackups());
         var third = worker.StartAlertRound();
         Assert.NotSame(first, third);
-        await third.WaitAsync(TimeSpan.FromSeconds(30));
+        await third.WaitAsync(Hung);
         Assert.Single(_database.GetBackups());
     }
 
@@ -102,7 +109,7 @@ public sealed class AlertRoundTests : IDisposable
             if (Volatile.Read(ref armed) && Environment.CurrentManagedThreadId != caller && Interlocked.Increment(ref entered) == 1)
             {
                 inside.Set();
-                release.Wait(TimeSpan.FromSeconds(30));
+                release.Wait(Hung * 2);
             }
 
             return Now;
@@ -115,12 +122,10 @@ public sealed class AlertRoundTests : IDisposable
             ConnectGateway: false));
         Volatile.Write(ref armed, true);
         var round = worker.StartAlertRound();
-        Assert.True(inside.Wait(TimeSpan.FromSeconds(30)));
+        Assert.True(inside.Wait(Hung));
 
-        // Held, so a short limit runs out and says so, without waiting for the round.
-        var started = System.Diagnostics.Stopwatch.StartNew();
-        Assert.False(await worker.StopWorkAsync(TimeSpan.FromMilliseconds(200)));
-        Assert.True(started.Elapsed < TimeSpan.FromSeconds(10));
+        // Held, so a short limit runs out and says so, while the round is still held, so it never waited for it.
+        Assert.False(await worker.StopWorkAsync(TimeSpan.FromMilliseconds(200)).WaitAsync(Hung));
         Assert.False(round.IsCompleted);
 
         // A longer limit waits for it and finishes once it's let go.
@@ -129,7 +134,7 @@ public sealed class AlertRoundTests : IDisposable
         Assert.False(stopping.IsCompleted);
 
         release.Set();
-        Assert.True(await stopping.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(await stopping.WaitAsync(Hung));
         Assert.True(round.IsCompleted);
     }
 
