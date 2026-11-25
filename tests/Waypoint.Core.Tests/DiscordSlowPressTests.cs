@@ -130,7 +130,7 @@ public sealed class DiscordSlowPressTests : IDisposable
         Assert.True(SpinWait.SpinUntil(() => Callbacks("1") == 1, TimeSpan.FromSeconds(30)));
 
         // Another is read just as it closes, before its promise.
-        bridge.DeferAfter = TimeSpan.FromMinutes(1);
+        bridge.DeferAfter = Waits.Never;
         bridge.EventArrived("INTERACTION_CREATE", Press("2", "m2"));
 
         await bridge.AnswerDroppedAsync();

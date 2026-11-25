@@ -124,7 +124,7 @@ public sealed partial class DiscordThreadTests
     {
         var second = MakeWorker(lists: null);
         second.StartDiscord();
-        second.Discord!.DeferAfter = TimeSpan.FromMinutes(1);
+        second.Discord!.DeferAfter = Waits.Never;
         await second.SyncDiscordThreadsAsync();
         await second.SyncDiscordThreadsAsync();
 

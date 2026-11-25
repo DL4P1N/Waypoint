@@ -8,7 +8,13 @@ namespace Waypoint.Core.Tests;
 /// </summary>
 internal static class Waits
 {
-    public static readonly TimeSpan Hung = TimeSpan.FromSeconds(60);
+    public static readonly TimeSpan Hung = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// A wait that never runs out while a test runs, such as Discord's promise for a press a test answers itself. A
+    /// minute isn't enough: a busy machine can hold a test up for longer than that.
+    /// </summary>
+    public static readonly TimeSpan Never = TimeSpan.FromDays(1);
 
     /// <summary>Checks again until it's true, and says whether it came true before <see cref="Hung"/>.</summary>
     public static async Task<bool> Until(Func<bool> condition, int every = 10)

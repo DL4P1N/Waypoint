@@ -517,7 +517,7 @@ public sealed partial class DiscordThreadTests : IDisposable
     {
         var worker = MakeWorker(notes: notes, lists: lists, notesView: notesView);
         worker.StartDiscord();
-        worker.Discord!.DeferAfter = TimeSpan.FromMinutes(1);
+        worker.Discord!.DeferAfter = Waits.Never;
         await worker.SyncDiscordThreadsAsync();
         await Task.Delay(100);
         await worker.SyncDiscordThreadsAsync();

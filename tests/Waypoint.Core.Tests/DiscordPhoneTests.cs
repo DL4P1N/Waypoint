@@ -332,7 +332,7 @@ public sealed partial class DiscordPhoneTests : IDisposable
         // default can pass first, and then the bridge rightly defers instead, which other tests cover.
         if (worker.Discord is { } bridge)
         {
-            bridge.DeferAfter = TimeSpan.FromMinutes(1);
+            bridge.DeferAfter = Waits.Never;
         }
 
         return worker;

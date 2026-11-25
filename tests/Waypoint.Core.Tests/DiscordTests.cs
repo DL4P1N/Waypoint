@@ -40,7 +40,7 @@ public sealed class DiscordTests : IDisposable
         {
             // Tests that look for the immediate answer shouldn't race the 2 second deferral on a busy machine. The
             // ones about deferring set their own.
-            DeferAfter = TimeSpan.FromMinutes(1),
+            DeferAfter = Waits.Never,
             Delay = (wait, _) =>
             {
                 waits?.Add(wait);

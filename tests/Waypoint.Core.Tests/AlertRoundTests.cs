@@ -19,7 +19,7 @@ public sealed class AlertRoundTests : IDisposable
     /// a test later, never wrong. A held round is let go on its own only after twice this, so a stop that waited for
     /// it would run out first.
     /// </summary>
-    private static readonly TimeSpan Hung = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan Hung = Waits.Hung;
 
     private readonly string _folder = Path.Combine(Path.GetTempPath(), $"waypoint-alert-round-{Guid.NewGuid():N}");
     private readonly WaypointDatabase _database;
