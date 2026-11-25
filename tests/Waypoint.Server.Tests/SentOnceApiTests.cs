@@ -66,7 +66,8 @@ public sealed class SentOnceApiTests : IDisposable
 
     private WaypointDatabase Database => _factory.Services.GetRequiredService<WaypointServer>().Database;
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
+    /// <summary>Taken once per test, so a test running past midnight still asks about the same day.</summary>
+    private DateOnly Today { get; } = DateOnly.FromDateTime(DateTime.Now);
 
     private async Task<HttpResponseMessage> Post(HttpClient http, string path, object body, string? once)
     {

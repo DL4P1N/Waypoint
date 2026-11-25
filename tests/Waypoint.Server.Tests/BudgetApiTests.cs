@@ -41,9 +41,10 @@ public sealed class BudgetApiTests : IDisposable
         Directory.Delete(_folder, recursive: true);
     }
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
+    /// <summary>Taken once per test, so a test running past midnight, or into a new month, still asks about the same day.</summary>
+    private DateOnly Today { get; } = DateOnly.FromDateTime(DateTime.Now);
 
-    private static DateOnly ThisMonth => new(Today.Year, Today.Month, 1);
+    private DateOnly ThisMonth => new(Today.Year, Today.Month, 1);
 
     private sealed class NoTokens : ITokenStore
     {
