@@ -260,8 +260,8 @@ public sealed class ServerSetupTests : IDisposable
         var after = new ManualResetEventSlim();
         host.Post(after.Set);
 
-        Assert.True(done.Wait(TimeSpan.FromSeconds(10)));
-        Assert.True(after.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(done.Wait(InMemoryServer.Background));
+        Assert.True(after.Wait(InMemoryServer.Background));
         Assert.Equal(Enumerable.Range(0, 20), order);
     }
 

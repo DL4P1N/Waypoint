@@ -155,7 +155,7 @@ public sealed class NoteOrderAndSaveApiTests : IDisposable
     private Line NewLine() => new(_factory.Server.CreateHandler(), Database);
 
     private ServerClient Client(HttpMessageHandler? handler = null) =>
-        new(new HttpClient(handler ?? _factory.Server.CreateHandler()) { BaseAddress = _factory.Server.BaseAddress }, _token, "this-pc");
+        InMemoryServer.Client(new HttpClient(handler ?? _factory.Server.CreateHandler()) { BaseAddress = _factory.Server.BaseAddress }, _token, "this-pc");
 
     /// <summary>A PC talking to a server from before. Old writes down what the PC sent, and Line is next to the server.</summary>
     private (ServerNotesData Notes, OldServer Old, Line Line) OldPc()

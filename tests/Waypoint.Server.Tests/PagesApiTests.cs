@@ -68,7 +68,7 @@ public sealed class PagesApiTests : IDisposable
         return client;
     }
 
-    private ServerClient Client() => new(Paired(), _token);
+    private ServerClient Client() => InMemoryServer.Client(Paired(), _token);
 
     private WaypointDatabase Database => _factory.Services.GetRequiredService<WaypointServer>().Database;
 
@@ -507,7 +507,7 @@ public sealed class PagesApiTests : IDisposable
         Database.AddListEntry(WaypointDatabase.ShoppingList, "saved while it waited", DateTime.Now);
         change.Dispose();
 
-        var result = await restoring.WaitAsync(TimeSpan.FromSeconds(30));
+        var result = await restoring.WaitAsync(InMemoryServer.Background);
         Assert.True(result.Restored);
         Assert.Equal(["kept"], Database.GetListEntries(WaypointDatabase.ShoppingList).Select(entry => entry.Text));
     }

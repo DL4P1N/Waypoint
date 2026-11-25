@@ -228,7 +228,7 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public async Task The_pc_client_queues_captures_and_sends_them_through_the_api()
     {
-        var server = new ServerClient(Paired(), _token);
+        var server = InMemoryServer.Client(Paired(), _token);
         var queue = new CaptureQueue(Path.Combine(_folder, "queue.json"));
         queue.Add("first", DateTimeOffset.Now);
         queue.Add("second", DateTimeOffset.Now);
@@ -259,7 +259,7 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(4, open!.Count(item => item.Title == "Fold the made up laundry"));
 
         // Deleted since, it's added anew rather than lost.
-        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        IToDoData data = new ServerToDoData(InMemoryServer.Client(Paired(), _token));
         data.DeleteItem(first.Item, DateTime.Now);
         var anew = await (await http.PostAsJsonAsync("/api/items?client=pc-a:1", task, RemoteJson.Options)).Content.ReadFromJsonAsync<HandAddResult>(RemoteJson.Options);
         Assert.NotEqual(first.Item.Id, anew!.Item!.Id);
@@ -268,7 +268,7 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public void The_to_do_page_works_the_same_through_the_server()
     {
-        var server = new ServerClient(Paired(), _token);
+        var server = InMemoryServer.Client(Paired(), _token);
         IToDoData data = new ServerToDoData(server);
 
         var added = data.AddByHand(new HandAddedItem(ItemKind.Task, "Read chapter 4", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now);
@@ -306,7 +306,7 @@ public sealed class ApiTests : IDisposable
         var database = _factory.Services.GetRequiredService<WaypointServer>().Database;
         var text = "Ask Morgan Vance whether the book club can meet in the library annex, and if not, find two cafes with a quiet back room before the Saturday meetup.";
         database.CompleteCapture(database.AddCapture(text), [new SortedItem(ItemKind.Task, text, null, null)]);
-        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        IToDoData data = new ServerToDoData(InMemoryServer.Client(Paired(), _token));
 
         var item = Assert.Single(data.GetOpenItems());
 
@@ -317,7 +317,7 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public void Waiting_on_someone_works_the_same_through_the_server()
     {
-        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        IToDoData data = new ServerToDoData(InMemoryServer.Client(Paired(), _token));
         var today = DateOnly.FromDateTime(DateTime.Now);
 
         var added = data.AddWaitingByHand("Professor Quill", "the extension", today.AddDays(3), null, DateTime.Now);
@@ -338,7 +338,7 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public void Starting_with_a_first_action_goes_through_the_server()
     {
-        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        IToDoData data = new ServerToDoData(InMemoryServer.Client(Paired(), _token));
         var item = data.AddByHand(new HandAddedItem(ItemKind.Task, "Study for the quiz", DateOnly.FromDateTime(DateTime.Now)), DateTime.Now).Item!;
 
         var reply = data.StartActivation(ItemRef.Format(item), "test", DateTime.Now, "Open the study guide");
@@ -350,7 +350,7 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public void The_suggestion_habits_come_from_the_server()
     {
-        IToDoData data = new ServerToDoData(new ServerClient(Paired(), _token));
+        IToDoData data = new ServerToDoData(InMemoryServer.Client(Paired(), _token));
 
         var habits = data.GetSuggestionHabits(DateTime.Now);
 
@@ -366,7 +366,7 @@ public sealed class ApiTests : IDisposable
         var client = Paired();
         await client.PostAsJsonAsync("/api/captures", new CaptureRequest("x1", "buy milk", DateTimeOffset.Now), RemoteJson.Options);
 
-        var status = await new ServerClient(Paired(), _token).CheckAsync();
+        var status = await InMemoryServer.Client(Paired(), _token).CheckAsync();
 
         Assert.Equal(1, status!.PendingCaptures);
         Assert.False(string.IsNullOrEmpty(status.Boot));
@@ -380,7 +380,7 @@ public sealed class ApiTests : IDisposable
         host.ShowNotice("Time to leave", "Leave by 8:10 for Chemistry.");
         host.ShowNotice("Morning briefing", "Three things today.");
 
-        var pc = new ServerClient(Paired(), _token);
+        var pc = InMemoryServer.Client(Paired(), _token);
         var status = await pc.CheckAsync();
         var shown = await pc.TakeNoticesAsync();
 
@@ -417,7 +417,7 @@ public sealed class ApiTests : IDisposable
     {
         var server = _factory.Services.GetRequiredService<WaypointServer>();
         server.Host.ShowNotice("Time to leave", "Bus in 10 minutes.");
-        var pc = new ServerClient(Paired(), _token);
+        var pc = InMemoryServer.Client(Paired(), _token);
         await pc.CheckAsync();
         var claimedByPc = new List<bool>();
 
@@ -438,7 +438,7 @@ public sealed class ApiTests : IDisposable
         var server = _factory.Services.GetRequiredService<WaypointServer>();
         server.Host.ShowNotice("Morning briefing", "Two classes today.");
         await server.Host.RetryNoticesAsync((_, _, _) => Task.FromResult(false));
-        var pc = new ServerClient(Paired(), _token);
+        var pc = InMemoryServer.Client(Paired(), _token);
         await pc.CheckAsync();
 
         Assert.Single(await pc.TakeNoticesAsync());
@@ -451,7 +451,7 @@ public sealed class ApiTests : IDisposable
     public void A_refused_token_marks_the_pc_as_not_paired()
     {
         var client = _factory.CreateClient();
-        var server = new ServerClient(client, "wrong");
+        var server = InMemoryServer.Client(client, "wrong");
 
         Assert.Empty(new ServerToDoData(server).GetOpenItems());
         Assert.Throws<ServerUnavailableException>(() => new ServerToDoData(server).SetDone(new StoredItem(1, ItemKind.Task, "x", null, null, false), true));

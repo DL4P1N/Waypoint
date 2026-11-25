@@ -67,7 +67,7 @@ public sealed class BudgetApiTests : IDisposable
         return client;
     }
 
-    private ServerClient Client() => new(Paired(), _token);
+    private ServerClient Client() => InMemoryServer.Client(Paired(), _token);
 
     /// <summary>The server's own database file, opened the way the PC opens its own in local mode.</summary>
     private WaypointDatabase SameDatabase()
